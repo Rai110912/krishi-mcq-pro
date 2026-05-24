@@ -1,12 +1,12 @@
-const CACHE_NAME = 'krishi-mcq-pro-v8';
+const CACHE_NAME = 'krishi-mcq-pro-v9';
 
-// Install Event: Pre-cache core shell resources
+// Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
         console.log('[Service Worker] Pre-caching offline shell...');
-        return fetch('./index.html')
+        return fetch('./index.html', { cache: 'reload' })
           .then(res => {
             if (res.ok) {
               cache.put('./', res.clone());
@@ -14,9 +14,10 @@ self.addEventListener('install', event => {
             } else {
               throw new Error('Failed to fetch index.html during SW installation.');
             }
-            return cache.addAll([
-              './manifest.json',
-              './icon.svg'
+            // Pre-cache other shell resources safely with reload
+            return Promise.all([
+              fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
+              fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); })
             ]);
           });
       })
@@ -40,9 +41,32 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Fetch Event: Network-First falling back to Cache strategy
+// Fetch Event: Network-First falling back to Cache strategy with cache-busting on navigations
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+
+  const isNavigation = event.request.mode === 'navigate' || 
+                       event.request.url.endsWith('/') || 
+                       event.request.url.endsWith('index.html');
+
+  if (isNavigation) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
+        .then(networkResponse => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then(cache => {
+              cache.put(event.request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match('./index.html');
+        })
+    );
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)
@@ -60,9 +84,6 @@ self.addEventListener('fetch', event => {
           .then(cachedResponse => {
             if (cachedResponse) {
               return cachedResponse;
-            }
-            if (event.request.mode === 'navigate') {
-              return caches.match('./index.html');
             }
             return new Response('Network connection lost and resource not cached.', {
               status: 503,

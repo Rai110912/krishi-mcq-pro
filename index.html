@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v14</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v16</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -7678,21 +7678,118 @@
     }
     
     function handleRestoreFile(event){
-        let file = event.target.files[0]; if(!file) return;
+        let fileInput = event.target;
+        let file = fileInput.files ? fileInput.files[0] : null; 
+        if(!file) return;
+        
         let reader = new FileReader();
         reader.onload = function(e){
             try {
-                let d = JSON.parse(e.target.result);
-                localData.bookmarked = d.bookmarked || [];
-                localData.wrong = d.wrong || [];
-                localData.customQuestions = d.customQuestions || [];
-                localData.streak = d.streak || {};
-                localData.stats = d.stats || {totalSolved:0, totalCorrect:0, subjectStats:{}};
-                localData.achievements = d.achievements || [];
+                let text = e.target.result;
+                if (!text || text.trim().length === 0) {
+                    throw new Error('Empty file content');
+                }
+                
+                let d;
+                try {
+                    d = JSON.parse(text);
+                } catch(pe) {
+                    throw new Error('Syntax error in JSON format: ' + pe.message);
+                }
+                
+                // 1. Structural schema validation checks
+                if (!d || typeof d !== 'object' || Array.isArray(d)) {
+                    throw new Error('Invalid backup file structure: expected a JSON object.');
+                }
+                
+                // Check for backup signature keys
+                const backupKeys = ['bookmarked', 'wrong', 'customQuestions', 'streak', 'stats', 'achievements', 'sm2'];
+                const hasBackupKey = backupKeys.some(k => k in d);
+                if (!hasBackupKey) {
+                    throw new Error('No Krishi MCQ Pro signature keys found in the backup file.');
+                }
+                
+                // 2. Validate data types in temporary staging variables first
+                let staged = {};
+                
+                // Staged bookmarks validation
+                if (d.bookmarked !== undefined) {
+                    if (!Array.isArray(d.bookmarked)) throw new Error('Bookmarks must be a valid array.');
+                    staged.bookmarked = d.bookmarked;
+                } else {
+                    staged.bookmarked = [];
+                }
+                
+                // Staged wrong answers validation
+                if (d.wrong !== undefined) {
+                    if (!Array.isArray(d.wrong)) throw new Error('Incorrect answers must be a valid array.');
+                    staged.wrong = d.wrong;
+                } else {
+                    staged.wrong = [];
+                }
+                
+                // Staged custom questions validation
+                if (d.customQuestions !== undefined) {
+                    if (!Array.isArray(d.customQuestions)) throw new Error('Custom questions must be a valid array.');
+                    staged.customQuestions = d.customQuestions;
+                } else {
+                    staged.customQuestions = [];
+                }
+                
+                // Staged streak validation
+                if (d.streak !== undefined) {
+                    if (typeof d.streak !== 'object' || d.streak === null) throw new Error('Consistency streak must be a valid object.');
+                    staged.streak = d.streak;
+                } else {
+                    staged.streak = {};
+                }
+                
+                // Staged stats validation
+                if (d.stats !== undefined) {
+                    if (typeof d.stats !== 'object' || d.stats === null) throw new Error('User statistics must be a valid object.');
+                    staged.stats = d.stats;
+                } else {
+                    staged.stats = { totalSolved: 0, totalCorrect: 0, subjectStats: {} };
+                }
+                
+                // Staged achievements validation
+                if (d.achievements !== undefined) {
+                    if (!Array.isArray(d.achievements)) throw new Error('Achievements must be a valid array.');
+                    staged.achievements = d.achievements;
+                } else {
+                    staged.achievements = [];
+                }
+                
+                // Staged SM2 Spaced repetition validation
+                let stagedSm2 = null;
+                if (d.sm2 !== undefined) {
+                    if (typeof d.sm2 !== 'object' || d.sm2 === null) throw new Error('Spaced repetition sm2Data must be a valid object.');
+                    stagedSm2 = d.sm2;
+                }
+                
+                // 3. Rollback Protection: Apply staged data ONLY after all validation successfully passes
+                localData.bookmarked = staged.bookmarked;
+                localData.wrong = staged.wrong;
+                localData.customQuestions = staged.customQuestions;
+                localData.streak = staged.streak;
+                localData.stats = staged.stats;
+                localData.achievements = staged.achievements;
+                
+                if (stagedSm2 !== null) {
+                    sm2Data = stagedSm2;
+                    saveSM2();
+                }
+                
                 saveData();
-                showToast('✅ Restore finished!');
+                showToast('✅ App Backup restored successfully!');
                 navigate('page-home');
-            } catch(err){ showToast('❌ File decode failed!'); }
+            } catch(err){
+                console.error('[PWA Backup] Safe restore aborted:', err);
+                showToast(`❌ Invalid or corrupted backup file: ${err.message}`, 6000);
+            } finally {
+                // 4. Prevent dangling file readers / inputs
+                fileInput.value = '';
+            }
         };
         reader.readAsText(file);
     }
@@ -10264,24 +10361,70 @@
     }
 
     function importDashboardLayoutSettings(event) {
-        let file = event.target.value ? event.target.files[0] : null;
+        let fileInput = event.target;
+        let file = fileInput.value ? fileInput.files[0] : null;
         if (!file) return;
 
         let reader = new FileReader();
         reader.onload = (e) => {
             try {
-                let parsed = JSON.parse(e.target.result);
-                if (parsed && typeof parsed === 'object') {
-                    if (parsed.home && Array.isArray(parsed.home.order)) {
-                        localStorage.setItem('krishi_home_settings', JSON.stringify(parsed.home));
+                let text = e.target.result;
+                if (!text || text.trim().length === 0) throw new Error('Empty file content');
+                
+                let parsed;
+                try {
+                    parsed = JSON.parse(text);
+                } catch(pe) {
+                    throw new Error('Syntax error in JSON format: ' + pe.message);
+                }
+                
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    throw new Error('Expected a valid layout JSON object.');
+                }
+                
+                let importedAny = false;
+                let stagedHome = null;
+                let stagedProfiles = null;
+                let stagedAppearance = null;
+                
+                // Validate home configuration
+                if (parsed.home !== undefined) {
+                    if (typeof parsed.home !== 'object' || parsed.home === null || !Array.isArray(parsed.home.order)) {
+                        throw new Error('Home settings order must be a valid list.');
                     }
-                    if (parsed.profiles && Array.isArray(parsed.profiles)) {
-                        localStorage.setItem('krishi_exam_profiles', JSON.stringify(parsed.profiles));
+                    stagedHome = parsed.home;
+                }
+                
+                // Validate profiles configuration
+                if (parsed.profiles !== undefined) {
+                    if (!Array.isArray(parsed.profiles)) {
+                        throw new Error('Exam profiles must be a valid array.');
                     }
-                    if (parsed.appearance && typeof parsed.appearance === 'object') {
-                        localStorage.setItem('krishi_appearance_settings', JSON.stringify(parsed.appearance));
+                    stagedProfiles = parsed.profiles;
+                }
+                
+                // Validate appearance settings
+                if (parsed.appearance !== undefined) {
+                    if (typeof parsed.appearance !== 'object' || parsed.appearance === null) {
+                        throw new Error('Appearance settings must be a valid object.');
                     }
-                    
+                    stagedAppearance = parsed.appearance;
+                }
+                
+                if (stagedHome) {
+                    localStorage.setItem('krishi_home_settings', JSON.stringify(stagedHome));
+                    importedAny = true;
+                }
+                if (stagedProfiles) {
+                    localStorage.setItem('krishi_exam_profiles', JSON.stringify(stagedProfiles));
+                    importedAny = true;
+                }
+                if (stagedAppearance) {
+                    localStorage.setItem('krishi_appearance_settings', JSON.stringify(stagedAppearance));
+                    importedAny = true;
+                }
+                
+                if (importedAny) {
                     showToast('📤 Restored fully validated layout and profiles packet!');
                     closeHomeCustomizerModal();
                     updateHomePage();
@@ -10291,11 +10434,13 @@
                     }
                     playSound('success');
                 } else {
-                    showToast('⚠️ Error: Selected file is not a valid JSON structure.');
+                    throw new Error('File contains no valid home, profiles, or appearance layout subkeys.');
                 }
             } catch(err) {
-                console.error(err);
-                showToast('⚠️ Failed to parse uploaded calibration settings.');
+                console.error('[PWA Layout] Safe restore aborted:', err);
+                showToast(`❌ Invalid or corrupted layout file: ${err.message}`, 6000);
+            } finally {
+                fileInput.value = '';
             }
         };
         reader.readAsText(file);

@@ -131,6 +131,7 @@
         @media (prefers-reduced-motion: reduce) {
             :root { --page-anim: 0ms; }
             *, *::before, *::after { animation: none !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
+            .option-entrance { opacity: 1 !important; transform: none !important; }
         }
         html[data-reduce-motion="true"] {
             --page-anim: 0ms;
@@ -140,9 +141,75 @@
             transition-duration: 0ms !important;
             scroll-behavior: auto !important;
         }
+        html[data-reduce-motion="true"] .option-entrance {
+            opacity: 1 !important;
+            transform: none !important;
+        }
         html[data-perf-mode="battery"] {
             --shadow-soft: 0 0 0 rgba(0,0,0,0);
             --tap-scale: 1;
+        }
+
+        /* Mobile Spacing & Layout Spacing Optimizations (under 768px) */
+        @media (max-width: 767px) {
+            /* 1. Ensure HTML/body prevents horizontal overflow */
+            html, body {
+                overflow-x: hidden !important;
+                max-width: 100vw !important;
+            }
+            
+            /* 2. Main content container bottom padding to avoid bottom navigation overlap */
+            main {
+                padding-bottom: calc(6.5rem + env(safe-area-inset-bottom)) !important;
+            }
+            
+            /* 3. Question Card sizing and autosizing height */
+            #mcq-card-container {
+                height: auto !important;
+                min-height: 0 !important;
+                padding: 1.25rem !important;
+            }
+            
+            /* 4. MCQ page spacing adjustments */
+            #page-mcq {
+                padding: 0.75rem !important;
+                gap: 0.5rem !important;
+            }
+            
+            /* 5. Answer options compact spacing & padding */
+            #q-options {
+                margin-top: 0.75rem !important;
+                margin-bottom: 0.75rem !important;
+                gap: 0.5rem !important;
+            }
+            .option-btn {
+                padding: 10px 14px !important;
+                font-size: 13px !important;
+                border-radius: 12px !important;
+            }
+            
+            /* 6. Confidence selector tight spacing & smaller buttons on mobile */
+            #confidence-selector-container {
+                margin-top: 0.5rem !important;
+                padding-top: 0.5rem !important;
+            }
+            #confidence-selector-container span {
+                font-size: 8px !important;
+            }
+            #confidence-selector-container button {
+                padding-top: 0.375rem !important;
+                padding-bottom: 0.375rem !important;
+                border-radius: 10px !important;
+                font-size: 9px !important;
+            }
+            
+            /* 7. Action buttons responsive padding */
+            #submit-btn, #next-btn, #finish-btn {
+                padding-top: 0.75rem !important;
+                padding-bottom: 0.75rem !important;
+                border-radius: 12px !important;
+                font-size: 13px !important;
+            }
         }
         .option-btn {
             transition: 0.2s; cursor: pointer; background: var(--card); border: 2px solid var(--border);

@@ -8541,7 +8541,7 @@
                 clientY = event.clientY;
             }
 
-            const targetIcon = document.getElementById('planner-streak-fire-icon') || (event && event.target);
+            const targetIcon = document.querySelector('.planner-streak-fire-icon') || (event && event.target);
 
             // 3. Trigger visual effects (shockwave, sparks, and fall cascade) via RAF canvas
             triggerVisuals(clientX, clientY, targetIcon);
@@ -10731,7 +10731,7 @@
                         </div>
                         <div>
                             <h3 class="font-black text-xs text-slate-850 dark:text-slate-100 flex items-center gap-1.5">
-                                <span id="streak-counter-value" class="streak-number-glowing font-black text-base">${streak}</span> Day Streak
+                                <span class="streak-counter-value streak-number-glowing font-black text-base">${streak}</span> Day Streak
                             </h3>
                             <p class="text-[8px] text-slate-500">Milestone: ${streak}/${nextMilestone}d</p>
                         </div>
@@ -10752,7 +10752,7 @@
                         <div>
                             <p class="text-[8px] font-extrabold uppercase tracking-widest text-amber-500 dark:text-amber-450">Active Consistency Streak</p>
                             <h3 class="font-black text-slate-850 dark:text-slate-100 mt-0.5 flex items-baseline gap-1">
-                                <span id="streak-counter-value" class="streak-number-glowing font-black text-2xl">${streak}</span>
+                                <span class="streak-counter-value streak-number-glowing font-black text-2xl">${streak}</span>
                                 <span class="text-xs font-black text-slate-400">Days Solved</span>
                             </h3>
                         </div>
@@ -11045,10 +11045,10 @@
             });
 
             // Trigger the premium streak count-up animation if the counter exists
-            let elStreakCounter = document.getElementById('streak-counter-value');
-            if (elStreakCounter) {
+            let elStreakCounters = document.querySelectorAll('.streak-counter-value');
+            if (elStreakCounters.length > 0) {
                 let streakVal = getStreakCount();
-                animateStreakCountUp(streakVal, elStreakCounter);
+                elStreakCounters.forEach(el => animateStreakCountUp(streakVal, el));
             }
             
             // Compatibility fallback elements
@@ -12040,9 +12040,9 @@
         let hasReachedTarget = (solved >= target && target > 0) || (plannerDemoModeActive && 38 >= target);
         let fireHTML = '';
         if (hasReachedTarget) {
-            fireHTML = `<span id="planner-streak-fire-icon" onclick="triggerInteractiveFireSpark(event)" class="animate-fire-reached text-sm select-none" title="Daily Target Reached! Tap for epic fire sparks! ⚡">🔥</span>`;
+            fireHTML = `<span class="planner-streak-fire-icon animate-fire-reached text-sm select-none" onclick="triggerInteractiveFireSpark(event)" title="Daily Target Reached! Tap for epic fire sparks! ⚡">🔥</span>`;
         } else {
-            fireHTML = `<span id="planner-streak-fire-icon" onclick="triggerInteractiveFireSpark(event)" class="animate-fire text-xs select-none hover:scale-125 cursor-pointer transition duration-150" title="Progress your daily milestone of ${target} to ignite this fire! Click for sparks.">🔥</span>`;
+            fireHTML = `<span class="planner-streak-fire-icon animate-fire text-xs select-none hover:scale-125 cursor-pointer transition duration-150" onclick="triggerInteractiveFireSpark(event)" title="Progress your daily milestone of ${target} to ignite this fire! Click for sparks.">🔥</span>`;
         }
         document.getElementById('planner-streak-count').innerHTML = `${fireHTML} ${streak} Days Active`;
 

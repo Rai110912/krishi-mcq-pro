@@ -1,0 +1,19 @@
+{
+  "name": "Krishi MCQ Pro",
+  "short_name": "Krishi MCQ",
+  "description": "Premium agricultural exam preparation and adaptive study suite.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fafaf9",
+  "theme_color": "#059669",
+  "orientation": "any",
+  "scope": "./",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "192x192 512x512 any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

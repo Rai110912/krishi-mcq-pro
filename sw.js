@@ -1,14 +1,17 @@
-const CACHE_NAME = 'krishi-mcq-pro-v22';
+const CACHE_NAME = 'krishi-mcq-pro-v23';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Pre-caching minimal offline shell assets...');
+        console.log('[Service Worker] Pre-caching minimal offline shell assets and Firebase SDKs...');
         return Promise.all([
           fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
-          fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); })
+          fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
+          fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
+          fetch('./js/firebase-database-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-database-compat.js', r); }),
+          fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); })
         ]);
       })
       .then(() => self.skipWaiting())
@@ -69,16 +72,17 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Cache-first for static assets like icons, fonts, and external libraries
+  // Cache-first for static assets like icons, fonts, local scripts, and external libraries
   const isStaticAsset = event.request.url.includes('icon.svg') || 
                         event.request.url.includes('manifest.json') ||
                         event.request.url.includes('fonts.googleapis.com') ||
                         event.request.url.includes('fonts.gstatic.com') ||
+                        event.request.url.includes('/js/firebase-') ||
                         event.request.url.includes('unpkg.com');
 
   if (isStaticAsset) {
     event.respondWith(
-      caches.match(event.request)
+      caches.match(event.request, { ignoreSearch: true })
         .then(cachedResponse => {
           if (cachedResponse) {
             return cachedResponse;
@@ -114,7 +118,7 @@ self.addEventListener('fetch', event => {
         return networkResponse;
       })
       .catch(() => {
-        return caches.match(event.request)
+        return caches.match(event.request, { ignoreSearch: true })
           .then(cachedResponse => {
             if (cachedResponse) {
               return cachedResponse;

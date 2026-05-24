@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-pro-v9';
+const CACHE_NAME = 'krishi-mcq-pro-v10';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -63,6 +63,35 @@ self.addEventListener('fetch', event => {
         })
         .catch(() => {
           return caches.match('./index.html');
+        })
+    );
+    return;
+  }
+
+  // Cache-first for static assets like icons, fonts, and external libraries
+  const isStaticAsset = event.request.url.includes('icon.svg') || 
+                        event.request.url.includes('manifest.json') ||
+                        event.request.url.includes('fonts.googleapis.com') ||
+                        event.request.url.includes('fonts.gstatic.com') ||
+                        event.request.url.includes('unpkg.com');
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.match(event.request)
+        .then(cachedResponse => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          return fetch(event.request)
+            .then(networkResponse => {
+              if (networkResponse && networkResponse.status === 200) {
+                const responseClone = networkResponse.clone();
+                caches.open(CACHE_NAME).then(cache => {
+                  cache.put(event.request, responseClone);
+                });
+              }
+              return networkResponse;
+            });
         })
     );
     return;

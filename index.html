@@ -2351,6 +2351,26 @@
                 </div>
             </div>
 
+            <!-- App Version & Updates Settings Card -->
+            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
+                        <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
+                    </div>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v10</span>
+                </div>
+                
+                <div class="flex flex-col gap-2 text-xs">
+                    <button onclick="manualCheckForUpdates(); playSound('click');" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
+                        Check for Updates 🔄
+                    </button>
+                    <button onclick="clearAppCacheAndReload(); playSound('click');" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
+                        Clear App Cache & Reload ⚡
+                    </button>
+                </div>
+            </div>
+
             <button onclick="navigate('page-subject-manager')" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">📚 Manage Subjects</button>
             <button onclick="navigate('page-admin')" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🛠️ Question Admin Insert panel</button>
             <button onclick="clearCache()" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🗑️ Clear Application Cache</button>
@@ -4037,6 +4057,65 @@
             }
             if (loginFormEl) loginFormEl.classList.remove('hidden');
             if (loggedInControlsEl) loggedInControlsEl.classList.add('hidden');
+        }
+    }
+
+    async function manualCheckForUpdates() {
+        if ('serviceWorker' in navigator) {
+            showToast('⏳ Checking for updates...');
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                await reg.update();
+                // Wait 1.5s to see if SW found anything
+                setTimeout(() => {
+                    if (reg.waiting) {
+                        showToast('💡 New update available! Prompt displayed below.');
+                    } else if (reg.installing) {
+                        showToast('⏳ Installing new update...');
+                    } else {
+                        showToast('✓ You are already running the latest version!');
+                    }
+                }, 1500);
+            } catch (err) {
+                console.error('[Manual Update] Check failed:', err);
+                showToast('❌ Update check failed. Please check your network.');
+            }
+        } else {
+            showToast('⚠️ PWA features are not supported in this browser.');
+        }
+    }
+
+    async function clearAppCacheAndReload() {
+        if (confirm('Are you sure you want to clear all application caches and force reload? This is useful for clearing old configurations.')) {
+            showToast('⚡ Clearing cache & reloading...');
+            try {
+                // 1. Unregister all service workers
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    for (let registration of registrations) {
+                        await registration.unregister();
+                    }
+                }
+                
+                // 2. Delete all caches
+                if ('caches' in window) {
+                    const keys = await caches.keys();
+                    for (let key of keys) {
+                        await caches.delete(key);
+                    }
+                }
+                
+                // 3. Clear localStorage cache parameters
+                localStorage.removeItem('krishi_last_sync_time');
+                
+                showToast('✅ Caches cleared. Reloading...');
+                setTimeout(() => {
+                    window.location.reload(true);
+                }, 1000);
+            } catch (err) {
+                console.error('[Cache Reset] Reset failed:', err);
+                showToast('❌ Reset failed: ' + err.message);
+            }
         }
     }
 

@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v20</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v21</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3798,10 +3798,33 @@
             const v = Storage.getJSON('krishi_'+k, null);
             if (v !== null && v !== undefined) localData[k] = v;
         });
+
+        // Self-heal and register existing custom questions' subjects
+        if (localData.customQuestions && Array.isArray(localData.customQuestions)) {
+            // First normalize existing customQuestions
+            localData.customQuestions = localData.customQuestions.map(q => normalizeQuestion(q));
+            // Register custom subjects
+            registerCustomSubjectsFromQuestions(localData.customQuestions);
+        }
+
         loadSM2();
     }
 
     function saveData(){
+        if (localData.customQuestions && Array.isArray(localData.customQuestions)) {
+            // First normalize all customQuestions
+            localData.customQuestions = localData.customQuestions.map(q => normalizeQuestion(q));
+            // Then validate and filter out invalid ones
+            localData.customQuestions = localData.customQuestions.filter(q => {
+                let errors = validateImportQuestion(q);
+                if (errors.length > 0) {
+                    console.warn("[Data Safety] Filtering out invalid MCQ before save:", q, errors);
+                }
+                return errors.length === 0;
+            });
+            // Register custom subjects automatically on the fly to prevent desync
+            registerCustomSubjectsFromQuestions(localData.customQuestions);
+        }
         // Batch writes to avoid jank; flush on idle / shortly after.
         Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
         triggerBackgroundSync();
@@ -6769,8 +6792,78 @@
         return -1;
     }
 
+    function normalizeSubjectCasing(subjectStr) {
+        if (subjectStr === undefined || subjectStr === null) return "General";
+        let s = String(subjectStr).trim();
+        if (!s) return "General";
+        
+        let trimmedLower = s.toLowerCase();
+        // Case-insensitive match against default subjects
+        for (let defSub of ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Pathology']) {
+            if (defSub.toLowerCase() === trimmedLower) {
+                return defSub;
+            }
+        }
+        
+        // Title-case the custom subject words
+        return s.split(/\s+/).map(word => {
+            if (!word) return "";
+            return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+        }).join(' ');
+    }
+
+    function registerCustomSubjectsFromQuestions(questions) {
+        if (!questions || !Array.isArray(questions)) return;
+        let subjects = getAllSubjects();
+        let subjectsLower = subjects.map(s => s.toLowerCase());
+        
+        let newCustom = [];
+        try {
+            let raw = localStorage.getItem('krishi_custom_subjects');
+            if (raw) {
+                newCustom = JSON.parse(raw);
+                if (!Array.isArray(newCustom)) newCustom = [];
+            }
+        } catch(e) {
+            newCustom = [];
+        }
+        
+        let addedAny = false;
+        questions.forEach(q => {
+            if (q.sub) {
+                let normSub = q.sub; // q.sub is already normalized
+                let subLower = normSub.toLowerCase();
+                if (!subjectsLower.includes(subLower)) {
+                    newCustom.push(normSub);
+                    subjects.push(normSub);
+                    subjectsLower.push(subLower);
+                    addedAny = true;
+                }
+            }
+        });
+        
+        if (addedAny) {
+            // Exclude defaults and keep unique only
+            newCustom = newCustom.filter(s => {
+                let trimS = s.trim();
+                if (!trimS) return false;
+                let isDefault = ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Pathology'].some(def => def.toLowerCase() === trimS.toLowerCase());
+                return !isDefault;
+            });
+            newCustom = [...new Set(newCustom)];
+            localStorage.setItem('krishi_custom_subjects', JSON.stringify(newCustom));
+            console.log('[PWA Safety] Auto-registered custom subjects:', newCustom);
+            
+            // Dynamic refresh of subjects UI lists
+            let container = document.getElementById('subject-list');
+            if (container) {
+                try { renderSubjectList(); } catch(e) {}
+            }
+        }
+    }
+
     function normalizeQuestion(raw) {
-        let q = raw.q || raw.question || raw.question_text || raw.questionText || raw.text || raw.query || raw.prompt || "";
+        let q = raw.q || raw.question || raw.Question || raw.question_text || raw.questionText || raw.text || raw.query || raw.prompt || "";
         q = String(q).trim();
 
         let opts = [];
@@ -6778,9 +6871,15 @@
         if (raw.opts && Array.isArray(raw.opts)) optSource = raw.opts;
         else if (raw.options && Array.isArray(raw.options)) optSource = raw.options;
         else if (raw.choices && Array.isArray(raw.choices)) optSource = raw.choices;
+        else if (raw.Opts && Array.isArray(raw.Opts)) optSource = raw.Opts;
+        else if (raw.Options && Array.isArray(raw.Options)) optSource = raw.Options;
+        else if (raw.Choices && Array.isArray(raw.Choices)) optSource = raw.Choices;
         else if (raw.opts && typeof raw.opts === 'object') optSource = raw.opts;
         else if (raw.options && typeof raw.options === 'object') optSource = raw.options;
         else if (raw.choices && typeof raw.choices === 'object') optSource = raw.choices;
+        else if (raw.Opts && typeof raw.Opts === 'object') optSource = raw.Opts;
+        else if (raw.Options && typeof raw.Options === 'object') optSource = raw.Options;
+        else if (raw.Choices && typeof raw.Choices === 'object') optSource = raw.Choices;
         else optSource = raw; // default to looking in the top-level raw object
 
         if (Array.isArray(optSource)) {
@@ -6832,6 +6931,18 @@
             'correct_answer',
             'correct_index',
             'correctOption',
+            'correctanswer',
+            'CorrectAnswerIndex',
+            'CorrectIndex',
+            'AnswerIndex',
+            'Answer',
+            'Correct',
+            'CorrectAnswer',
+            'Ans',
+            'Correct_answer',
+            'Correct_index',
+            'CorrectOption',
+            'Correctanswer',
             'उत्तर',
             'सही_उत्तर',
             'सहीउत्तर'
@@ -6845,23 +6956,23 @@
 
         let ans = normalizeCorrectAnswer(rawAns, opts);
 
-        let sub = raw.sub || raw.subject || raw.category || "General";
-        sub = String(sub).trim();
+        let sub = raw.sub || raw.subject || raw.Subject || raw.category || raw.Category || raw.topic || raw.Topic || "General";
+        sub = normalizeSubjectCasing(sub);
 
-        let expl = raw.expl || raw.explanation || raw.notes || raw.desc || raw.description || "";
+        let expl = raw.expl || raw.Expl || raw.explanation || raw.Explanation || raw.notes || raw.Notes || raw.desc || raw.Desc || raw.description || raw.Description || "";
         expl = String(expl).trim();
 
-        let topic = raw.topic || raw.chapter || raw.unit || "";
+        let topic = raw.topic || raw.Topic || raw.chapter || raw.Chapter || raw.unit || raw.Unit || "";
         topic = String(topic).trim();
 
-        let difficulty = raw.difficulty || raw.level || raw.diff || "Medium";
+        let difficulty = raw.difficulty || raw.Difficulty || raw.level || raw.Level || raw.diff || raw.Diff || "Medium";
         difficulty = String(difficulty).trim();
         if (difficulty.toLowerCase() === "easy") difficulty = "Easy";
         else if (difficulty.toLowerCase() === "hard") difficulty = "Hard";
         else difficulty = "Medium";
 
-        let marks = parseInt(raw.marks || raw.points || raw.score) || 1;
-        let status = raw.status || raw.state || "published";
+        let marks = parseInt(raw.marks || raw.Marks || raw.points || raw.Points || raw.score || raw.Score) || 1;
+        let status = raw.status || raw.Status || raw.state || raw.State || "published";
 
         return {
             id: raw.id || (Date.now() + Math.random()),

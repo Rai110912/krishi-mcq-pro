@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v21</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v22</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3941,30 +3941,77 @@
     let firebaseAuth = null;
     let currentAuthUser = null;
 
+    let firebaseLoadPromise = null;
+    let firebaseSDKLoaded = false;
+
     async function loadFirebaseSDKs() {
-        return new Promise((resolve, reject) => {
-            if (window.firebase && window.firebase.auth) {
-                resolve();
+        if (window.firebase && window.firebase.auth && window.firebase.database) {
+            firebaseSDKLoaded = true;
+            return Promise.resolve();
+        }
+        if (firebaseLoadPromise) return firebaseLoadPromise;
+
+        firebaseLoadPromise = new Promise(async (resolve, reject) => {
+            if (!navigator.onLine) {
+                console.warn("[Firebase Loader] Device is currently offline. Skipping Firebase SDK loads.");
+                reject(new Error("Device is offline. Please check your network connection and try again."));
+                firebaseLoadPromise = null;
                 return;
             }
-            let appScript = document.createElement('script');
-            appScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
-            appScript.onload = () => {
-                let dbScript = document.createElement('script');
-                dbScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js';
-                dbScript.onload = () => {
-                    let authScript = document.createElement('script');
-                    authScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js';
-                    authScript.onload = () => resolve();
-                    authScript.onerror = () => reject(new Error('Failed to load Auth SDK'));
-                    document.head.appendChild(authScript);
-                };
-                dbScript.onerror = () => reject(new Error('Failed to load Database SDK'));
-                document.head.appendChild(dbScript);
+
+            const maxRetries = 3;
+            const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+            const loadScript = (url) => {
+                return new Promise((res, rej) => {
+                    // Stable cache invalidation for static PWA Hosting without breaking offline match
+                    const stableBust = "?v=v22";
+                    
+                    const existing = document.querySelector(`script[src^="${url}"]`);
+                    if (existing) {
+                        existing.remove();
+                    }
+
+                    let script = document.createElement('script');
+                    script.src = url + stableBust;
+                    script.onload = () => {
+                        console.log(`[Firebase Loader] Successfully loaded script: ${url}`);
+                        res();
+                    };
+                    script.onerror = (err) => {
+                        console.error(`[Firebase Loader] Error loading script: ${url}`);
+                        rej(err);
+                    };
+                    document.head.appendChild(script);
+                });
             };
-            appScript.onerror = () => reject(new Error('Failed to load App SDK'));
-            document.head.appendChild(appScript);
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    console.log(`[Firebase Loader] Attempt ${attempt} of ${maxRetries} to load Firebase SDKs...`);
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js');
+                    
+                    console.log("[Firebase Loader] All Firebase Compat SDKs loaded successfully!");
+                    firebaseSDKLoaded = true;
+                    resolve();
+                    return;
+                } catch (e) {
+                    console.warn(`[Firebase Loader] Attempt ${attempt} failed:`, e);
+                    if (attempt === maxRetries) {
+                        reject(new Error("Firebase SDK load failed after multiple retries."));
+                        firebaseLoadPromise = null; // Clear to allow future retries
+                    } else {
+                        const backoff = attempt * 1000;
+                        console.log(`[Firebase Loader] Retrying in ${backoff}ms...`);
+                        await delay(backoff);
+                    }
+                }
+            }
         });
+
+        return firebaseLoadPromise;
     }
 
     async function initFirebaseAuth() {
@@ -3983,7 +4030,14 @@
                     measurementId: "G-MHX05SE7WB",
                     databaseURL: "https://krishi-mcq-pro-default-rtdb.firebaseio.com"
                 };
-                firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                
+                // Prevent concurrent initialization race condition
+                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+                if (existingApp) {
+                    firebaseApp = existingApp;
+                } else {
+                    firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                }
             }
             firebaseAuth = firebase.auth(firebaseApp);
             
@@ -3997,6 +4051,7 @@
             });
         } catch(e) {
             console.error("Firebase Auth loading failed:", e);
+            showAuthStatus('Firebase Unavailable 🌐');
             updateAuthUI();
         }
     }
@@ -4069,6 +4124,9 @@
     function translateAuthError(code, defaultMsg) {
         if (!navigator.onLine) {
             return "No internet connection. Please go online to authenticate.";
+        }
+        if (defaultMsg && (defaultMsg.includes("Firebase SDK load failed") || defaultMsg.includes("Failed to load"))) {
+            return "Firebase services are temporarily unavailable. Please check your internet connection or try again later.";
         }
         switch(code) {
             case 'auth/invalid-email':
@@ -4223,7 +4281,13 @@
                     databaseURL: "https://krishi-mcq-pro-default-rtdb.firebaseio.com"
                 };
 
-                firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                // Prevent concurrent initialization race condition
+                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+                if (existingApp) {
+                    firebaseApp = existingApp;
+                } else {
+                    firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                }
                 firebaseDb = firebase.database(firebaseApp);
             }
 

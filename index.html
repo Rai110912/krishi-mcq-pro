@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v11</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v12</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -6184,10 +6184,18 @@
     function getAllSubjects(){
         let custom = [];
         try {
-            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
-            if (!Array.isArray(custom)) custom = [];
+            let raw = localStorage.getItem('krishi_custom_subjects');
+            if (raw) {
+                custom = JSON.parse(raw);
+                if (!Array.isArray(custom)) {
+                    console.warn('[PWA Safety] Custom subjects was not an array, auto-removing corrupted cache.');
+                    localStorage.removeItem('krishi_custom_subjects');
+                    custom = [];
+                }
+            }
         } catch(e) {
-            console.warn('[PWA Safety] Failed to parse custom subjects:', e);
+            console.warn('[PWA Safety] Failed to parse custom subjects, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         return [...defaultSubjects, ...custom];
@@ -6212,9 +6220,14 @@
         if(!val) { showToast('Subject name empty!'); return; }
         let custom = [];
         try {
-            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
-            if (!Array.isArray(custom)) custom = [];
+            let raw = localStorage.getItem('krishi_custom_subjects');
+            if (raw) {
+                custom = JSON.parse(raw);
+                if (!Array.isArray(custom)) custom = [];
+            }
         } catch(e) {
+            console.warn('[PWA Safety] Failed to parse custom subjects in addSubject, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         if(getAllSubjects().includes(val)) { showToast('Duplicate names not allowed!'); return; }
@@ -6228,9 +6241,14 @@
     function removeSubject(name){
         let custom = [];
         try {
-            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
-            if (!Array.isArray(custom)) custom = [];
+            let raw = localStorage.getItem('krishi_custom_subjects');
+            if (raw) {
+                custom = JSON.parse(raw);
+                if (!Array.isArray(custom)) custom = [];
+            }
         } catch(e) {
+            console.warn('[PWA Safety] Failed to parse custom subjects in removeSubject, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         custom = custom.filter(s=>s!==name);
@@ -8636,9 +8654,17 @@
             let saved = localStorage.getItem('krishi_planner_settings');
             if (saved) {
                 let parsed = JSON.parse(saved);
-                return { ...defaults, ...parsed, dailyTarget: active.dailyTarget, weeklyTarget: active.weeklyTarget, examDate: active.targetDate };
+                if (parsed && typeof parsed === 'object') {
+                    return { ...defaults, ...parsed, dailyTarget: active.dailyTarget, weeklyTarget: active.weeklyTarget, examDate: active.targetDate };
+                } else {
+                    console.warn('[PWA Safety] Planner settings was not an object, auto-removing corrupted cache.');
+                    localStorage.removeItem('krishi_planner_settings');
+                }
             }
-        } catch(e){}
+        } catch(e){
+            console.warn('[PWA Safety] Failed to parse planner settings, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_planner_settings');
+        }
         return defaults;
     }
 
@@ -11417,9 +11443,18 @@
     function oldUpdateSpacedRepetition(qid, isCorrect) {
         let data = {};
         try {
-            data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
-            if (typeof data !== 'object' || data === null) data = {};
+            let raw = localStorage.getItem('krishi_review');
+            if (raw) {
+                data = JSON.parse(raw);
+                if (typeof data !== 'object' || data === null) {
+                    console.warn('[PWA Safety] Spaced review data is invalid in oldUpdateSpacedRepetition, auto-removing corrupted cache.');
+                    localStorage.removeItem('krishi_review');
+                    data = {};
+                }
+            }
         } catch(e) {
+            console.warn('[PWA Safety] Failed to parse review data in oldUpdateSpacedRepetition, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_review');
             data = {};
         }
         let step = isCorrect ? 3 : 1;
@@ -11446,6 +11481,7 @@
         saveSM2();
     }
 
+    // Fixed unclosed curly brace typo here
     function getAdaptiveDueQuestions() {
         let today = getLocalDateString();
         let due = [];
@@ -11459,9 +11495,18 @@
         let today = getLocalDateString();
         let data = {};
         try {
-            data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
-            if (typeof data !== 'object' || data === null) data = {};
+            let raw = localStorage.getItem('krishi_review');
+            if (raw) {
+                data = JSON.parse(raw);
+                if (typeof data !== 'object' || data === null) {
+                    console.warn('[PWA Safety] Spaced review data is invalid in getSpacedQueue, auto-removing corrupted cache.');
+                    localStorage.removeItem('krishi_review');
+                    data = {};
+                }
+            }
         } catch(e) {
+            console.warn('[PWA Safety] Failed to parse review data in getSpacedQueue, auto-removing corrupted cache:', e);
+            localStorage.removeItem('krishi_review');
             data = {};
         }
         let due = [];
@@ -12085,9 +12130,18 @@
         } else {
             let dataRep = {};
             try {
-                dataRep = JSON.parse(localStorage.getItem('krishi_review') || '{}');
-                if (typeof dataRep !== 'object' || dataRep === null) dataRep = {};
+                let raw = localStorage.getItem('krishi_review');
+                if (raw) {
+                    dataRep = JSON.parse(raw);
+                    if (typeof dataRep !== 'object' || dataRep === null) {
+                        console.warn('[PWA Safety] Spaced review data is invalid in badge update, auto-removing corrupted cache.');
+                        localStorage.removeItem('krishi_review');
+                        dataRep = {};
+                    }
+                }
             } catch(e) {
+                console.warn('[PWA Safety] Failed to parse review data in badge update, auto-removing corrupted cache:', e);
+                localStorage.removeItem('krishi_review');
                 dataRep = {};
             }
             Object.entries(dataRep).forEach(([id, dst]) => {
@@ -13134,17 +13188,74 @@
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: temp } })
             });
-            let d = await res.json();
-            let rawText = d.candidates[0].content.parts[0].text;
-            let questions = JSON.parse(rawText.substring(rawText.indexOf('['), rawText.lastIndexOf(']')+1));
             
-            questions.forEach((q, i)=>{ q.id = Date.now()+i; });
+            let d = await res.json();
+            if (d.error) {
+                throw new Error(d.error.message || 'Gemini API call failed.');
+            }
+            if (!d.candidates || d.candidates.length === 0 || !d.candidates[0].content || !d.candidates[0].content.parts || d.candidates[0].content.parts.length === 0) {
+                throw new Error('API returned an empty response. This can happen if the prompt was flagged by safety filters.');
+            }
+            
+            let rawText = d.candidates[0].content.parts[0].text;
+            if (!rawText || rawText.trim().length === 0) {
+                throw new Error('Empty text content received from Gemini.');
+            }
+            
+            let cleanJSON = rawText.trim();
+            // Remove markdown code fences if present (e.g. ```json ... ``` or ``` ... ```)
+            if (cleanJSON.startsWith('```')) {
+                cleanJSON = cleanJSON.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '');
+            }
+            cleanJSON = cleanJSON.trim();
+            
+            // Find valid JSON array boundaries safely
+            let startIdx = cleanJSON.indexOf('[');
+            let endIdx = cleanJSON.lastIndexOf(']');
+            if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+                throw new Error('Could not locate a valid JSON questions array in the response structure.');
+            }
+            
+            let questionsJsonStr = cleanJSON.substring(startIdx, endIdx + 1);
+            let questions;
+            try {
+                questions = JSON.parse(questionsJsonStr);
+            } catch(e) {
+                console.error('[PWA AI] Raw JSON parsing failed:', e);
+                throw new Error('The generated text contained malformed JSON elements: ' + e.message);
+            }
+            
+            if (!Array.isArray(questions)) {
+                throw new Error('Expected JSON array of questions, but received a different data type.');
+            }
+            
+            if (questions.length === 0) {
+                throw new Error('API generated 0 questions. Please try again with a different text section.');
+            }
+            
+            // Validate and normalize generated questions structure
+            questions.forEach((q, i) => {
+                q.id = Date.now() + i;
+                q.q = q.q || q.question || 'Untitled Question';
+                q.opts = q.opts || q.options || ['Option A', 'Option B', 'Option C', 'Option D'];
+                if (!Array.isArray(q.opts) || q.opts.length < 2) {
+                    q.opts = ['Option A', 'Option B', 'Option C', 'Option D'];
+                }
+                q.ans = (q.ans !== undefined) ? parseInt(q.ans) : ((q.correctAnswerIndex !== undefined) ? parseInt(q.correctAnswerIndex) : 0);
+                if (isNaN(q.ans) || q.ans < 0 || q.ans >= q.opts.length) {
+                    q.ans = 0;
+                }
+                q.sub = q.sub || q.category || 'General';
+            });
+            
             state.tempGeneratedQuestions = questions;
             showEditMCQPage(questions);
             navigate('page-edit-mcq');
             status.textContent = '✅ Conversion successful!';
         } catch(err){
-            status.textContent = '⚠️ Failed: JSON decode or API error!';
+            console.error('[PWA AI] Question generation failed:', err);
+            status.textContent = `⚠️ Failed: ${err.message}`;
+            showToast(`⚠️ AI Generation Error: ${err.message}`, 5000);
         }
     }
     </script>

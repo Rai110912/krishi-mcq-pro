@@ -1,25 +1,15 @@
-const CACHE_NAME = 'krishi-mcq-pro-v17';
+const CACHE_NAME = 'krishi-mcq-pro-v18';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Pre-caching offline shell...');
-        return fetch('./index.html', { cache: 'reload' })
-          .then(res => {
-            if (res.ok) {
-              cache.put('./', res.clone());
-              cache.put('./index.html', res);
-            } else {
-              throw new Error('Failed to fetch index.html during SW installation.');
-            }
-            // Pre-cache other shell resources safely with reload
-            return Promise.all([
-              fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
-              fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); })
-            ]);
-          });
+        console.log('[Service Worker] Pre-caching minimal offline shell assets...');
+        return Promise.all([
+          fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
+          fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); })
+        ]);
       })
       .then(() => self.skipWaiting())
   );
@@ -57,14 +47,23 @@ self.addEventListener('fetch', event => {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then(cache => {
               if (event.request.url.startsWith('http')) {
-                cache.put(event.request, responseClone);
+                cache.put(event.request, responseClone.clone());
+                cache.put('./', responseClone);
               }
             });
           }
           return networkResponse;
         })
         .catch(() => {
-          return caches.match('./index.html');
+          return caches.match(event.request)
+            .then(cachedResponse => {
+              if (cachedResponse) return cachedResponse;
+              return caches.match('./')
+                .then(rootResponse => {
+                  if (rootResponse) return rootResponse;
+                  return caches.match('./index.html');
+                });
+            });
         })
     );
     return;

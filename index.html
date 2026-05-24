@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v12</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v13</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3792,6 +3792,42 @@
 
     function loadSM2(){
         sm2Data = Storage.getJSON('krishi_sm2', {});
+        
+        // Backward compatibility migration from legacy krishi_review to sm2Data
+        try {
+            let legacyRaw = localStorage.getItem('krishi_review');
+            if (legacyRaw) {
+                let legacyData = JSON.parse(legacyRaw);
+                if (legacyData && typeof legacyData === 'object' && !Array.isArray(legacyData)) {
+                    let migrated = false;
+                    Object.entries(legacyData).forEach(([qid, date]) => {
+                        let id = parseInt(qid);
+                        if (!isNaN(id)) {
+                            if (!sm2Data[id]) {
+                                sm2Data[id] = { 
+                                    easeFactor: 2.5, 
+                                    interval: 1, 
+                                    repetitions: 0,
+                                    nextReviewDate: date
+                                };
+                                migrated = true;
+                            } else if (!sm2Data[id].nextReviewDate) {
+                                sm2Data[id].nextReviewDate = date;
+                                migrated = true;
+                            }
+                        }
+                    });
+                    if (migrated) {
+                        console.log('[PWA Safety] Successfully migrated legacy spaced repetition data to sm2Data.');
+                        saveSM2();
+                    }
+                }
+                localStorage.removeItem('krishi_review');
+            }
+        } catch(e) {
+            console.warn('[PWA Safety] Failed to migrate legacy review data:', e);
+            localStorage.removeItem('krishi_review');
+        }
     }
     function saveSM2(){ 
         Storage.setJSON('krishi_sm2', sm2Data); 
@@ -8559,7 +8595,7 @@
                 clientY = event.clientY;
             }
 
-            const targetIcon = document.querySelector('.planner-streak-fire-icon') || (event && event.target);
+            const targetIcon = (event && event.currentTarget) || (event && event.target) || document.querySelector('.planner-streak-fire-icon');
 
             // 3. Trigger visual effects (shockwave, sparks, and fall cascade) via RAF canvas
             triggerVisuals(clientX, clientY, targetIcon);
@@ -11441,26 +11477,15 @@
     }
 
     function oldUpdateSpacedRepetition(qid, isCorrect) {
-        let data = {};
-        try {
-            let raw = localStorage.getItem('krishi_review');
-            if (raw) {
-                data = JSON.parse(raw);
-                if (typeof data !== 'object' || data === null) {
-                    console.warn('[PWA Safety] Spaced review data is invalid in oldUpdateSpacedRepetition, auto-removing corrupted cache.');
-                    localStorage.removeItem('krishi_review');
-                    data = {};
-                }
-            }
-        } catch(e) {
-            console.warn('[PWA Safety] Failed to parse review data in oldUpdateSpacedRepetition, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_review');
-            data = {};
-        }
         let step = isCorrect ? 3 : 1;
         let due = new Date(); due.setDate(due.getDate() + step);
-        data[qid] = getLocalDateString(due);
-        localStorage.setItem('krishi_review', JSON.stringify(data));
+        let dateStr = getLocalDateString(due);
+        
+        if (!sm2Data[qid]) {
+            sm2Data[qid] = { easeFactor: 2.5, interval: step, repetitions: isCorrect ? 1 : 0 };
+        }
+        sm2Data[qid].nextReviewDate = dateStr;
+        saveSM2();
     }
 
     function adaptiveSpacedRepetition(qid, quality) {
@@ -11493,24 +11518,12 @@
 
     function getSpacedQueue(){
         let today = getLocalDateString();
-        let data = {};
-        try {
-            let raw = localStorage.getItem('krishi_review');
-            if (raw) {
-                data = JSON.parse(raw);
-                if (typeof data !== 'object' || data === null) {
-                    console.warn('[PWA Safety] Spaced review data is invalid in getSpacedQueue, auto-removing corrupted cache.');
-                    localStorage.removeItem('krishi_review');
-                    data = {};
-                }
-            }
-        } catch(e) {
-            console.warn('[PWA Safety] Failed to parse review data in getSpacedQueue, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_review');
-            data = {};
-        }
         let due = [];
-        Object.entries(data).forEach(([id, date]) => { if(date <= today) due.push(parseInt(id)); });
+        for (let id in sm2Data) {
+            if (sm2Data[id].nextReviewDate && sm2Data[id].nextReviewDate <= today) {
+                due.push(parseInt(id));
+            }
+        }
         return due;
     }
 
@@ -12128,27 +12141,15 @@
                 if (node.repetitions >= 4 || node.easeFactor >= 2.6) masteredCountVal++;
             }
         } else {
-            let dataRep = {};
-            try {
-                let raw = localStorage.getItem('krishi_review');
-                if (raw) {
-                    dataRep = JSON.parse(raw);
-                    if (typeof dataRep !== 'object' || dataRep === null) {
-                        console.warn('[PWA Safety] Spaced review data is invalid in badge update, auto-removing corrupted cache.');
-                        localStorage.removeItem('krishi_review');
-                        dataRep = {};
-                    }
+            for (let id in sm2Data) {
+                let node = sm2Data[id];
+                let dst = node.nextReviewDate;
+                if (dst) {
+                    if (dst < todayStamp) overdueCountVal++;
+                    else if (dst === todayStamp) dueCountVal++;
+                    else upcomingCountVal++;
                 }
-            } catch(e) {
-                console.warn('[PWA Safety] Failed to parse review data in badge update, auto-removing corrupted cache:', e);
-                localStorage.removeItem('krishi_review');
-                dataRep = {};
             }
-            Object.entries(dataRep).forEach(([id, dst]) => {
-                if (dst < todayStamp) overdueCountVal++;
-                else if (dst === todayStamp) dueCountVal++;
-                else upcomingCountVal++;
-            });
         }
 
         if (plannerDemoModeActive) {

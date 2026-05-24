@@ -6182,7 +6182,14 @@
     // ==================== SUBJECT / TOPICS MANAGER ====================
     let defaultSubjects = ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Pathology'];
     function getAllSubjects(){
-        let custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+        let custom = [];
+        try {
+            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+            if (!Array.isArray(custom)) custom = [];
+        } catch(e) {
+            console.warn('[PWA Safety] Failed to parse custom subjects:', e);
+            custom = [];
+        }
         return [...defaultSubjects, ...custom];
     }
 
@@ -6203,7 +6210,13 @@
     function addSubject(){
         let input = document.getElementById('new-subject-input'); let val = input.value.trim();
         if(!val) { showToast('Subject name empty!'); return; }
-        let custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+        let custom = [];
+        try {
+            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+            if (!Array.isArray(custom)) custom = [];
+        } catch(e) {
+            custom = [];
+        }
         if(getAllSubjects().includes(val)) { showToast('Duplicate names not allowed!'); return; }
         custom.push(val);
         localStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
@@ -6213,7 +6226,13 @@
     }
 
     function removeSubject(name){
-        let custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+        let custom = [];
+        try {
+            custom = JSON.parse(localStorage.getItem('krishi_custom_subjects') || '[]');
+            if (!Array.isArray(custom)) custom = [];
+        } catch(e) {
+            custom = [];
+        }
         custom = custom.filter(s=>s!==name);
         localStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
         renderSubjectList();
@@ -11396,7 +11415,13 @@
     }
 
     function oldUpdateSpacedRepetition(qid, isCorrect) {
-        let data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+        let data = {};
+        try {
+            data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+            if (typeof data !== 'object' || data === null) data = {};
+        } catch(e) {
+            data = {};
+        }
         let step = isCorrect ? 3 : 1;
         let due = new Date(); due.setDate(due.getDate() + step);
         data[qid] = getLocalDateString(due);
@@ -11432,7 +11457,13 @@
 
     function getSpacedQueue(){
         let today = getLocalDateString();
-        let data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+        let data = {};
+        try {
+            data = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+            if (typeof data !== 'object' || data === null) data = {};
+        } catch(e) {
+            data = {};
+        }
         let due = [];
         Object.entries(data).forEach(([id, date]) => { if(date <= today) due.push(parseInt(id)); });
         return due;
@@ -12052,7 +12083,13 @@
                 if (node.repetitions >= 4 || node.easeFactor >= 2.6) masteredCountVal++;
             }
         } else {
-            let dataRep = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+            let dataRep = {};
+            try {
+                dataRep = JSON.parse(localStorage.getItem('krishi_review') || '{}');
+                if (typeof dataRep !== 'object' || dataRep === null) dataRep = {};
+            } catch(e) {
+                dataRep = {};
+            }
             Object.entries(dataRep).forEach(([id, dst]) => {
                 if (dst < todayStamp) overdueCountVal++;
                 else if (dst === todayStamp) dueCountVal++;

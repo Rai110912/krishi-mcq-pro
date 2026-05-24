@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-pro-v13';
+const CACHE_NAME = 'krishi-mcq-pro-v14';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {

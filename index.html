@@ -2358,7 +2358,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v13</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v14</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3018,6 +3018,20 @@
     <script>
     // Performance note:
     // Heavy libraries (PDF.js / Tesseract / Quill) are loaded lazily when their features are used.
+    
+    // Top-Level Static Configuration
+    const DEFAULT_EXAM_PROFILE = {
+        id: 'profile_default',
+        name: 'Agriculture 5th Level',
+        level: '5th Level',
+        province: 'Bagmati Province',
+        targetDate: '2026-07-03',
+        dailyTarget: 50,
+        weeklyTarget: 250,
+        syllabusTarget: 80,
+        preferredSubjects: ['Agronomy (कृषि विकास)', 'Soil Science (माटो विज्ञान)'],
+        active: true
+    };
 
     // State, questions definitions
     const defaultQuestions=[
@@ -8628,25 +8642,13 @@
     // --- EXAM PROFILES DATABASE INTERFACE ---
     function getExamProfiles() {
         let saved = localStorage.getItem('krishi_exam_profiles');
-        let defaultProfile = {
-            id: 'profile_default',
-            name: 'Agriculture 5th Level',
-            level: '5th Level',
-            province: 'Bagmati Province',
-            targetDate: '2026-07-03',
-            dailyTarget: 50,
-            weeklyTarget: 250,
-            syllabusTarget: 80,
-            preferredSubjects: ['Agronomy (कृषि विकास)', 'Soil Science (माटो विज्ञान)'],
-            active: true
-        };
-        if (!saved) return [defaultProfile];
+        if (!saved) return [DEFAULT_EXAM_PROFILE];
         try {
             let parsed = JSON.parse(saved);
-            if (!Array.isArray(parsed) || parsed.length === 0) return [defaultProfile];
+            if (!Array.isArray(parsed) || parsed.length === 0) return [DEFAULT_EXAM_PROFILE];
             return parsed;
         } catch(e) {
-            return [defaultProfile];
+            return [DEFAULT_EXAM_PROFILE];
         }
     }
 

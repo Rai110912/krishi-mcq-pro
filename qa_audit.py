@@ -40,7 +40,7 @@ def run_qa_audit():
     broken_handlers = []
     for h in set(handlers):
         # Ignore basic JS keywords/statements inside handlers (like console, alert, event, playSound, setPlanMode)
-        if h in ['console', 'alert', 'event', 'preventDefault', 'stopPropagation', 'confirm', 'this', 'true', 'false']:
+        if h in ['console', 'alert', 'event', 'preventDefault', 'stopPropagation', 'confirm', 'this', 'true', 'false', 'document', 'window']:
             continue
         if h not in defined_funcs:
             broken_handlers.append(h)

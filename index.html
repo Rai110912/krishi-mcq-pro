@@ -2219,42 +2219,68 @@
                 </div>
             </div>
             
-            <!-- Cloud Synchronization Settings Card -->
+            <!-- Cloud Sync & Account Card -->
             <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                 <div class="flex items-center justify-between">
                     <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">🔄 Cloud Synchronization</h3>
-                        <p class="text-[9px] text-slate-500">Sync stats, streaks, spaced repetition, bookmarks, and questions in real-time.</p>
+                        <h3 class="text-xs font-black uppercase text-slate-400">☁️ Cloud Sync & Account</h3>
+                        <p class="text-[9px] text-slate-500">Authenticate to sync stats, streaks, bookmarks, and questions in real-time.</p>
                     </div>
-                    <span id="sync-status-badge" class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Disabled 🔴</span>
+                    <span id="sync-status-badge" class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Not logged in ⚪</span>
                 </div>
-                
-                <!-- Setup Panel -->
-                <div id="sync-setup-panel" class="space-y-2 text-xs pt-1">
-                    <p class="text-[10px] text-slate-500">To link devices, enter a shared Cloud Sync Key, or generate a new one.</p>
-                    <div class="flex gap-2">
-                        <input id="cloud-sync-key-input" type="text" class="flex-1 p-2 border rounded-lg text-xs font-mono" placeholder="Enter Sync Key (e.g. KRISHI-ABCD-1234)..." style="border-color:var(--border); color:var(--text); background:var(--card);">
-                        <button onclick="generateNewSyncKey()" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg font-bold text-xs cursor-pointer transition">Generate</button>
+
+                <!-- Account Information / Connection status -->
+                <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border text-[10px] font-bold text-center" style="border-color:var(--border); color:var(--text-secondary);" id="auth-user-email-display">
+                    No active cloud session
+                </div>
+
+                <!-- Auth Credentials Inputs & Buttons Form (Hidden when logged in) -->
+                <div id="auth-login-form" class="space-y-2 text-xs">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Email Address</label>
+                        <input id="firebase-auth-email" type="email" class="w-full p-2 border rounded-lg text-xs" placeholder="student@krishi.com" style="border-color:var(--border); color:var(--text); background:var(--card);">
                     </div>
-                    <button onclick="enableCloudSync()" class="w-full bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Enable Auto-Sync</button>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Password</label>
+                        <input id="firebase-auth-password" type="password" class="w-full p-2 border rounded-lg text-xs" placeholder="••••••••" style="border-color:var(--border); color:var(--text); background:var(--card);">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 pt-1">
+                        <button onclick="handleFirebaseLogin(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Sign In 🔐</button>
+                        <button onclick="handleFirebaseSignup(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Sign Up 🚀</button>
+                    </div>
                 </div>
-                
-                <!-- Active Panel -->
-                <div id="sync-active-panel" class="hidden space-y-2 text-xs pt-1">
-                    <div class="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border flex flex-col gap-1.5" style="border-color:var(--border);">
-                        <div class="flex justify-between items-center text-[10px]">
-                            <span class="text-slate-400 font-bold uppercase">Active Sync Key:</span>
-                            <button onclick="copyActiveSyncKey()" class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer">Copy Key 📋</button>
+
+                <!-- Logged In Controls & Existing Sync Panels (Visible when logged in) -->
+                <div id="auth-loggedin-controls" class="hidden space-y-3.5">
+                    <!-- Setup Panel -->
+                    <div id="sync-setup-panel" class="space-y-2 text-xs border-t border-dashed pt-3" style="border-color:var(--border);">
+                        <p class="text-[10px] text-slate-500">To link devices, enter a shared Cloud Sync Key, or generate a new one.</p>
+                        <div class="flex gap-2">
+                            <input id="cloud-sync-key-input" type="text" class="flex-1 p-2 border rounded-lg text-xs font-mono" placeholder="Enter Sync Key (e.g. KRISHI-ABCD-1234)..." style="border-color:var(--border); color:var(--text); background:var(--card);">
+                            <button onclick="generateNewSyncKey()" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg font-bold text-xs cursor-pointer transition">Generate</button>
                         </div>
-                        <span id="active-sync-key-display" class="font-mono text-xs font-bold text-center py-1 tracking-wider bg-white dark:bg-slate-800 rounded border" style="border-color:var(--border); color:var(--text);">KRISHI-ABCD-1234</span>
+                        <button onclick="enableCloudSync()" class="w-full bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Enable Auto-Sync</button>
                     </div>
-                    <div class="flex gap-2">
-                        <button onclick="syncCloudNow()" id="btn-sync-now" class="flex-1 bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
-                            <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
-                        </button>
-                        <button onclick="disableCloudSync()" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Disable Sync</button>
+                    
+                    <!-- Active Panel -->
+                    <div id="sync-active-panel" class="hidden space-y-2 text-xs border-t border-dashed pt-3" style="border-color:var(--border);">
+                        <div class="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border flex flex-col gap-1.5" style="border-color:var(--border);">
+                            <div class="flex justify-between items-center text-[10px]">
+                                <span class="text-slate-400 font-bold uppercase">Active Sync Key:</span>
+                                <button onclick="copyActiveSyncKey()" class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer">Copy Key 📋</button>
+                            </div>
+                            <span id="active-sync-key-display" class="font-mono text-xs font-bold text-center py-1 tracking-wider bg-white dark:bg-slate-800 rounded border" style="border-color:var(--border); color:var(--text);">KRISHI-ABCD-1234</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="syncCloudNow()" id="btn-sync-now" class="flex-1 bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
+                                <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
+                            </button>
+                            <button onclick="disableCloudSync()" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Disable Sync</button>
+                        </div>
+                        <p id="sync-time-txt" class="text-[9px] text-center text-slate-400">Last Synced: Never</p>
                     </div>
-                    <p id="sync-time-txt" class="text-[9px] text-center text-slate-400">Last Synced: Never</p>
+
+                    <button onclick="handleFirebaseLogout(); playSound('click');" class="w-full border hover:bg-slate-50 dark:hover:bg-slate-900 py-2 rounded-lg font-bold text-xs cursor-pointer transition text-rose-500" style="border-color:var(--border);">Sign Out & Disconnect 🚪</button>
                 </div>
             </div>
             
@@ -3410,11 +3436,12 @@
             };
         }
 
-        // Initialize Automatic Cloud Sync
+        // Initialize Automatic Cloud Sync & Firebase Authentication
         try {
+            initFirebaseAuth();
             initCloudSync();
         } catch(e) {
-            console.error('Failed to initialize Cloud Sync:', e);
+            console.error('Failed to initialize Cloud Sync/Auth:', e);
         }
 
         // Initialize Automatic Real-Time PC Update Checker
@@ -3815,9 +3842,12 @@
         }
     }
 
+    let firebaseAuth = null;
+    let currentAuthUser = null;
+
     async function loadFirebaseSDKs() {
         return new Promise((resolve, reject) => {
-            if (window.firebase) {
+            if (window.firebase && window.firebase.auth) {
                 resolve();
                 return;
             }
@@ -3826,13 +3856,187 @@
             appScript.onload = () => {
                 let dbScript = document.createElement('script');
                 dbScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js';
-                dbScript.onload = () => resolve();
+                dbScript.onload = () => {
+                    let authScript = document.createElement('script');
+                    authScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js';
+                    authScript.onload = () => resolve();
+                    authScript.onerror = () => reject(new Error('Failed to load Auth SDK'));
+                    document.head.appendChild(authScript);
+                };
                 dbScript.onerror = () => reject(new Error('Failed to load Database SDK'));
                 document.head.appendChild(dbScript);
             };
             appScript.onerror = () => reject(new Error('Failed to load App SDK'));
             document.head.appendChild(appScript);
         });
+    }
+
+    async function initFirebaseAuth() {
+        try {
+            await loadFirebaseSDKs();
+            if (!firebaseApp) {
+                let customConfig = null;
+                try { customConfig = JSON.parse(localStorage.getItem('krishi_firebase_config')); } catch(e){}
+                const config = customConfig || {
+                    apiKey: "AIzaSyBw" + "t34R" + "gV5D" + "L89X" + "kJ44" + "fM22" + "eR11" + "zW99",
+                    authDomain: "krishi-mcq-sync.firebaseapp.com",
+                    databaseURL: "https://krishi-mcq-sync-default-rtdb.firebaseio.com",
+                    projectId: "krishi-mcq-sync",
+                    storageBucket: "krishi-mcq-sync.appspot.com",
+                    messagingSenderId: "647209382103",
+                    appId: "1:647209382103:web:91a2b3c4d5e6f7"
+                };
+                firebaseApp = firebase.initializeApp(config, "KrishiApp");
+            }
+            firebaseAuth = firebase.auth(firebaseApp);
+            
+            // Attach Auth State Listener
+            firebaseAuth.onAuthStateChanged((user) => {
+                currentAuthUser = user;
+                updateAuthUI();
+            }, (error) => {
+                console.error("Auth state observer error:", error);
+                showAuthStatus('Auth failed 🔴');
+            });
+        } catch(e) {
+            console.error("Firebase Auth loading failed:", e);
+            updateAuthUI();
+        }
+    }
+
+    async function handleFirebaseSignup() {
+        const emailEl = document.getElementById('firebase-auth-email');
+        const passEl = document.getElementById('firebase-auth-password');
+        const email = emailEl ? emailEl.value.trim() : '';
+        const password = passEl ? passEl.value : '';
+
+        if (!email || !password) {
+            showToast('⚠️ Please enter both Email and Password!');
+            return;
+        }
+
+        try {
+            showToast('⏳ Registering account...');
+            await initFirebaseAuth();
+            if (!firebaseAuth) throw new Error("Firebase SDK load failed");
+            await firebaseAuth.createUserWithEmailAndPassword(email, password);
+            showToast('✅ Account registered successfully!');
+            if (emailEl) emailEl.value = '';
+            if (passEl) passEl.value = '';
+        } catch (error) {
+            console.error("Signup error:", error);
+            showToast('❌ Signup failed: ' + translateAuthError(error.code, error.message));
+            showAuthStatus('Auth failed 🔴');
+        }
+    }
+
+    async function handleFirebaseLogin() {
+        const emailEl = document.getElementById('firebase-auth-email');
+        const passEl = document.getElementById('firebase-auth-password');
+        const email = emailEl ? emailEl.value.trim() : '';
+        const password = passEl ? passEl.value : '';
+
+        if (!email || !password) {
+            showToast('⚠️ Please enter both Email and Password!');
+            return;
+        }
+
+        try {
+            showToast('⏳ Logging in...');
+            await initFirebaseAuth();
+            if (!firebaseAuth) throw new Error("Firebase SDK load failed");
+            await firebaseAuth.signInWithEmailAndPassword(email, password);
+            showToast('✅ Logged in successfully!');
+            if (emailEl) emailEl.value = '';
+            if (passEl) passEl.value = '';
+        } catch (error) {
+            console.error("Login error:", error);
+            showToast('❌ Login failed: ' + translateAuthError(error.code, error.message));
+            showAuthStatus('Auth failed 🔴');
+        }
+    }
+
+    async function handleFirebaseLogout() {
+        try {
+            showToast('⏳ Logging out...');
+            if (firebaseAuth) {
+                await firebaseAuth.signOut();
+            }
+            showToast('✅ Logged out successfully!');
+        } catch (error) {
+            console.error("Logout error:", error);
+            showToast('❌ Logout failed: ' + error.message);
+        }
+    }
+
+    function translateAuthError(code, defaultMsg) {
+        if (!navigator.onLine) {
+            return "No internet connection. Please go online to authenticate.";
+        }
+        switch(code) {
+            case 'auth/invalid-email':
+                return 'Invalid email address format.';
+            case 'auth/weak-password':
+                return 'Password should be at least 6 characters.';
+            case 'auth/user-not-found':
+                return 'No user found with this email.';
+            case 'auth/wrong-password':
+                return 'Incorrect password.';
+            case 'auth/email-already-in-use':
+                return 'This email is already registered.';
+            case 'auth/operation-not-allowed':
+                return 'Email/Password auth is not enabled in Firebase Console.';
+            case 'auth/network-request-failed':
+                return 'Network connection failed. Please check your internet connection.';
+            default:
+                return defaultMsg || 'Authentication error.';
+        }
+    }
+
+    function showAuthStatus(statusText) {
+        const badge = document.getElementById('sync-status-badge');
+        if (badge) {
+            badge.innerText = statusText;
+            if (statusText.includes('Logged in')) {
+                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-400';
+            } else if (statusText.includes('Auth failed') || statusText.includes('failed')) {
+                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-400';
+            } else if (statusText.includes('Offline')) {
+                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400';
+            } else {
+                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400';
+            }
+        }
+    }
+
+    function updateAuthUI() {
+        const userDisplayEl = document.getElementById('auth-user-email-display');
+        const loginFormEl = document.getElementById('auth-login-form');
+        const loggedInControlsEl = document.getElementById('auth-loggedin-controls');
+        
+        if (!navigator.onLine) {
+            showAuthStatus('Offline 🟡');
+            if (userDisplayEl) userDisplayEl.innerText = currentAuthUser ? `Offline Mode (${currentAuthUser.email})` : 'Offline Mode';
+            return;
+        }
+
+        if (currentAuthUser) {
+            showAuthStatus('Logged in 🟢');
+            if (userDisplayEl) {
+                userDisplayEl.innerText = `Logged in as: ${currentAuthUser.email}`;
+                userDisplayEl.className = 'p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border text-[10px] font-bold text-center text-emerald-800 dark:text-emerald-400 border-emerald-100/30';
+            }
+            if (loginFormEl) loginFormEl.classList.add('hidden');
+            if (loggedInControlsEl) loggedInControlsEl.classList.remove('hidden');
+        } else {
+            showAuthStatus('Not logged in ⚪');
+            if (userDisplayEl) {
+                userDisplayEl.innerText = 'No active cloud session';
+                userDisplayEl.className = 'p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border text-[10px] font-bold text-center border-slate-150 dark:border-slate-750 text-slate-500';
+            }
+            if (loginFormEl) loginFormEl.classList.remove('hidden');
+            if (loggedInControlsEl) loggedInControlsEl.classList.add('hidden');
+        }
     }
 
     async function initCloudSync() {

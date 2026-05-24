@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-pro-v16';
+const CACHE_NAME = 'krishi-mcq-pro-v17';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -56,7 +56,9 @@ self.addEventListener('fetch', event => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then(cache => {
-              cache.put(event.request, responseClone);
+              if (event.request.url.startsWith('http')) {
+                cache.put(event.request, responseClone);
+              }
             });
           }
           return networkResponse;
@@ -87,7 +89,9 @@ self.addEventListener('fetch', event => {
               if (networkResponse && networkResponse.status === 200) {
                 const responseClone = networkResponse.clone();
                 caches.open(CACHE_NAME).then(cache => {
-                  cache.put(event.request, responseClone);
+                  if (event.request.url.startsWith('http')) {
+                    cache.put(event.request, responseClone);
+                  }
                 });
               }
               return networkResponse;
@@ -103,7 +107,9 @@ self.addEventListener('fetch', event => {
         if (networkResponse && networkResponse.status === 200) {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then(cache => {
-            cache.put(event.request, responseClone);
+            if (event.request.url.startsWith('http')) {
+              cache.put(event.request, responseClone);
+            }
           });
         }
         return networkResponse;
@@ -183,7 +189,7 @@ self.addEventListener('sync', event => {
 
         const syncKey = syncData.syncKey;
         const payload = syncData.payload;
-        const url = `https://krishi-mcq-sync-default-rtdb.firebaseio.com/sync_keys/${syncKey}.json`;
+        const url = `https://krishi-mcq-pro-default-rtdb.firebaseio.com/sync_keys/${syncKey}.json`;
 
         console.log('[Service Worker] Executing W3C Background Sync for key:', syncKey);
 

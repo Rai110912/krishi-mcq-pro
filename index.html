@@ -4418,18 +4418,16 @@ function loadData(){
                 }
             });
 
-            // Initial immediate push & pull
+           // Initial immediate push & pull
+        try {
             await syncCloudNow(true);
-
         } catch (err) {
             console.error('Cloud Sync connection error:', err);
-            const badge = document.getElementById('sync-status-badge');
-            if (badge) {
-                badge.innerText = 'Offline 🟡';
-                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400';
-            }
         }
-    }
+
+    } catch (err) {
+        console.error('Cloud Sync connection error:', err);
+        const badge = document.getElementById('sync-status-badge');
 
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();

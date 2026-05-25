@@ -627,9 +627,88 @@
             -webkit-text-fill-color: transparent;
             filter: drop-shadow(0 2px 4px rgba(245, 158, 11, 0.15));
         }
+/* ==================== NEW FEAT: IN-APP TOAST SYSTEM ==================== */
+        .newfeat_toast-container {
+            position: fixed;
+            z-index: 100005;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            pointer-events: none;
+            transition: all 0.35s ease;
+        }
+        
+        @media (max-width: 767px) {
+            .newfeat_toast-container {
+                top: calc(12px + env(safe-area-inset-top));
+                left: 50%;
+                transform: translateX(-50%);
+                width: calc(100% - 32px);
+                max-width: 440px;
+                align-items: center;
+            }
+        }
+        
+        @media (min-width: 768px) {
+            .newfeat_toast-container {
+                top: 24px;
+                right: 24px;
+                width: 360px;
+                align-items: flex-end;
+            }
+        }
+
+        .newfeat_toast {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: var(--radius-sm, 10px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            pointer-events: auto;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: opacity 350ms cubic-bezier(0.16, 1, 0.3, 1), transform 350ms cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .newfeat_toast.newfeat_show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .newfeat_toast.newfeat_hide {
+            opacity: 0;
+            transform: translateY(-15px) scale(0.95);
+        }
+
+        .newfeat_toast-success {
+            background-color: #ecfdf5;
+            color: #065f46;
+            border-left: 5px solid #10b981;
+        }
+        .dark .newfeat_toast-success {
+            background-color: #064e3b;
+            color: #a7f3d0;
+            border-left: 5px solid #10b981;
+        }
+
+        .newfeat_toast-info {
+            background-color: #f0f9ff;
+            color: #075985;
+            border-left: 5px solid #0284c7;
+        }
+        .dark .newfeat_toast-info {
+            background-color: #0c4a6e;
+            color: #bae6fd;
+            border-left: 5px solid #38bdf8;
+        }
     </style>
 </head>
 <body>
+<!-- New Feature Toast Container -->
+    <div id="newfeat_toast-container" class="newfeat_toast-container"></div>
     <!-- Splash Screen -->
     <div id="splash-screen">
         <div class="splash-bg-grain"></div>
@@ -2310,184 +2389,6 @@
                 </div>
             </div>
 
-<style>
-  /* १. नोटिफिकेसन पप-अपको प्रिमियम डिजाइन */
-  .newfeat_toast-box {
-    position: fixed;
-    top: 25px;
-    right: 25px;
-    z-index: 999999;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    max-width: 360px;
-    width: calc(100% - 50px);
-  }
-  @media (max-width: 600px) {
-    .newfeat_toast-box { right: 15px; left: 15px; top: 15px; width: auto; }
-  }
-  .newfeat_toast {
-    background: #ffffff;
-    color: #2c3e50;
-    padding: 16px;
-    border-radius: 12px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
-    font-family: sans-serif;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    border-left: 6px solid #4CAF50;
-    transform: translateX(50px);
-    opacity: 0;
-    transition: all 0.4s ease;
-  }
-  .newfeat_toast.show { transform: translateX(0); opacity: 1; }
-  .newfeat_toast.hide { transform: translateY(-20px); opacity: 0; }
-  .newfeat_toast.study { border-left-color: #4CAF50; background-color: #f4faf5; }
-  .newfeat_toast.quiz { border-left-color: #FF9800; background-color: #fff9f0; }
-  .newfeat_toast.progress { border-left-color: #2196F3; background-color: #f0f7ff; }
-  .newfeat_toast-close { background: none; border: none; color: #bbb; font-size: 20px; cursor: pointer; padding: 0; margin-left: 10px; }
-
-  /* २. सेटिङ ट्याबभित्र बस्ने कस्टमाइज बटन र प्यानलको डिजाइन */
-  .newfeat_settings-group {
-    background: #f9f9f9;
-    border: 1px solid #e0e0e0;
-    border-radius: 10px;
-    padding: 15px;
-    margin: 15px 0;
-    font-family: sans-serif;
-  }
-  .newfeat_settings-title { font-size: 16px; font-weight: bold; color: #2c3e50; margin-bottom: 12px; display: block; }
-  .newfeat_toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-  .newfeat_toggle-item:last-child { margin-bottom: 0; }
-  .newfeat_toggle-label { font-size: 14px; color: #555; }
-  
-  /* ब्युटिफुल स्विच बटन */
-  .newfeat_switch { position: relative; display: inline-block; width: 44px; height: 24px; }
-  .newfeat_switch input { opacity: 0; width: 0; height: 0; }
-  .newfeat_slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .3s; border-radius: 24px; }
-  .newfeat_slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; }
-  input:checked + .newfeat_slider { background-color: #4CAF50; }
-  input:checked + .newfeat_slider:before { transform: translateX(20px); }
-</style>
-
-<div id="newfeat_toastBox" class="newfeat_toast-box"></div>
-
-<div id="newfeat_settingsPanel" style="display: none;">
-  <div class="newfeat_settings-group">
-    <strong class="newfeat_settings-title">🔔 व्यक्तिगत नोटिफिकेसन कस्टमाइज</strong>
-    
-    <div class="newfeat_toggle-item">
-      <span class="newfeat_toggle-label">दैनिक पढ्ने रिमाइन्डर (Daily Reminder)</span>
-      <label class="newfeat_switch">
-        <input type="checkbox" id="newfeat_setReminder" checked onchange="newfeat_saveSettings()">
-        <span class="newfeat_slider"></span>
-      </label>
-    </div>
-
-    <div class="newfeat_toggle-item">
-      <span class="newfeat_toggle-label">क्विज स्कोर र गल्ती अलर्ट (Quiz Feedback)</span>
-      <label class="newfeat_switch">
-        <input type="checkbox" id="newfeat_setQuiz" checked onchange="newfeat_saveSettings()">
-        <span class="newfeat_slider"></span>
-      </label>
-    </div>
-
-    <div class="newfeat_toggle-item">
-      <span class="newfeat_toggle-label">सिलेबस ट्र्याकिङ अलर्ट (Syllabus Progress)</span>
-      <label class="newfeat_switch">
-        <input type="checkbox" id="newfeat_setSyllabus" checked onchange="newfeat_saveSettings()">
-        <span class="newfeat_slider"></span>
-      </label>
-    </div>
-  </div>
-</div>
-
-<script>
-  // १. नोटिफिकेसन स्क्रिनमा निकाल्ने फङ्ग्सन
-  function newfeat_triggerToast(message, type = 'study', settingKey) {
-    // यदि सेटिङमा प्रयोगकर्ताले यो नोटिफिकेसन अफ गरेको छ भने नदेखाउने
-    if (settingKey && localStorage.getItem(settingKey) === 'false') return;
-
-    const box = document.getElementById('newfeat_toastBox');
-    if (!box) return;
-
-    const toast = document.createElement('div');
-    toast.className = `newfeat_toast ${type}`;
-    toast.innerHTML = `
-      <div style="font-size: 13.5px; line-height: 1.4;">${message}</div>
-      <button class="newfeat_toast-close" onclick="this.parentElement.remove()">&times;</button>
-    `;
-
-    box.appendChild(toast);
-    setTimeout(() => { toast.classList.add('show'); }, 50);
-
-    // ५ सेकेन्ड पछि आफैँ हराउने
-    setTimeout(() => {
-      if (toast) {
-        toast.classList.remove('show');
-        toast.classList.add('hide');
-        setTimeout(() => { toast.remove(); }, 400);
-      }
-    }, 5000);
-  }
-
-  // २. सेटिङ सेभ गर्ने र लोड गर्ने (LocalStorage)
-  function newfeat_saveSettings() {
-    localStorage.setItem('newfeat_remind_pref', document.getElementById('newfeat_setReminder').checked);
-    localStorage.setItem('newfeat_quiz_pref', document.getElementById('newfeat_setQuiz').checked);
-    localStorage.setItem('newfeat_syll_pref', document.getElementById('newfeat_setSyllabus').checked);
-  }
-
-  function newfeat_loadSettings() {
-    if (localStorage.getItem('newfeat_remind_pref') !== null) {
-      document.getElementById('newfeat_setReminder').checked = localStorage.getItem('newfeat_remind_pref') === 'true';
-      document.getElementById('newfeat_setQuiz').checked = localStorage.getItem('newfeat_quiz_pref') === 'true';
-      document.getElementById('newfeat_setSyllabus').checked = localStorage.getItem('newfeat_syll_pref') === 'true';
-    }
-  }
-
-  // ३. तिम्रो एपको रैथाने 'Setting Tab' भित्र यो कस्टमाइज प्यानललाई अटोमेटिक घुसाउने (Layout सुरक्षित राख्दै)
-  function newfeat_injectSettingsIntoApp() {
-    // तिम्रो ७१० KB को फाइलमा सेटिङ बुझाउने सम्भावित क्लास वा आईडीहरू खोज्ने
-    const targetSection = document.getElementById('settings') || 
-                          document.querySelector('.settings-content') || 
-                          document.querySelector('.tab-content') ||
-                          document.getElementById('settings-page');
-
-    const myPanel = document.getElementById('newfeat_settingsPanel');
-    
-    if (targetSection && myPanel) {
-      myPanel.style.display = 'block'; // प्यानल देखाउने
-      targetSection.appendChild(myPanel); // सेटिङ ट्याबको मुनि सुरक्षित रूपमा जोड्ने
-    }
-  }
-
-  // ४. एप खुल्ने बित्तिकै चल्ने रिमाइन्डरहरू (निजी अध्ययनको लागि उपयोगी)
-  window.addEventListener('DOMContentLoaded', () => {
-    newfeat_loadSettings();
-    newfeat_injectSettingsIntoApp();
-
-    // उदाहरण १: दैनिक पढ्ने रिमाइन्डर (एप खुलेको २ सेकेन्डमा)
-    setTimeout(() => {
-      newfeat_triggerToast(
-        "📝 <strong>अध्ययन रिमाइन्डर:</strong> अरुण जी, आज कृषि चौथो/पाँचौ तहको 'Plant Protection' खण्ड दोहोर्याउने तालिका छ है!", 
-        'study', 
-        'newfeat_remind_pref'
-      );
-    }, 2000);
-
-    // उदाहरण २: सिलेबस प्रगति अलर्ट (एप खुलेको ६ सेकेन्डमा)
-    setTimeout(() => {
-      newfeat_triggerToast(
-        "📈 <strong>सिलेबस अपडेट:</strong> बधाई छ! तपाईंले माटो विज्ञान (Soil Science) को ६०% क्षेत्र पूरा गर्नुभयो।", 
-        'progress', 
-        'newfeat_syll_pref'
-      );
-    }, 6000);
-  };
-</script>
-
             <!-- Performance settings panel (smoothness / battery / 120Hz) -->
             <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                 <div class="flex items-center justify-between">
@@ -2550,6 +2451,19 @@
             </div>
 
             <button onclick="navigate('page-subject-manager')" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">📚 Manage Subjects</button>
+<!-- NEW FEAT: Toast Test Panel -->
+            <div class="p-4 rounded-xl border space-y-2.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+                <p class="font-bold text-sm">📣 App Notifications Debug</p>
+                <p class="text-[10px] text-gray-400">Trigger test toast sequences to verify styles and responsive viewport behaviors.</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button onclick="newfeat_showNotification('Loksewa Notice: New Exam Schedule Released!', 'success'); playSound('celebrate');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs transition duration-150 active:scale-95 cursor-pointer">
+                        🔔 Test Success
+                    </button>
+                    <button onclick="newfeat_showNotification('Study Reminder: Your revision session is due soon.', 'info'); playSound('click');" class="border py-2 rounded-lg font-semibold text-xs text-indigo-600 hover:bg-indigo-50/50 dark:text-indigo-400 dark:hover:bg-slate-700 transition duration-150 active:scale-95" style="border-color:var(--border);">
+                        ℹ️ Test Info
+                    </button>
+                </div>
+            </div>
             <button onclick="navigate('page-admin')" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🛠️ Question Admin Insert panel</button>
             <button onclick="clearCache()" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🗑️ Clear Application Cache</button>
             <button onclick="resetAllData()" class="w-full p-3 rounded-xl border text-left font-bold text-xs text-red-500">⚠️ Hard Reset all data</button>
@@ -3971,7 +3885,43 @@
     }, { capture: true });
 
     // ==================== BASIC HELPER FUNCTIONS ====================
-    function loadData(){
+ // ==================== NEW FEAT: IN-APP TOAST SYSTEM ====================
+    function newfeat_showNotification(message, type) {
+        const container = document.getElementById('newfeat_toast-container');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        toast.className = `newfeat_toast newfeat_toast-${type || 'info'}`;
+        
+        const iconSymbol = type === 'success' ? '✅' : 'ℹ️';
+        
+        toast.innerHTML = `
+            <span style="font-size: 16px; display: inline-flex; align-items: center; justify-content: center; shrink-to-fit: 0;">${iconSymbol}</span>
+            <div style="flex: 1; line-height: 1.4; word-break: break-word; text-align: left;">${message}</div>
+            <button onclick="this.parentElement.classList.remove('newfeat_show'); this.parentElement.classList.add('newfeat_hide'); setTimeout(() => { this.parentElement.remove(); }, 350);" style="background: none; border: none; font-size: 18px; cursor: pointer; opacity: 0.6; color: inherit; padding: 0 4px; line-height: 1; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.6'">✕</button>
+        `;
+
+        container.appendChild(toast);
+
+        // Force browser repaint
+        toast.offsetHeight;
+
+        // Slide element into view
+        toast.classList.add('newfeat_show');
+
+        // Dismiss sequence (4000ms delay)
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.classList.remove('newfeat_show');
+                toast.classList.add('newfeat_hide');
+                
+                toast.addEventListener('transitionend', () => {
+                    toast.remove();
+                }, { once: true });
+            }
+        }, 4000);
+    }   
+function loadData(){
         ['bookmarked','wrong','customQuestions','streak','stats','achievements'].forEach(k=>{
             const v = Storage.getJSON('krishi_'+k, null);
             if (v !== null && v !== undefined) localData[k] = v;

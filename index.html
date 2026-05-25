@@ -4423,11 +4423,8 @@ function loadData(){
             await syncCloudNow(true);
         } catch (err) {
             console.error('Cloud Sync connection error:', err);
-        }
+        } 
 
-    } catch (err) {
-        console.error('Cloud Sync connection error:', err);
-        const badge = document.getElementById('sync-status-badge');
 
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();

@@ -3956,6 +3956,9 @@ function loadData(){
         // Batch writes to avoid jank; flush on idle / shortly after.
         Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
         triggerBackgroundSync();
+        localStorage.setItem('krishi_last_updated_at', Date.now());
+        scheduleCloudSync('Data saved');
+
     }
 
     function loadSM2(){
@@ -4049,9 +4052,24 @@ function loadData(){
             if (setupPanel) setupPanel.classList.add('hidden');
             if (activePanel) activePanel.classList.remove('hidden');
             if (display) display.innerText = key;
+            
+            let status = localStorage.getItem('krishi_sync_status') || 'Synced';
+            if (!navigator.onLine) status = 'Offline';
+            
             if (badge) {
-                badge.innerText = 'Connected 🟢';
-                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400';
+                if (status === 'Syncing...') {
+                    badge.innerText = 'Syncing... 🟡';
+                    badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 animate-pulse';
+                } else if (status === 'Offline') {
+                    badge.innerText = 'Offline 🟡';
+                    badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-150 text-slate-500 dark:bg-slate-700 dark:text-slate-400';
+                } else if (status === 'Sync failed') {
+                    badge.innerText = 'Sync failed 🔴';
+                    badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-400';
+                } else {
+                    badge.innerText = 'Synced 🟢';
+                    badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400';
+                }
             }
             
             const lastSync = localStorage.getItem('krishi_last_sync_time');
@@ -4066,6 +4084,7 @@ function loadData(){
         }
     }
 
+
     let firebaseAuth = null;
     let currentAuthUser = null;
 
@@ -4073,7 +4092,7 @@ function loadData(){
     let firebaseSDKLoaded = false;
 
     async function loadFirebaseSDKs() {
-        if (window.firebase && window.firebase.auth && window.firebase.database) {
+        if (window.firebase && window.firebase.auth && window.firebase.firestore) {
             firebaseSDKLoaded = true;
             return Promise.resolve();
         }
@@ -4085,23 +4104,22 @@ function loadData(){
 
             const loadScript = (url) => {
                 return new Promise((res, rej) => {
-                    // Stable cache invalidation for static PWA Hosting without breaking offline match
                     const stableBust = "?v=v23";
-                    
-                    const existing = document.querySelector(`script[src^="${url}"]`);
-                    if (existing) {
-                        existing.remove();
-                    }
-
                     let script = document.createElement('script');
                     script.src = url + stableBust;
-                    script.onload = () => {
-                        console.log(`[Firebase Loader] Successfully loaded script: ${url}`);
-                        res();
-                    };
-                    script.onerror = (err) => {
-                        console.error(`[Firebase Loader] Error loading script: ${url}`);
-                        rej(err);
+                    script.onload = () => res();
+                    script.onerror = () => {
+                        // local loader fail bhaye direct Google CDN bata load garne fallback
+                        if (url.startsWith('./js/')) {
+                            const cdnUrl = "https://www.gstatic.com/firebasejs/9.23.0/" + url.substring(5);
+                            let fallbackScript = document.createElement('script');
+                            fallbackScript.src = cdnUrl;
+                            fallbackScript.onload = () => res();
+                            fallbackScript.onerror = (err) => rej(err);
+                            document.head.appendChild(fallbackScript);
+                        } else {
+                            rej(new Error("Script load failed"));
+                        }
                     };
                     document.head.appendChild(script);
                 });
@@ -4111,7 +4129,7 @@ function loadData(){
                 try {
                     console.log(`[Firebase Loader] Attempt ${attempt} of ${maxRetries} to load Firebase SDKs...`);
                     await loadScript('./js/firebase-app-compat.js');
-                    await loadScript('./js/firebase-database-compat.js');
+                    await loadScript('./js/firebase-firestore-compat.js');
                     await loadScript('./js/firebase-auth-compat.js');
                     
                     console.log("[Firebase Loader] All Firebase Compat SDKs loaded successfully!");
@@ -4122,10 +4140,9 @@ function loadData(){
                     console.warn(`[Firebase Loader] Attempt ${attempt} failed:`, e);
                     if (attempt === maxRetries) {
                         reject(new Error("Firebase SDK load failed after multiple retries."));
-                        firebaseLoadPromise = null; // Clear to allow future retries
+                        firebaseLoadPromise = null;
                     } else {
                         const backoff = attempt * 1000;
-                        console.log(`[Firebase Loader] Retrying in ${backoff}ms...`);
                         await delay(backoff);
                     }
                 }
@@ -4373,11 +4390,7 @@ function loadData(){
         if (!key) return;
 
         try {
-            const badge = document.getElementById('sync-status-badge');
-            if (badge) {
-                badge.innerText = 'Connecting 🟡';
-                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-705 dark:bg-amber-950 dark:text-amber-400';
-            }
+            setSyncStatus('Syncing...');
             await loadFirebaseSDKs();
             
             if (!firebaseApp) {
@@ -4395,7 +4408,6 @@ function loadData(){
                     databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
                 };
 
-                // Prevent concurrent initialization race condition
                 let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
                 if (!firebase.apps.length) {
                     firebaseApp = firebase.initializeApp(config, "KrishiApp");
@@ -4404,38 +4416,52 @@ function loadData(){
                 }
             }
 
-            firebaseDb = firebase.database(firebaseApp);
-
-            // Clean up previous listeners if any
-            if (syncListenerRef) {
-                syncListenerRef.off();
+            const firestore = firebase.firestore(firebaseApp);
+            
+            if (window.syncListenerUnsubscribe) {
+                window.syncListenerUnsubscribe();
             }
 
-            // Realtime listening for changes
-            syncListenerRef = firebaseDb.ref('sync_keys/' + key);
-            syncListenerRef.on('value', snapshot => {
-                if (syncInProgress) return;
-                const cloudData = snapshot.val();
-                if (cloudData) {
-                    performSmartMerge(cloudData, false);
-                }
-            });
+            // Real-time snapshot listener
+            window.syncListenerUnsubscribe = firestore.collection('sync_keys').doc(key)
+                .onSnapshot(doc => {
+                    if (syncInProgress) return;
+                    if (doc.exists) {
+                        const cloudData = doc.data();
+                        const localUpdatedAt = parseInt(localStorage.getItem('krishi_last_updated_at')) || 0;
+                        const cloudUpdatedAt = cloudData.updatedAt || 0;
+                        
+                        if (cloudUpdatedAt > localUpdatedAt) {
+                            syncInProgress = true;
+                            if (confirm("Newer study data found in the cloud!\n\nUse cloud data or keep local data? (OK to use Cloud, Cancel to keep Local)")) {
+                                applyAllAppData(cloudData);
+                                localStorage.setItem('krishi_last_updated_at', cloudUpdatedAt);
+                                localStorage.removeItem('krishi_sync_pending');
+                                setSyncStatus('Synced');
+                            } else {
+                                syncInProgress = false;
+                                scheduleCloudSync('Preserved local data over cloud');
+                            }
+                            syncInProgress = false;
+                        } else if (localUpdatedAt > cloudUpdatedAt) {
+                            scheduleCloudSync('Local data newer than snapshot');
+                        } else {
+                            setSyncStatus('Synced');
+                        }
+                    } else {
+                        scheduleCloudSync('Initial sync configuration setup');
+                    }
+                }, err => {
+                    console.error('[Cloud Sync] Listener failed:', err);
+                    setSyncStatus('Sync failed');
+                });
 
-            // Initial immediate push & pull
-            try {
-                await syncCloudNow(true);
-            } catch (err) {
-                console.error('Cloud Sync connection error:', err);
-            }
         } catch (err) {
             console.error('Failed to initialize Cloud Sync:', err);
-            const badge = document.getElementById('sync-status-badge');
-            if (badge) {
-                badge.innerText = 'Sync Error 🔴';
-                badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-400';
-            }
+            setSyncStatus('Sync failed');
         }
     }
+
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();
         if (!inputKey || !inputKey.startsWith('KRISHI-SYNC-')) {
@@ -13701,6 +13727,180 @@ function loadData(){
             showToast(`⚠️ AI Generation Error: ${err.message}`, 5000);
         }
     }
+
+  function collectAllAppData() {
+        return {
+            bookmarked: localData.bookmarked || [],
+            wrong: localData.wrong || [],
+            customQuestions: localData.customQuestions || [],
+            streak: localData.streak || {},
+            stats: localData.stats || {},
+            achievements: localData.achievements || [],
+            sm2: sm2Data || {},
+            
+            // config data packs
+            examProfiles: safeJsonParse(localStorage.getItem('krishi_exam_profiles'), []),
+            homeSettings: safeJsonParse(localStorage.getItem('krishi_home_settings'), {}),
+            appearanceSettings: safeJsonParse(localStorage.getItem('krishi_appearance_settings'), {}),
+            customAppearanceSettings: safeJsonParse(localStorage.getItem('krishi_custom_appearance_settings'), {}),
+            plannerSettings: safeJsonParse(localStorage.getItem('krishi_planner_settings'), {}),
+            syllabusCustom: safeJsonParse(localStorage.getItem('krishi_syllabus_custom'), []),
+            timingLog: safeJsonParse(localStorage.getItem('krishi_timingLog'), []),
+            mockScores: safeJsonParse(localStorage.getItem('krishi_mockScores'), []),
+            practiceRecent: safeJsonParse(localStorage.getItem('krishi_practice_recent'), []),
+            soundEnabled: localStorage.getItem('krishi_sound_enabled'),
+            soundMuted: localStorage.getItem('krishi_sound_muted'),
+            soundVolume: localStorage.getItem('krishi_sound_volume'),
+            
+            updatedAt: Date.now()
+        };
+    }
+
+    function applyAllAppData(data) {
+        if (!data) return;
+        
+        if (Array.isArray(data.bookmarked)) localData.bookmarked = data.bookmarked;
+        if (Array.isArray(data.wrong)) localData.wrong = data.wrong;
+        if (Array.isArray(data.customQuestions)) localData.customQuestions = data.customQuestions;
+        if (data.streak && typeof data.streak === 'object') localData.streak = data.streak;
+        if (data.stats && typeof data.stats === 'object') localData.stats = data.stats;
+        if (Array.isArray(data.achievements)) localData.achievements = data.achievements;
+        
+        if (data.sm2 && typeof data.sm2 === 'object') {
+            sm2Data = data.sm2;
+            Storage.setJSON('krishi_sm2', sm2Data);
+        }
+        
+        // Save localData keys
+        Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
+        
+        // Save extra config lists
+        if (Array.isArray(data.examProfiles)) localStorage.setItem('krishi_exam_profiles', JSON.stringify(data.examProfiles));
+        if (data.homeSettings) localStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
+        if (data.appearanceSettings) localStorage.setItem('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
+        if (data.customAppearanceSettings) localStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
+        if (data.plannerSettings) localStorage.setItem('krishi_planner_settings', JSON.stringify(data.plannerSettings));
+        if (Array.isArray(data.syllabusCustom)) localStorage.setItem('krishi_syllabus_custom', JSON.stringify(data.syllabusCustom));
+        if (Array.isArray(data.timingLog)) localStorage.setItem('krishi_timingLog', JSON.stringify(data.timingLog));
+        if (Array.isArray(data.mockScores)) localStorage.setItem('krishi_mockScores', JSON.stringify(data.mockScores));
+        if (Array.isArray(data.practiceRecent)) localStorage.setItem('krishi_practice_recent', JSON.stringify(data.practiceRecent));
+        
+        if (data.soundEnabled !== undefined && data.soundEnabled !== null) localStorage.setItem('krishi_sound_enabled', data.soundEnabled);
+        if (data.soundMuted !== undefined && data.soundMuted !== null) localStorage.setItem('krishi_sound_muted', data.soundMuted);
+        if (data.soundVolume !== undefined && data.soundVolume !== null) localStorage.setItem('krishi_sound_volume', data.soundVolume);
+        
+        // Reload all parameters in active memory
+        loadData();
+        loadTimingData();
+        applyAppearanceSettings();
+        applyCustomAppearanceAndLanguageSettings();
+        initPracticeSoundSettings();
+        
+        // Refresh UIs
+        updateHomePage();
+        updatePracticePage();
+        if (typeof refreshPlannerPage === 'function') refreshPlannerPage();
+    }
+
+    let syncDebounceTimer = null;
+
+    function scheduleCloudSync(reason = "") {
+        const key = getSyncKey();
+        if (!key) return;
+
+        localStorage.setItem('krishi_sync_pending', 'true');
+        setSyncStatus('Syncing...');
+
+        if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+
+        // 3 seconds debounce limiter
+        syncDebounceTimer = setTimeout(() => {
+            performCloudSync();
+        }, 3000);
+    }
+
+    async function performCloudSync() {
+        const key = getSyncKey();
+        if (!key) return;
+
+        if (!navigator.onLine) {
+            setSyncStatus('Offline');
+            return;
+        }
+
+        setSyncStatus('Syncing...');
+
+        try {
+            await loadFirebaseSDKs();
+            const firestore = firebase.firestore(firebaseApp);
+            const docRef = firestore.collection('sync_keys').doc(key);
+            
+            const localDataPayload = collectAllAppData();
+            const localUpdatedAt = parseInt(localStorage.getItem('krishi_last_updated_at')) || 0;
+
+            const doc = await docRef.get();
+
+            if (doc.exists) {
+                const cloudData = doc.data();
+                const cloudUpdatedAt = cloudData.updatedAt || 0;
+
+                if (cloudUpdatedAt > localUpdatedAt) {
+                    syncInProgress = true;
+                    if (confirm("Newer study data found in the cloud!\n\nUse cloud data or keep local data? (OK to use Cloud, Cancel to keep Local)")) {
+                        applyAllAppData(cloudData);
+                        localStorage.setItem('krishi_last_updated_at', cloudUpdatedAt);
+                        localStorage.removeItem('krishi_sync_pending');
+                        setSyncStatus('Synced');
+                        showToast("✓ Cloud data loaded successfully!");
+                    } else {
+                        // Force overwrite cloud with local data
+                        const now = Date.now();
+                        localDataPayload.updatedAt = now;
+                        await docRef.set(localDataPayload);
+                        localStorage.setItem('krishi_last_updated_at', now);
+                        localStorage.removeItem('krishi_sync_pending');
+                        setSyncStatus('Synced');
+                        showToast("✓ Local data preserved & uploaded!");
+                    }
+                    syncInProgress = false;
+                } else if (localUpdatedAt > cloudUpdatedAt) {
+                    const now = Date.now();
+                    localDataPayload.updatedAt = now;
+                    await docRef.set(localDataPayload);
+                    localStorage.setItem('krishi_last_updated_at', now);
+                    localStorage.removeItem('krishi_sync_pending');
+                    setSyncStatus('Synced');
+                } else {
+                    localStorage.removeItem('krishi_sync_pending');
+                    setSyncStatus('Synced');
+                }
+            } else {
+                const now = Date.now();
+                localDataPayload.updatedAt = now;
+                await docRef.set(localDataPayload);
+                localStorage.setItem('krishi_last_updated_at', now);
+                localStorage.removeItem('krishi_sync_pending');
+                setSyncStatus('Synced');
+            }
+        } catch (err) {
+            console.error('[Cloud Sync] Sync execution error:', err);
+            setSyncStatus('Sync failed');
+        }
+    }
+
+    function setSyncStatus(status) {
+        localStorage.setItem('krishi_sync_status', status);
+        updateSyncUI();
+    }
+
+    // Reconnection listener
+    window.addEventListener('online', () => {
+        if (localStorage.getItem('krishi_sync_pending') === 'true') {
+            scheduleCloudSync('Reconnected to internet');
+        } else {
+            updateSyncUI();
+        }
+    });
     </script>
 
     <!--

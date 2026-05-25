@@ -4135,30 +4135,23 @@ function loadData(){
         return firebaseLoadPromise;
     }
 
-    async function initFirebaseAuth() {
+   async function initFirebaseAuth() {
         try {
             await loadFirebaseSDKs();
             if (!firebaseApp) {
                 let customConfig = null;
                 try { customConfig = JSON.parse(localStorage.getItem('krishi_firebase_config')); } catch(e){}
                 const config = customConfig || {
-                    apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt6OyHhYz10bA",
+                    apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt60yHhYz10bA",
                     authDomain: "krishi-mcq-pro.firebaseapp.com",
                     projectId: "krishi-mcq-pro",
                     storageBucket: "krishi-mcq-pro.firebasestorage.app",
                     messagingSenderId: "39741021868",
                     appId: "1:39741021868:web:c838ca32f5aaeb41720909",
-                    measurementId: "G-MHX05SE7WB",
+                    measurementId: "G-77Y92Z447K",
                     databaseURL: "https://krishi-mcq-pro-default-rtdb.firebaseio.com"
                 };
-                
-                // Prevent concurrent initialization race condition
-                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
-                if (existingApp) {
-                    firebaseApp = existingApp;
-                } else {
-                    firebaseApp = firebase.initializeApp(config, "KrishiApp");
-                }
+                firebaseApp = firebase.initializeApp(config, "KrishiApp");
             }
             firebaseAuth = firebase.auth(firebaseApp);
             

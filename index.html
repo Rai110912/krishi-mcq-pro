@@ -4149,7 +4149,7 @@ function loadData(){
                     messagingSenderId: "39741021868",
                     appId: "1:39741021868:web:c838ca32f5aaeb41720909",
                     measurementId: "G-77Y92Z447K",
-                    databaseURL: "https://krishi-mcq-pro-default-rtdb.firebaseio.com"
+                    databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app/"
                 };
                 firebaseApp = firebase.initializeApp(config, "KrishiApp");
             }
@@ -4392,18 +4392,16 @@ function loadData(){
                     messagingSenderId: "39741021868",
                     appId: "1:39741021868:web:c838ca32f5aaeb41720909",
                     measurementId: "G-MHX05SE7WB",
-                    databaseURL: "https://krishi-mcq-pro-default-rtdb.firebaseio.com"
+                    databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
                 };
 
                 // Prevent concurrent initialization race condition
                 let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
-                if (existingApp) {
-                    firebaseApp = existingApp;
-                } else {
+                if (!firebase.apps.length) {
                     firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                } else {
+                    firebaseApp = firebase.app("KrishiApp");
                 }
-                firebaseDb = firebase.database(firebaseApp);
-            }
 
             // Clean up previous listeners if any
             if (syncListenerRef) {

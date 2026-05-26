@@ -64,7 +64,7 @@
             font-weight: calc(var(--app-font-weight, 400) + 200) !important;
         }
         
-        /* Accent override rules to map Tailwind colors dynamically */
+       /* Accent override rules to map Tailwind colors dynamically */
         .custom-accent-active .bg-emerald-600, 
         .custom-accent-active .bg-emerald-500, 
         .custom-accent-active .bg-teal-600, 
@@ -145,6 +145,32 @@
             opacity: 1 !important;
             transform: none !important;
         }
+        /* एनिमेसन सुधार नियमहरू */
+@keyframes floatExplode {
+    0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
+    30% { opacity: 1; transform: translate(var(--tx), var(--ty)) scale(1.2); }
+    100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.8); }
+}
+@keyframes pulse-alert {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.65; transform: scale(1.01); }
+}
+.animate-pulse-alert {
+    animation: pulse-alert 1.5s infinite ease-in-out !important;
+}
+        /* सच्याइएको एनिमेसन कोड (Sparkle & Pulse Warning Fix) */
+@keyframes floatExplode {
+    0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
+    30% { opacity: 1; transform: translate(var(--tx), var(--ty)) scale(1.2); }
+    100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.8); }
+}
+@keyframes pulse-alert {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.65; transform: scale(1.01); }
+}
+.animate-pulse-alert {
+    animation: pulse-alert 1.5s infinite ease-in-out !important;
+}
         html[data-perf-mode="battery"] {
             --shadow-soft: 0 0 0 rgba(0,0,0,0);
             --tap-scale: 1;
@@ -696,7 +722,7 @@
 
         .newfeat_toast-info {
             background-color: #f0f9ff;
-            color: #075985;
+            color: #03496d; /* परिवर्तन गरिएको: उज्यालोमा सहजै पढ्न सकिने गाढा नीलो रङ */
             border-left: 5px solid #0284c7;
         }
         .dark .newfeat_toast-info {
@@ -704,6 +730,285 @@
             color: #bae6fd;
             border-left: 5px solid #38bdf8;
         }
+        /* ==================== 2026 ULTRA-FUTURISTIC STYLES (Z-TOUCH LAYER) ==================== */
+:root {
+    --scroll-percent: 0;
+}
+
+/* GPU Isolation for Butterworth Smooth Rendering */
+.hover-card-trigger, .page, #mcq-card-container, .option-btn {
+    will-change: transform, opacity;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+}
+
+/* Specular Light & Dynamic Laser Border Glow */
+.premium-glow-card {
+    position: relative;
+    border-radius: var(--radius, 16px);
+    background: var(--card);
+    overflow: hidden;
+    z-index: 1;
+    border: 1px solid rgba(var(--primary-rgb), 0.15) !important;
+}
+
+.premium-glow-card::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(
+        from 0deg,
+        transparent 0%,
+        transparent 40%,
+        var(--primary) 50%,
+        transparent 60%,
+        transparent 100%
+    );
+    animation: laserGlowBorder 5s linear infinite;
+    z-index: -2;
+    pointer-events: none;
+}
+
+.premium-glow-card::after {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    background: var(--card);
+    border-radius: calc(var(--radius, 16px) - 1px);
+    z-index: -1;
+    pointer-events: none;
+}
+
+@keyframes laserGlowBorder {
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Spring Mechanics Class Variables */
+.spring-active {
+    transition: transform 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s ease-out !important;
+}
+
+/* Scroll-driven Indicator Bar */
+.futuristic-scroll-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--primary) 0%, #3b82f6 100%);
+    width: calc(var(--scroll-percent) * 100%);
+    z-index: 100000;
+    pointer-events: none;
+    transition: width 0.1s ease-out;
+}
+
+/* 3D Container setup */
+body {
+    perspective: 1200px;
+}
+/* ==================== 2026 SIX FUTURISTIC ANIMATIONS STYLES ==================== */
+
+/* १. बायो-मिमेटिक बाली वृद्धि एनिमेसनको बक्स */
+.plant-growth-widget {
+    position: absolute;
+    top: 10px;
+    right: 50px;
+    width: 55px;
+    height: 55px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1.5px solid var(--primary-light);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow);
+    z-index: 10;
+    transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.dark .plant-growth-widget {
+    background: rgba(30, 41, 59, 0.9);
+    border-color: var(--primary-dark);
+}
+.plant-growth-svg {
+    width: 42px;
+    height: 42px;
+    transition: all 0.5s ease;
+}
+.withered-plant {
+    transform: rotate(15deg) scale(0.9);
+    filter: grayscale(0.6) sepia(0.2);
+    opacity: 0.8;
+}
+
+/* २. द्रव प्रगति सूचक बार */
+.irrigation-wave-container {
+    position: relative;
+    width: 100%;
+    height: 8px;
+    border-radius: 9999px;
+    background: #cbd5e1;
+    overflow: hidden;
+}
+.dark .irrigation-wave-container {
+    background: #334155;
+}
+.irrigation-wave-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 9999px;
+}
+/* ==================== PREMIUM OVERLAY ANIMATIONS ==================== */
+/* १. लहर फैलने एनिमेसन नियम */
+.option-btn {
+    position: relative !important;
+    overflow: hidden !important;
+}
+.click-ripple {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(var(--primary-rgb), 0.25);
+    transform: scale(0);
+    animation: ripple-wave 0.5s ease-out;
+    pointer-events: none;
+}
+@keyframes ripple-wave {
+    to {
+        transform: scale(4);
+        opacity: 0;
+    }
+}
+
+/* २. अरोरा लाइट बग्ने नियम */
+#home-active-profile-card {
+    position: relative;
+    overflow: hidden;
+}
+#home-active-profile-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 40%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+    transform: skewX(-25deg);
+    animation: aurora-sweep 4.5s infinite ease-in-out;
+    pointer-events: none;
+}
+.dark #home-active-profile-card::after {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+}
+@keyframes aurora-sweep {
+    0% { transform: translateX(-150%) skewX(-25deg); }
+    100% { transform: translateX(180%) skewX(-25deg); }
+}
+
+/* ३. बिरुवा हल्लिने नियम */
+.plant-growth-widget {
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+}
+.plant-growth-widget:hover, .plant-growth-widget:active {
+    transform: scale(1.18) rotate(6deg) !important;
+}
+
+/* ३. मस्तिष्क-सञ्जाल शैलीको ज्ञान नक्सा */
+.neural-mindmap-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 16px);
+    padding: 16px;
+    width: 100%;
+    box-sizing: border-box;
+    transition: transform 0.3s ease;
+}
+.neural-canvas {
+    width: 100%;
+    height: 180px;
+    display: block;
+    background: transparent;
+}
+
+/* ४. मौसम अनुकूल वातावरणीय पृष्ठभूमि क्यानभास */
+#weather-ambient-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: -5;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* ५. कन्सेप्ट स्क्यान लेजर बीम */
+.specular-scan-beam-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(6, 78, 59, 0.1);
+    z-index: 1000;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: var(--radius, 16px);
+    display: none;
+}
+.specular-laser-line {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(90deg, transparent, var(--primary) 50%, transparent);
+    box-shadow: 0 0 15px var(--primary), 0 0 5px var(--primary);
+    animation: sweepScanningBeam 2.5s ease-in-out infinite;
+}
+@keyframes sweepScanningBeam {
+    0% { top: 0%; }
+    50% { top: 100%; }
+    100% { top: 0%; }
+}
+
+/* ६. ३डी ऋतु चक्र र बाली चक्र कनवर्टर */
+.seasonal-crop-wheel-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 16px);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+.crop-wheel-3d-wrapper {
+    perspective: 800px;
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.crop-wheel-circle {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    border: 4px dashed var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+    font-size: 13px;
+    background: var(--primary-light);
+    color: var(--primary-dark);
+    transform-style: preserve-3d;
+    transition: transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: var(--shadow);
+}
+.dark .crop-wheel-circle {
+    background: var(--primary-dark);
+    color: var(--primary-light);
+}
     </style>
 </head>
 <body>
@@ -1318,6 +1623,7 @@
             <!-- Active State Panels Wrapper -->
             <div id="practice-active-state-panels" class="space-y-4">
                 <!-- Recommended Practice Banner -->
+                <div id="smart-engine-container" class="space-y-4 mb-6"></div>
                 <div id="recommended-practice-banner" class="bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-4 rounded-2xl shadow-sm space-y-2">
                 <div class="flex items-center justify-between">
                     <span class="text-[9px] font-black uppercase bg-emerald-700 px-2 py-0.5 rounded-full text-emerald-100">🔥 Recommended Focus</span>
@@ -1412,6 +1718,7 @@
 
             <!-- SUBJECTS GRID -->
             <div class="space-y-2">
+
                 <style>
                     #subject-buttons-container button:hover {
                         border-color: var(--primary);
@@ -1430,7 +1737,8 @@
                 </div>
             </div>
             </div>
-            
+            </div>
+
             <!-- DEDICATED PRACTICE RESULT CONTAINER -->
             <div id="practice-result-panel" class="hidden space-y-5">
                 <h2 class="text-base font-black text-slate-800 dark:text-slate-100 flex justify-center items-center gap-2">
@@ -1631,7 +1939,6 @@
                         </div>
                         <div class="flex items-center gap-2">
                             <button id="q-hint-btn" onclick="showQuizHint()" class="hidden px-2 py-0.5 text-[9px] font-black bg-teal-500/10 text-teal-700 dark:text-teal-400 hover:bg-teal-500/20 rounded cursor-pointer transition">💡 Hint</button>
-<button id="q-ai-explain-btn" onclick="getAIExplanationForCurrentQuestion()" class="hidden px-2 py-0.5 text-[9px] font-black bg-purple-500/10 text-purple-700 dark:text-purple-400 hover:bg-purple-500/20 rounded cursor-pointer transition">✨ AI Explain</button>
                             <button id="q-report-btn" onclick="reportAnswerIssue()" class="px-2 py-0.5 text-[9px] font-black text-rose-600 dark:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded cursor-pointer transition">⚠️ Report</button>
                             <button id="bookmark-btn" onclick="toggleBookmarkCurrent()" class="text-lg hover:scale-115 transition select-none cursor-pointer">☆</button>
                         </div>
@@ -2430,7 +2737,23 @@
                     </label>
                 </div>
             </div>
-
+<!-- Haptic Feedback Settings -->
+<div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+    <div class="flex items-center justify-between">
+        <div>
+            <h3 class="text-xs font-black uppercase text-slate-400">📳 Tactile Haptics</h3>
+            <p class="text-[9px] text-slate-500">उत्तर दिँदा मोबाइलमा हल्का भाइब्रेसन महसुस गर्नुहोस्।</p>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer select-none">
+            <input id="haptic-enabled" type="checkbox" checked onchange="toggleHapticSetting()" class="sr-only peer">
+            <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+        </label>
+    </div>
+    <div id="haptic-test-area" class="flex justify-between items-center hidden">
+        <span class="text-[9px] font-bold text-slate-400">Intensity: Standard</span>
+        <button onclick="triggerHaptic('correct')" class="text-[9px] font-black text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-3 py-1 rounded-lg">Test Haptic ⚡</button>
+    </div>
+</div>
             <!-- App Version & Updates Settings Card -->
             <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                 <div class="flex items-center justify-between">
@@ -3087,24 +3410,24 @@
     </main>
 
     <!-- Bottom Nav -->
-    <nav class="fixed bottom-0 left-0 right-0 py-2 border-t z-50 flex justify-around shadow-md" style="background:var(--nav-bg);border-color:var(--border);">
-        <button onclick="navigate('page-home')" id="nav-btn-0" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">🏠</span><span class="text-[9px] font-semibold">Home</span>
+    <nav class="fixed bottom-0 left-0 right-0 py-2 border-t z-50 flex justify-around shadow-md" style="background:var(--nav-bg);border-color:var(--border);" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
+        <button onclick="navigate('page-home')" id="nav-btn-0" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="गृहपृष्ठ (Home Screen)">
+            <span class="text-base" aria-hidden="true">🏠</span><span class="text-[9px] font-semibold">Home</span>
         </button>
-        <button onclick="navigate('page-practice')" id="nav-btn-1" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">📚</span><span class="text-[9px] font-semibold">Practice</span>
+        <button onclick="navigate('page-practice')" id="nav-btn-1" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="अभ्यास खण्ड (Practice Suite)">
+            <span class="text-base" aria-hidden="true">📚</span><span class="text-[9px] font-semibold">Practice</span>
         </button>
-        <button onclick="navigate('page-mcq-creator')" id="nav-btn-2" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">✍️</span><span class="text-[9px] font-semibold">Create</span>
+        <button onclick="navigate('page-mcq-creator')" id="nav-btn-2" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
+            <span class="text-base" aria-hidden="true">✍️</span><span class="text-[9px] font-semibold">Create</span>
         </button>
-        <button onclick="navigate('page-analytics')" id="nav-btn-3" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">📊</span><span class="text-[9px] font-semibold">Analytics</span>
+        <button onclick="navigate('page-analytics')" id="nav-btn-3" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
+            <span class="text-base" aria-hidden="true">📊</span><span class="text-[9px] font-semibold">Analytics</span>
         </button>
-        <button onclick="navigate('page-study-planner')" id="nav-btn-4" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">📅</span><span class="text-[9px] font-semibold">Planner</span>
+        <button onclick="navigate('page-study-planner')" id="nav-btn-4" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="अध्ययन योजनाकार (Study Planner)">
+            <span class="text-base" aria-hidden="true">📅</span><span class="text-[9px] font-semibold">Planner</span>
         </button>
-        <button onclick="navigate('page-settings')" id="nav-btn-5" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);">
-            <span class="text-base">⚙️</span><span class="text-[9px] font-semibold">Settings</span>
+        <button onclick="navigate('page-settings')" id="nav-btn-5" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="सेटिङहरू (Application Settings)">
+            <span class="text-base" aria-hidden="true">⚙️</span><span class="text-[9px] font-semibold">Settings</span>
         </button>
     </nav>
 
@@ -3151,6 +3474,9 @@
         currentIndex:0, selectedOption:null, answered:false, score:0, questions:[],
         sessionResults:[], isMock:false, timerSec:0, timerInterval:null, totalQuestions:0, tempGeneratedQuestions:[]
     };
+  
+
+
 
     // ==================== PERFORMANCE SETTINGS & HELPERS ====================
     const PERF_DEFAULTS = {
@@ -3306,10 +3632,13 @@
             } catch (_) {}
         }
 
-        async function ensureTesseract() {
-            if (window.Tesseract) return;
-            await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-        }
+       async function ensureTesseract() {
+    if (window.Tesseract) return;
+    if (!navigator.onLine) {
+        throw new Error("offline");
+    }
+    await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+}
 
         return { ensureQuill, ensurePdfjs, ensureTesseract };
     })();
@@ -3409,7 +3738,24 @@
         updatePracticePage();
         checkAutoBackupReminder();
         initPracticeSoundSettings();
+        initHapticUI();
         initPerfSettingsUI();
+// Resume session logic
+    setTimeout(() => {
+        let saved = localStorage.getItem('krishi_saved_practice');
+        if (saved) {
+            let session = JSON.parse(saved);
+            if (confirm("तपाईंको अधुरो अभ्यास (Practice) सुरक्षित छ। के तपाईं त्यहीँबाट सुरु गर्न चाहनुहुन्छ?")) {
+                setupMCQSession(session.questions, session.isMock, session.timerSec);
+                state.currentIndex = session.currentIndex;
+                state.score = session.score;
+                state.sessionResults = session.sessionResults;
+                renderMCQ();
+            } else {
+                clearPracticeProgress();
+            }
+        }
+    }, 1000);
 
         // Register Service Worker for PWA (Progressive Web App) offline support
         if ('serviceWorker' in navigator) {
@@ -3565,15 +3911,13 @@
                 }
             };
         }
-
-        // Initialize Automatic Cloud Sync & Firebase Authentication
-        try {
-            initFirebaseAuth();
-            initCloudSync();
-        } catch(e) {
-            console.error('Failed to initialize Cloud Sync/Auth:', e);
-        }
-
+// Initialize Automatic Cloud Sync & Firebase Authentication safely
+        initFirebaseAuth()
+            .catch(err => console.warn('[Firebase Auth] Offline or CDN load failure:', err));
+            
+        initCloudSync()
+            .catch(err => console.warn('[Cloud Sync] Initialization failure safely bypassed:', err));
+            
         // Initialize Automatic Real-Time PC Update Checker
         try {
             initAutoUpdateChecker();
@@ -3879,6 +4223,10 @@
     document.addEventListener('visibilitychange', () => {
         // Used by animation loops to pause when tab is hidden (battery + smoothness)
         window.__KRISHI_VISIBLE__ = !document.hidden;
+        // थपिएको: मोबाइलमा एप मिनिमाइज हुने बित्तिकै सबै पेन्डिङ डाटाहरू तत्कालै सुरक्षित गर्ने
+        if (document.hidden) {
+            try { Storage.flush(); } catch(e) {}
+        }
     }, { passive: true });
 
     window.addEventListener('beforeunload', () => {
@@ -3944,21 +4292,25 @@ function loadData(){
             // First normalize all customQuestions
             localData.customQuestions = localData.customQuestions.map(q => normalizeQuestion(q));
             // Then validate and filter out invalid ones
-            localData.customQuestions = localData.customQuestions.filter(q => {
-                let errors = validateImportQuestion(q);
-                if (errors.length > 0) {
-                    console.warn("[Data Safety] Filtering out invalid MCQ before save:", q, errors);
-                }
-                return errors.length === 0;
-            });
+           // डाटा सुरक्षित राख्न गलत प्रश्नहरूलाई डिलिट गर्नुको सट्टा 'revision' (सच्याउनुपर्ने) मा राख्ने
+localData.customQuestions = localData.customQuestions.map(q => {
+    let errors = validateImportQuestion(q);
+    if (errors.length > 0) {
+        q.status = 'revision'; // डिलिट नगर्ने, सच्याउने मोडमा लैजाने
+    }
+    return q;
+});
             // Register custom subjects automatically on the fly to prevent desync
             registerCustomSubjectsFromQuestions(localData.customQuestions);
         }
         // Batch writes to avoid jank; flush on idle / shortly after.
         Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
+        try { saveSM2(); } catch(e) {}
+        try { Storage.flush(); } catch(e) {}
         triggerBackgroundSync();
         localStorage.setItem('krishi_last_updated_at', Date.now());
         scheduleCloudSync('Data saved');
+        savePracticeProgress();
 
     }
 
@@ -4003,6 +4355,8 @@ function loadData(){
     }
     function saveSM2(){ 
         Storage.setJSON('krishi_sm2', sm2Data); 
+        // थपिएको: स्पेस रिपिटिसनको डाटा पनि तत्कालै मोबाइल मेमोरीमा लेख्न लगाउने
+        try { Storage.flush(); } catch(e) {}
         triggerBackgroundSync();
     }
 
@@ -4598,23 +4952,29 @@ function loadData(){
         }
     }
 
-     async function pushLocalToCloud() {
+    async function pushLocalToCloud() {
     const key = getSyncKey();
     if (!key) return;
 
     try {
         await loadFirebaseSDKs();
-        const firestore = firebase.firestore(firebaseApp);
-        const backup = collectAllAppData();
-        await firestore.collection('sync_keys').doc(key).set(backup);
+        if (!firebaseApp) {
+            await initFirebaseAuth();
+        }
+        if (firebaseApp) {
+            const firestore = firebase.firestore(firebaseApp);
+            const docRef = firestore.collection('sync_keys').doc(key);
+            const localDataPayload = collectAllAppData();
+            localDataPayload.updatedAt = Date.now();
+            await docRef.set(localDataPayload);
+            localStorage.setItem('krishi_last_updated_at', localDataPayload.updatedAt);
+        }
     } catch(err) {
-        console.error('Failed to push to Firestore:', err);
+        console.error('Failed to push to Firebase Firestore:', err);
     }
 }
 
-
-    
-async function syncCloudNow(silent = false) {
+    async function syncCloudNow(silent = false) {
     const key = getSyncKey();
     if (!key) return;
 
@@ -4628,15 +4988,24 @@ async function syncCloudNow(silent = false) {
 
     try {
         await loadFirebaseSDKs();
-        const firestore = firebase.firestore(firebaseApp);
-        const doc = await firestore.collection('sync_keys').doc(key).get();
-        
-        if (doc.exists) {
-            performSmartMerge(doc.data(), true);
-        } else {
-            await pushLocalToCloud();
+        if (!firebaseApp) {
+            await initFirebaseAuth();
         }
-        if (!silent) showToast('✅ Cloud Sync successful!');
+        if (firebaseApp) {
+            const firestore = firebase.firestore(firebaseApp);
+            const docRef = firestore.collection('sync_keys').doc(key);
+            const doc = await docRef.get();
+            
+            if (doc.exists) {
+                const cloudData = doc.data();
+                performSmartMerge(cloudData, true);
+            } else {
+                await pushLocalToCloud();
+                localStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
+                updateSyncUI();
+            }
+            if (!silent) showToast('✅ Cloud Sync successful!');
+        }
     } catch(e) {
         console.error('Manual sync failed:', e);
         if (!silent) showToast('❌ Cloud connection error!');
@@ -4647,6 +5016,7 @@ async function syncCloudNow(silent = false) {
         }
     }
 }
+
     function writePendingSyncToIndexedDB(syncKey, payload) {
         if (!('indexedDB' in window)) return;
         
@@ -5864,16 +6234,7 @@ async function syncCloudNow(silent = false) {
         } else {
             hintBtn.classList.add('hidden');
         }
-// AI Explain btn setup
-        let aiExplainBtn = document.getElementById('q-ai-explain-btn');
-        if (aiExplainBtn) {
-            let key = getApiKey();
-            if (key) {
-                aiExplainBtn.classList.remove('hidden');
-            } else {
-                aiExplainBtn.classList.add('hidden');
-            }
-        }
+
         document.getElementById('q-explanation-container').classList.add('hidden');
         document.getElementById('submit-btn').classList.remove('hidden');
         document.getElementById('next-btn').classList.add('hidden');
@@ -6029,13 +6390,19 @@ async function syncCloudNow(silent = false) {
 
         if(isCorrect){
             playSound('correct');
+            triggerHaptic('correct');
             showFeedbackSpeechTag("🎯 Correct answer!");
             if (!showAnswersEnd) {
                 if (selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
             }
             state.score++;
+            // मिलाएको प्रश्नलाई गल्तीहरूको सूचीबाट स्वतः हटाउने
+        if (localData.wrong && localData.wrong.includes(q.id)) {
+            localData.wrong = localData.wrong.filter(id => id !== q.id);
+        }
         } else {
             playSound('wrong');
+            triggerHaptic('wrong');
             showFeedbackSpeechTag("❌ Incorrect!");
             if (!showAnswersEnd) {
                 if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
@@ -6160,12 +6527,14 @@ async function syncCloudNow(silent = false) {
             if(!localData.streak[today]) localData.streak[today]={solved:0, correct:0};
             localData.streak[today].solved++;
             saveData();
+            savePracticeProgress()
 
             renderMCQ();
         });
     }
 
     function finishSession(){
+       clearPracticeProgress();
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
             state.perQuestionTimerInterval = null;
@@ -6517,8 +6886,8 @@ async function syncCloudNow(silent = false) {
     // ==================== SCANNER / FILE CONVERSION ====================
     function processScan(){
         let text = document.getElementById('scan-input').value.trim();
-        if(!text) { showToast('Please insert text to scan!'); return; }
-        let sentences = text.split(/[.!?]+/).filter(s=>s.trim().length > 15);
+    if(!text) { showToast('Please insert text to scan!'); return; }
+    let sentences = text.split(/[.!?।]+/).filter(s=>s.trim().length > 15);
         if(sentences.length === 0){ showToast('Notes sentences are too short to compile!'); return; }
         
         let parsed = [];
@@ -6588,13 +6957,18 @@ async function syncCloudNow(silent = false) {
             };
             reader.readAsArrayBuffer(file);
         } else if(name.indexOf('.png') > 0 || name.indexOf('.jpg') > 0 || name.indexOf('.jpeg') > 0) {
-            try {
-                status.textContent = 'Loading OCR engine...';
-                await LazyLibs.ensureTesseract();
-            } catch(e) {
-                status.textContent = '⚠️ OCR engine load failed (offline?)';
-                return;
-            }
+       try {
+           status.textContent = 'Loading OCR engine...';
+           await LazyLibs.ensureTesseract();
+       } catch(e) {
+           if (e.message === "offline") {
+               status.textContent = '⚠️ अफलाइन! पहिलो पटक स्क्यान गर्न इन्टरनेट चाहिन्छ।';
+               showToast('📡 तपाईं अफलाइन हुनुहुन्छ! पहिलो पटक फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ। कृपया नोट पेस्ट गर्ने फिचर प्रयोग गर्नुहोस्।');
+           } else {
+               status.textContent = '⚠️ OCR engine load failed (offline?)';
+           }
+           return;
+       }
             status.textContent = 'Running OCR scanning...';
             Tesseract.recognize(file, 'nep+eng', { logger: m => status.textContent = 'OCR: ' + Math.round(m.progress * 100) + '%' })
               .then(r => {
@@ -7829,42 +8203,73 @@ async function syncCloudNow(silent = false) {
     }
 
     // ==================== EDIT IMPORT MODAL FUNCTIONS ====================
-    function openEditImportModal(idx) {
-        let q = importPreviewQuestions[idx];
-        if (!q) return;
-
-        document.getElementById('edit-import-index').value = idx;
-        document.getElementById('edit-import-q').value = q.q;
-        
-        document.getElementById('edit-import-o0').value = q.opts[0] || '';
-        document.getElementById('edit-import-o1').value = q.opts[1] || '';
-        document.getElementById('edit-import-o2').value = q.opts[2] || '';
-        document.getElementById('edit-import-o3').value = q.opts[3] || '';
-        document.getElementById('edit-import-o4').value = q.opts[4] || '';
-        
-        // Correct answer index selection
-        let ansSelect = document.getElementById('edit-import-ans');
-        ansSelect.selectedIndex = (q.ans >= 0 && q.ans < 5) ? q.ans : 0;
-
-        // Subject selector dynamic filling
-        let subSelect = document.getElementById('edit-import-sub');
-        if (subSelect) {
-            subSelect.innerHTML = '';
-            let subjects = getAllSubjects();
-            subjects.forEach(s => {
-                let selected = (s.toLowerCase() === (q.sub || '').toLowerCase()) ? 'selected' : '';
-                subSelect.innerHTML += `<option value="${s}" ${selected}>${s}</option>`;
-            });
+   // ड्रपडाउनलाई उपलब्ध विकल्पहरूको संख्या अनुसार मात्र भर्ने नयाँ सहयोगी फङ्सन
+function updateEditImportAnsDropdown(selectedIdx) {
+    let ansSelect = document.getElementById('edit-import-ans');
+    if (!ansSelect) return;
+    
+    ansSelect.innerHTML = '';
+    let optLetters = ['A', 'B', 'C', 'D', 'E'];
+    let count = 0;
+    
+    for (let i = 0; i < 5; i++) {
+        let val = document.getElementById('edit-import-o' + i).value.trim();
+        if (val.length > 0 || i < 2) {
+            count = i + 1;
         }
-
-        document.getElementById('edit-import-expl').value = q.expl || '';
-        document.getElementById('edit-import-topic').value = q.topic || '';
-        document.getElementById('edit-import-difficulty').value = q.difficulty || 'Medium';
-        document.getElementById('edit-import-marks').value = q.marks !== undefined ? q.marks : 1;
-
-        // Show the overlay modal
-        document.getElementById('import-edit-modal').classList.remove('hidden');
     }
+    
+    for (let i = 0; i < count; i++) {
+        let val = document.getElementById('edit-import-o' + i).value.trim() || `Option ${optLetters[i]}`;
+        let selected = (i === selectedIdx) ? 'selected' : '';
+        ansSelect.innerHTML += `<option value="${i}" ${selected}>Option ${optLetters[i]} (${val.substring(0, 15)})</option>`;
+    }
+}
+
+function openEditImportModal(idx) {
+    let q = importPreviewQuestions[idx];
+    if (!q) return;
+
+    document.getElementById('edit-import-index').value = idx;
+    document.getElementById('edit-import-q').value = q.q;
+    
+    document.getElementById('edit-import-o0').value = q.opts[0] || '';
+    document.getElementById('edit-import-o1').value = q.opts[1] || '';
+    document.getElementById('edit-import-o2').value = q.opts[2] || '';
+    document.getElementById('edit-import-o3').value = q.opts[3] || '';
+    document.getElementById('edit-import-o4').value = q.opts[4] || '';
+    
+    // सही उत्तरको संख्या अनुसार मात्र भर्ने
+    updateEditImportAnsDropdown(q.ans);
+
+    // प्रयोगकर्ताले टाइप गर्दागर्दै विकल्पहरूको संख्या परिवर्तन भएमा ड्रपडाउन स्वतः अपडेट गर्ने
+    for (let i = 0; i < 5; i++) {
+        let inputEl = document.getElementById('edit-import-o' + i);
+        if (inputEl) {
+            inputEl.oninput = () => {
+                let currentAns = parseInt(document.getElementById('edit-import-ans').value) || 0;
+                updateEditImportAnsDropdown(currentAns);
+            };
+        }
+    }
+
+    let subSelect = document.getElementById('edit-import-sub');
+    if (subSelect) {
+        subSelect.innerHTML = '';
+        let subjects = getAllSubjects();
+        subjects.forEach(s => {
+            let selected = (s.toLowerCase() === (q.sub || '').toLowerCase()) ? 'selected' : '';
+            subSelect.innerHTML += `<option value="${s}" ${selected}>${s}</option>`;
+        });
+    }
+
+    document.getElementById('edit-import-expl').value = q.expl || '';
+    document.getElementById('edit-import-topic').value = q.topic || '';
+    document.getElementById('edit-import-difficulty').value = q.difficulty || 'Medium';
+    document.getElementById('edit-import-marks').value = q.marks !== undefined ? q.marks : 1;
+
+    document.getElementById('import-edit-modal').classList.remove('hidden');
+}
 
     function closeEditImportModal() {
         document.getElementById('import-edit-modal').classList.add('hidden');
@@ -7933,6 +8338,8 @@ async function syncCloudNow(silent = false) {
             bookmarked: localData.bookmarked, wrong: localData.wrong,
             customQuestions: localData.customQuestions, streak: localData.streak,
             stats: localData.stats, achievements: localData.achievements,
+            timingLog: timingLog, // थपिएको: प्रश्नोत्तर गरेको समयको रेकर्ड
+            mockTestScores: mockTestScores, // थपिएको: मक टेस्ट स्कोरहरू
             lastBackup: new Date().toISOString()
         };
         let b = new Blob([JSON.stringify(backup, null, 2)], {type: 'application/json'});
@@ -7945,34 +8352,56 @@ async function syncCloudNow(silent = false) {
     function restoreAllData(){ document.getElementById('restore-file').click(); }
 
     async function downloadCompleteApp() {
-        try {
-            let response = await fetch(window.location.href);
-            if (!response.ok) throw new Error("Network response was not ok");
-            let htmlText = await response.text();
-            
-            let blob = new Blob([htmlText], {type: 'text/html;charset=utf-8'});
-            let url = URL.createObjectURL(blob);
-            let a = document.createElement('a');
-            a.href = url;
-            a.download = 'index.html';
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('📥 Complete offline app (index.html) downloaded successfully!');
-        } catch (e) {
-            console.error("Fetch failed, falling back to DOM outerHTML serialization:", e);
-            let htmlContent = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
-            let blob = new Blob([htmlContent], {type: 'text/html;charset=utf-8'});
-            let url = URL.createObjectURL(blob);
-            let a = document.createElement('a');
-            a.href = url;
-            a.download = 'index.html';
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('📥 App downloaded successfully (serialized)!');
+    try {
+        let response = await fetch(window.location.href);
+        if (!response.ok) throw new Error("Network response was not ok");
+        let htmlText = await response.text();
+        
+        let blob = new Blob([htmlText], {type: 'text/html;charset=utf-8'});
+        let url = URL.createObjectURL(blob);
+        let a = document.createElement('a');
+        a.href = url;
+        a.download = 'index.html';
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('📥 Complete offline app (index.html) downloaded successfully!');
+    } catch (e) {
+        console.error("Fetch failed, falling back to DOM outerHTML serialization:", e);
+        
+        // १. स्क्रिनको नक्कल (Clone) तयार गर्ने ताकी चलाइरहेको एपमा असर नपरोस्
+        let cleanClone = document.documentElement.cloneNode(true);
+        
+        // २. नक्कल गरिएको स्क्रिनबाट खुल्ला रहेका बक्सहरू (Modals) लुकाउने
+        let customizerModal = cleanClone.querySelector('#home-customizer-modal');
+        if (customizerModal) {
+            customizerModal.classList.add('hidden');
+            customizerModal.style.display = 'none';
         }
+        
+        // ३. नक्कल गरिएको स्क्रिनबाट म्यासेज र नोटिफिकेसनहरू हटाउने
+        let updateToast = cleanClone.querySelector('#pwa-update-toast');
+        if (updateToast) updateToast.remove();
+        
+        let activeToast = cleanClone.querySelector('#toast');
+        if (activeToast) {
+            activeToast.style.opacity = '0';
+            activeToast.style.pointerEvents = 'none';
+        }
+        
+        // ४. सफा गरिएको नक्कल स्क्रिनलाई सेभ गर्ने
+        let htmlContent = '<!DOCTYPE html>\n' + cleanClone.outerHTML;
+        let blob = new Blob([htmlContent], {type: 'text/html;charset=utf-8'});
+        let url = URL.createObjectURL(blob);
+        let a = document.createElement('a');
+        a.href = url;
+        a.download = 'index.html';
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('📥 App downloaded successfully (serialized)!');
     }
+}
     
-    function handleRestoreFile(event){
+   function handleRestoreFile(event){
         let fileInput = event.target;
         let file = fileInput.files ? fileInput.files[0] : null; 
         if(!file) return;
@@ -8061,8 +8490,24 @@ async function syncCloudNow(silent = false) {
                     if (typeof d.sm2 !== 'object' || d.sm2 === null) throw new Error('Spaced repetition sm2Data must be a valid object.');
                     stagedSm2 = d.sm2;
                 }
+
+                // समय रेकर्ड र मक टेस्टका डाटाहरूको सुरक्षात्मक जाँच
+                let stagedTimingLog = null;
+                if (d.timingLog !== undefined) {
+                    if (!Array.isArray(d.timingLog)) throw new Error('Timing log must be a valid array.');
+                    stagedTimingLog = d.timingLog;
+                }
                 
-                // 3. Rollback Protection: Apply staged data ONLY after all validation successfully passes
+                let stagedMockScores = null;
+                if (d.mockTestScores !== undefined) {
+                    if (!Array.isArray(d.mockTestScores)) throw new Error('Mock scores must be a valid array.');
+                    stagedMockScores = d.mockTestScores;
+                } else if (d.mockScores !== undefined) { // क्लाउड सिङ्कसँग कम्प्याटिबिलिटी मिलाउन
+                    if (!Array.isArray(d.mockScores)) throw new Error('Mock scores must be a valid array.');
+                    stagedMockScores = d.mockScores;
+                }
+                
+                // 3. Rollback Protection: सबै डाटाहरू मिलेपछि मात्र सेभ गर्ने
                 localData.bookmarked = staged.bookmarked;
                 localData.wrong = staged.wrong;
                 localData.customQuestions = staged.customQuestions;
@@ -8074,7 +8519,15 @@ async function syncCloudNow(silent = false) {
                     sm2Data = stagedSm2;
                     saveSM2();
                 }
+
+                if (stagedTimingLog !== null) {
+                    timingLog = stagedTimingLog;
+                }
+                if (stagedMockScores !== null) {
+                    mockTestScores = stagedMockScores;
+                }
                 
+                saveTimingData(); // थपिएको: timingLog र mockTestScores स्थानीय स्टोरमा सेभ गर्ने
                 saveData();
                 showToast('✅ App Backup restored successfully!');
                 navigate('page-home');
@@ -8082,13 +8535,12 @@ async function syncCloudNow(silent = false) {
                 console.error('[PWA Backup] Safe restore aborted:', err);
                 showToast(`❌ Invalid or corrupted backup file: ${err.message}`, 6000);
             } finally {
-                // 4. Prevent dangling file readers / inputs
+                // 4. इनपुट खाली गर्ने
                 fileInput.value = '';
             }
         };
         reader.readAsText(file);
     }
-
     function checkAutoBackupReminder() {
         let last = localStorage.getItem('krishi_last_backup');
         if (!last) {
@@ -8350,7 +8802,7 @@ async function syncCloudNow(silent = false) {
         { id: 'mockTest', label: '📋 Structured Mock Test Engine' }
     ];
 
-    const DEFAULT_HOME_SETTINGS = {
+  const DEFAULT_HOME_SETTINGS = {
         compact: false,
         order: [
             "smartRecommendation",
@@ -8362,11 +8814,7 @@ async function syncCloudNow(silent = false) {
             "bookmarks",
             "syllabusProgress",
             "weeklyProgress",
-            "motivationalQuote",
-            "quickPractice",
-            "spacedReview",
-            "reviewMistakes",
-            "mockTest"
+            "motivationalQuote"
         ],
         hidden: []
     };
@@ -9045,10 +9493,19 @@ async function syncCloudNow(silent = false) {
     }
 
     function saveExamProfiles(profiles) {
-       localStorage.setItem('krishi_exam_profiles', JSON.stringify(profiles));
-    localStorage.setItem('krishi_last_updated_at', Date.now());
-    scheduleCloudSync('Exam profiles updated');
-}
+        localStorage.setItem('krishi_exam_profiles', JSON.stringify(profiles));
+    }
+
+    function getActiveProfile() {
+        let profiles = getExamProfiles();
+        let active = profiles.find(p => p.active);
+        if (!active && profiles.length > 0) {
+            profiles[0].active = true;
+            saveExamProfiles(profiles);
+            return profiles[0];
+        }
+        return active;
+    }
 
     // Overriding system-level settings seamlessly to route values dynamically
     function getGoalSettings() {
@@ -9335,11 +9792,9 @@ async function syncCloudNow(silent = false) {
 
     // Apply specific classes of the appearance preset configurations
     function saveAppearanceSettings(settings) {
-         localStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
-    applyAppearanceSettings();
-    localStorage.setItem('krishi_last_updated_at', Date.now());
-    scheduleCloudSync('Base appearance modified');
-}
+        localStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
+        applyAppearanceSettings();
+    }
 
     function applyAppearanceSettings() {
         let settings = getAppearanceSettings();
@@ -9694,43 +10149,47 @@ async function syncCloudNow(silent = false) {
         let nav5 = document.querySelector('#nav-btn-5 span:nth-child(2)');
         if (nav5) nav5.textContent = labels.settings;
 
-        // Apply dynamic buttons in page
-        document.querySelectorAll('button').forEach(btn => {
-            let txt = btn.textContent.trim();
-            
-            // Start Practice
-            if (txt === '🎯 Start Practice' || txt === 'Start Practice' || txt.includes('Start Practice Challenge')) {
-                let prefix = txt.includes('🎯') ? '🎯 ' : (txt.includes('⚡') ? '⚡ ' : '');
-                btn.textContent = prefix + labels.startPractice;
-            }
-            
-            // Save Question
-            if (txt.toLowerCase() === 'save question') {
-                btn.textContent = labels.saveQuestion;
-            }
-            
-            // Add to Batch List
-            if (txt.toLowerCase() === 'add to batch list') {
-                btn.textContent = labels.addToBatchList;
-            }
-            
-            // Customize Home
-            if (txt.includes('Customize Home')) {
-                btn.textContent = '⚙️ ' + labels.customizeHome;
-            }
-            
-            // Generate Plan
-            if (txt.includes('Generate Plan')) {
-                btn.textContent = '📋 ' + labels.generatePlan;
-            }
-            
-            // Manage
-            if (txt === 'Manage') {
-                btn.textContent = labels.manage;
-            } else if (txt.includes('Manage Subjects')) {
-                btn.textContent = '📚 ' + labels.manage;
-            }
-        });
+        // Apply dynamic buttons in page using non-destructive data caching
+document.querySelectorAll('button').forEach(btn => {
+    let txt = btn.textContent.trim();
+    if (!btn.dataset.originalText) {
+        btn.dataset.originalText = txt;
+    }
+    let orig = btn.dataset.originalText;
+    
+    // Start Practice
+    if (orig === '🎯 Start Practice' || orig === 'Start Practice' || orig.includes('Start Practice Challenge')) {
+        let prefix = orig.includes('🎯') ? '🎯 ' : (orig.includes('⚡') ? '⚡ ' : '');
+        btn.textContent = prefix + labels.startPractice;
+    }
+    
+    // Save Question
+    if (orig.toLowerCase() === 'save question') {
+        btn.textContent = labels.saveQuestion;
+    }
+    
+    // Add to Batch List
+    if (orig.toLowerCase() === 'add to batch list') {
+        btn.textContent = labels.addToBatchList;
+    }
+    
+    // Customize Home
+    if (orig.includes('Customize Home')) {
+        btn.textContent = '⚙️ ' + labels.customizeHome;
+    }
+    
+    // Generate Plan
+    if (orig.includes('Generate Plan')) {
+        btn.textContent = '📋 ' + labels.generatePlan;
+    }
+    
+    // Manage
+    if (orig === 'Manage') {
+        btn.textContent = labels.manage;
+    } else if (orig.includes('Manage Subjects')) {
+        btn.textContent = '📚 ' + labels.manage;
+    }
+});
 
         // Dynamic Grid block texts
         document.querySelectorAll('p, div, span').forEach(el => {
@@ -10558,11 +11017,29 @@ async function syncCloudNow(silent = false) {
 
     // --- AUTOMATED LAYOUT BACKUPS SYSTEM ---
     function saveHomeSettings(settings) {
-          // ... (existing backup system lines keep same) ...
-    localStorage.setItem('krishi_home_settings', JSON.stringify(settings));
-    localStorage.setItem('krishi_last_updated_at', Date.now());
-    scheduleCloudSync('Home dashboard layout updated');
-}
+        let old = localStorage.getItem('krishi_home_settings');
+        if (old) {
+            try {
+                let parsedOld = JSON.parse(old);
+                let backups = [];
+                try {
+                    backups = JSON.parse(localStorage.getItem('krishi_layout_backups')) || [];
+                } catch(e){}
+                
+                let backupItem = {
+                    time: new Date().toLocaleTimeString() + ' ' + new Date().toLocaleDateString(),
+                    timestamp: Date.now(),
+                    settings: parsedOld
+                };
+                backups.unshift(backupItem);
+                if (backups.length > 3) backups = backups.slice(0, 3);
+                localStorage.setItem('krishi_layout_backups', JSON.stringify(backups));
+            } catch(e){}
+        }
+
+        localStorage.setItem('krishi_home_settings', JSON.stringify(settings));
+    }
+
     function renderBackupLayouts() {
         let container = document.getElementById('layout-backups-container');
         if (!container) return;
@@ -11404,6 +11881,7 @@ async function syncCloudNow(silent = false) {
     }
 
     function updateHomePage(){
+        let all = getAllQuestions();
         try {
             let settings = getHomeSettings();
             let container = document.getElementById('home-widgets-container');
@@ -11554,38 +12032,8 @@ async function syncCloudNow(silent = false) {
         } catch(err) {
             console.error('Error in updateHomePage rendering:', err);
         }
-    }
+      
 
-    function updatePracticePage(){
-        let container = document.getElementById('subject-buttons-container'); if(!container) return;
-        let subjects = getAllSubjects(); 
-        let all = getAllQuestions();
-        
-        // Render Active Subjects Grid Cards
-        container.innerHTML = '';
-        if (subjects.length === 0) {
-            container.innerHTML = `
-                <div class="col-span-full py-8 text-center bg-slate-50 dark:bg-slate-950 rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
-                    <p class="text-xs text-slate-400 italic font-mono">No Subjects active. Import or add some questions first!</p>
-                </div>
-            `;
-        } else {
-            subjects.forEach(sub => {
-                let count = all.filter(q=>q.sub === sub).length;
-                container.innerHTML += `
-                    <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md hover:border-indigo-500/30 dark:hover:border-indigo-500/30 transition-all active:scale-95 group flex flex-col justify-between" style="border-color:var(--border);">
-                        <div>
-                            <p class="font-extrabold text-xs text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">${sub}</p>
-                            <span class="text-[9px] font-mono text-slate-400 dark:text-slate-500 mt-1 block">${count} questions available</span>
-                        </div>
-                        <span class="text-[9px] font-black pointer-events-none text-indigo-500 dark:text-indigo-400 mt-4 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                            Configure Setup →
-                        </span>
-                    </button>
-                `;
-            });
-        }
-        
         // Update general dashboard counts
         let customCount = getCustomQuestions().length;
         let wrongCount = localData.wrong.length;
@@ -11655,6 +12103,7 @@ async function syncCloudNow(silent = false) {
                 bannerText.dataset.sub = weakestSub;
             } else {
                 // Pick any random subject with questions
+                let subjects = getAllSubjects();
                 if (subjects.length > 0) {
                     let randomSub = subjects[Math.floor(Math.random() * subjects.length)];
                     bannerText.textContent = `Ready to level up? Tap here to start customized Practice for "${randomSub}" of your syllabus!`;
@@ -11667,7 +12116,7 @@ async function syncCloudNow(silent = false) {
         }
 
         // Render Recent Practice History
-        let historyContainer = document.getElementById('recent-practice-list');
+       let historyContainer = document.getElementById('recent-practice-list') || document.getElementById('practice-recent-list');
         if (historyContainer) {
             let historyRaw = localStorage.getItem('krishi_practice_recent');
             let historyList = [];
@@ -12078,6 +12527,14 @@ async function syncCloudNow(silent = false) {
         if (!subName) { showToast('⚠️ Subject name is required!'); return; }
 
         let data = getSyllabusData();
+        
+        // सुरक्षा जाँच: कुल भार १००% भन्दा बढी हुन नदिने
+        let currentTotal = data.reduce((sum, item) => sum + (item.weightage || 0), 0);
+        if (currentTotal + subWeight > 100) {
+            showToast(`⚠️ पाठ्यक्रम सीमा नाघ्यो! बाँकी भार: ${100 - currentTotal}% मात्र छ। तपाईंले राख्न खोज्नुभएको भार: ${subWeight}%।`);
+            return;
+        }
+
         data.push({
             subject: subName,
             weightage: subWeight,
@@ -12133,13 +12590,32 @@ async function syncCloudNow(silent = false) {
         refreshPlannerPage();
     }
 
-    function updateCustomSubjectWeight(subjectIdx, weightVal) {
-        let data = getSyllabusData();
-        data[subjectIdx].weightage = parseInt(weightVal) || 0;
-        saveSyllabusData(data);
+   function updateCustomSubjectWeight(subjectIdx, weightVal) {
+    let data = getSyllabusData();
+    let newWeight = parseInt(weightVal) || 0;
+    
+    // नयाँ थपिएको सुरक्षा जाँच: भार ० भन्दा कम हुन नदिने
+    if (newWeight < 0) {
+        showToast(`⚠️ भार ० भन्दा कम (नेगेटिभ) हुन सक्दैन!`);
         refreshPlannerPage();
+        return;
     }
 
+    // सुरक्षा जाँच: सम्पादन गर्दा पनि कुल भार १००% भन्दा बढी हुन नदिने
+    let otherTotal = data.reduce((sum, item, idx) => {
+        return sum + (idx === subjectIdx ? 0 : (item.weightage || 0));
+    }, 0);
+    
+    if (otherTotal + newWeight > 100) {
+        showToast(`⚠️ भार १००% भन्दा बढी बनाउन मिल्दैन! अन्य विषयहरूको भार: ${otherTotal}%, यो विषयको भार: ${newWeight}%।`);
+        refreshPlannerPage(); // यूआई रिफ्रेस गरेर पुरानै मान देखाउने
+        return;
+    }
+
+    data[subjectIdx].weightage = newWeight;
+    saveSyllabusData(data);
+    refreshPlannerPage();
+}
     function calculateSyllabusPercentages() {
         let data = getSyllabusData();
         let totalWeight = 0;
@@ -12183,19 +12659,22 @@ async function syncCloudNow(silent = false) {
     }
 
     function setPlanMode(mode) {
-        activePlanMode = mode;
-        ['quick', 'normal', 'deep', 'full'].forEach(m => {
-            let btn = document.getElementById('pm-tab-' + m);
-            if (btn) {
-                if (m === mode) {
-                    btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg bg-indigo-500 text-white cursor-pointer select-none transition-all";
-                } else {
-                    btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all";
-                }
+    activePlanMode = mode;
+    ['quick', 'normal', 'deep', 'full'].forEach(m => {
+        let btn = document.getElementById('pm-tab-' + m);
+        if (btn) {
+            if (m === mode) {
+                // Indigo को सट्टामा थिमको आफ्नै primary रङ प्रयोग गरिएको
+                btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg text-white cursor-pointer select-none transition-all";
+                btn.style.backgroundColor = "var(--primary)";
+            } else {
+                btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all";
+                btn.style.backgroundColor = ""; // ब्याकग्राउन्ड रङ रिसेट गर्ने
             }
-        });
-        generateTodaySmartPlan();
-    }
+        }
+    });
+    generateTodaySmartPlan();
+}
 
     function generateTodaySmartPlan() {
         let settings = getPlannerSettings();
@@ -13380,10 +13859,10 @@ async function syncCloudNow(silent = false) {
             }
         });
         
-        let cx = w / 2;
-        let cy = h / 2 - 5;
-        let maxRadius = Math.min(w, h) / 2 - 25;
-        let numAxes = subjects.length;
+       let cx = w / 2;
+let cy = h / 2 - 5;
+let maxRadius = Math.min(w, h) / 2 - 25;
+let numAxes = subjects.length > 0 ? subjects.length : 4; // Fallback to 4 to avoid division-by-zeroy
         
         ctx.strokeStyle = '#e2e8f0';
         if (document.documentElement.classList.contains('dark')) {
@@ -13850,73 +14329,896 @@ async function syncCloudNow(silent = false) {
             updateSyncUI();
         }
     });
- async function getAIExplanationForCurrentQuestion() {
-        let key = getApiKey();
-        if (!key) {
-            showToast("⚠️ Please enter your Gemini API Key in Settings first!");
+
+function updatePracticePage() {
+    let container = document.getElementById('subject-buttons-container');
+    if (!container) return;
+    
+    let subjects = getAllSubjects(); 
+    let all = getAllQuestions();
+    let dueCount = getPromoDueCount();
+    let wrongCount = localData.wrong.length;
+
+    // १. नयाँ स्मार्ट इन्जिन रेन्डर गर्ने
+    let engineContainer = document.getElementById('smart-engine-container');
+    if (engineContainer) {
+        engineContainer.innerHTML = `
+            <div class="space-y-3">
+                <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider mb-2">⚡ Priority Training Modes</h3>
+                
+                <button onclick="startSmartPracticeMode('quick'); playSound('click');" class="w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-emerald-500/10 to-teal-500/10" style="border-color:var(--border); background:var(--card);">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center text-xl shadow-lg">🚀</div>
+                        <div>
+                            <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">Quick MCQ Drill</h4>
+                            <p class="text-[10px] text-slate-400">१० वटा र्‍यान्डम प्रश्नहरूको तुरुन्त अभ्यास</p>
+                        </div>
+                    </div>
+                    <span class="text-[10px] font-bold px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-xl">START</span>
+                </button>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="startSmartPracticeMode('spaced'); playSound('click');" class="p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${dueCount > 0 ? 'pulse-spaced-accent' : ''}" style="border-color:var(--border); background:var(--card);">
+                        <div class="flex justify-between items-center">
+                            <span class="text-2xl">🔁</span>
+                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${dueCount > 0 ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'}">${dueCount} DUE</span>
+                        </div>
+                        <h4 class="font-bold text-xs text-slate-800 dark:text-slate-100">Spaced Review</h4>
+                    </button>
+
+                    <button onclick="startSmartPracticeMode('wrong'); playSound('click');" class="p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${wrongCount > 0 ? 'pulse-wrong-accent' : ''}" style="border-color:var(--border); background:var(--card);">
+                        <div class="flex justify-between items-center">
+                            <span class="text-2xl">🔴</span>
+                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${wrongCount > 0 ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-400'}">${wrongCount} ERRORS</span>
+                        </div>
+                        <h4 class="font-bold text-xs text-slate-800 dark:text-slate-100">Review Mistakes</h4>
+                    </button>
+                </div>
+
+                <button onclick="navigate('page-mock-config'); playSound('click');" class="w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-indigo-500/10 to-blue-500/10" style="border-color:var(--border); background:var(--card);">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-xl shadow-lg">📋</div>
+                        <div>
+                            <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">Mock Exam Simulator</h4>
+                            <p class="text-[10px] text-slate-500">पूर्ण समय र नेगेटिभ मार्किङ सहितको परीक्षा</p>
+                        </div>
+                    </div>
+                    <span class="text-[10px] font-bold px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-xl">OPEN</span>
+                </button>
+            </div>
+        `;
+    }
+
+    container.innerHTML = '';
+    subjects.forEach(sub => {
+        let count = all.filter(q => q.sub === sub).length;
+        container.innerHTML += `
+            <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all active:scale-95 group flex flex-col justify-between" style="border-color:var(--border);">
+                <div>
+                    <p class="font-extrabold text-xs text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">${sub}</p>
+                    <span class="text-[9px] text-slate-400 mt-1 block">${count} Questions</span>
+                </div>
+                <span class="text-[9px] font-black text-emerald-500 mt-4">Configure →</span>
+            </button>
+        `;
+    });
+}
+
+// भाइब्रेसन सेटिङ सेभ र लोड गर्ने
+function toggleHapticSetting() {
+    let isEnabled = document.getElementById('haptic-enabled').checked;
+    localStorage.setItem('krishi_haptic_enabled', isEnabled);
+    if(isEnabled) {
+        document.getElementById('haptic-test-area').classList.remove('hidden');
+        triggerHaptic('correct'); // टोगल गर्दा सानो भाइब्रेसन दिने
+    } else {
+        document.getElementById('haptic-test-area').classList.add('hidden');
+    }
+}
+
+// कम्प्युटर वा मोबाइल कुन डिभाइस हो र भाइब्रेसन चल्छ कि चल्दैन भनेर सुरुमै एक पटक मात्र जाँच गर्ने प्रविधि (Hardware Cache Check)
+const isHapticSupported = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function' && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0));
+
+// मोबाइल भाइब्रेट गराउने मुख्य फङ्सन
+function triggerHaptic(type) {
+    let hapticEnabled = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+    // यदि मोबाइल होइन वा भाइब्रेसन सपोर्ट गर्दैन भने तुरुन्तै फङ्सन बन्द गर्ने (Early Exit)
+    if (!hapticEnabled || !isHapticSupported) return;
+
+    try {
+        if (type === 'correct') {
+            navigator.vibrate(40); // सही हुँदा एउटा छोटो झट्का
+        } else if (type === 'wrong') {
+            navigator.vibrate([100, 50, 100]); // गलत हुँदा दुईवटा झट्का
+        } else if (type === 'click') {
+            navigator.vibrate(15); // बटन थिच्दा एकदमै सानो झट्का
+        }
+    } catch (e) {
+        // केही कारणले ब्राउजरमा एरर आएमा सुरक्षित रूपमा ह्यान्डल गर्ने
+        console.warn('[Haptics] Vibration failed safely:', e);
+    }
+}
+
+// सुरुमा सेटिङ लोड गर्ने (यो फङ्सनलाई DOMContentLoaded भित्र कल गर्न सकिन्छ)
+function initHapticUI() {
+    let saved = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+    let el = document.getElementById('haptic-enabled');
+    if(el) {
+        el.checked = saved;
+        if(saved) document.getElementById('haptic-test-area').classList.remove('hidden');
+    }
+}
+
+// ==================== 2026 ADVANCED ANIMATION OVERRIDES (Z-TOUCH ENGINE) ====================
+(function() {
+    // १. Scroll-Driven Progress Variable Tracker
+    window.addEventListener('scroll', function() {
+        if (!window.__KRISHI_VISIBLE__ && document.hidden) return;
+        requestAnimationFrame(function() {
+            var docElem = document.documentElement;
+            var scrollTop = window.pageYOffset || docElem.scrollTop;
+            var scrollHeight = docElem.scrollHeight - window.innerHeight;
+            var scrollPercent = scrollHeight > 0 ? (scrollTop / scrollHeight) : 0;
+            docElem.style.setProperty('--scroll-percent', scrollPercent);
+        });
+    }, { passive: true });
+
+    // Scroll progress bar निर्माण (यदि पहिले बनेको छैन भने)
+    var scrollBar = document.createElement('div');
+    scrollBar.className = 'futuristic-scroll-bar';
+    document.body.appendChild(scrollBar);
+
+    // २. Spatiotactile Audio & Multiphase Haptic Upgrades (Backward Compatible Overrides)
+    var originalPlaySound = window.playSound;
+    window.playSound = function(type, event) {
+        // पहिलेकै साउन्ड इन्जिन चलाउने
+        if (typeof originalPlaySound === 'function') {
+            originalPlaySound(type);
+        }
+        
+        // अतिरिक्त स्थानिक (Spatial panning) प्रभाव
+        if (!window.AudioContext && !window.webkitAudioContext) return;
+        try {
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') ctx.resume();
+            
+            var osc = ctx.createOscillator();
+            var gain = ctx.createGain();
+            var panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+            
+            osc.connect(gain);
+            if (panner) {
+                gain.connect(panner);
+                panner.connect(ctx.destination);
+                
+                // स्थानिक पानिंग: यदि क्लीक ईभेन्ट छ भने स्क्रिनको स्थान अनुसार दायाँ-बायाँ आवाज पठाउने
+                if (event && event.clientX) {
+                    var panValue = (event.clientX / window.innerWidth) * 2 - 1; // -1 (बायाँ) देखि 1 (दायाँ)
+                    panner.pan.setValueAtTime(panValue, ctx.currentTime);
+                }
+            } else {
+                gain.connect(ctx.destination);
+            }
+            
+            var now = ctx.currentTime;
+            if (type === 'correct') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(523.25, now); // C5
+                osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.15); // G5
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
+            }
+        } catch (e) {
+            console.warn('[Spatial Sound] Skipped gracefully:', e);
+        }
+    };
+
+    var originalTriggerHaptic = window.triggerHaptic;
+    window.triggerHaptic = function(type) {
+        var hapticEnabled = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+        if (!hapticEnabled || typeof navigator.vibrate !== 'function') return;
+        
+        try {
+            if (type === 'correct') {
+                // डबल मल्टि-फेज ट्याप (Tactile Double Click)
+                navigator.vibrate([20, 40, 20]);
+            } else if (type === 'wrong') {
+                // घट्दो क्रमको कम्पन्न (Decaying Alarm pulse)
+                navigator.vibrate([60, 45, 30, 20, 15]);
+            } else if (type === 'click') {
+                // सानो सुक्ष्म टिक (Subtle micro tick)
+                navigator.vibrate(10);
+            } else if (typeof originalTriggerHaptic === 'function') {
+                originalTriggerHaptic(type);
+            }
+        } catch (e) {
+            console.warn('[Haptics] Overridden pulse failed safely:', e);
+        }
+    };
+
+    // ३. Specular 3D Tilt & Light Effect Attacher (Delegated Event Listeners)
+    document.addEventListener('mousemove', function(e) {
+        if (window.innerWidth < 768) return; // ब्याट्री बचाउन मोबाइलमा ३D झुकाव स्वतः बन्द
+        
+        var card = e.target.closest('.hover-card-trigger, #mcq-card-container');
+        if (!card) return;
+        
+        var rect = card.getBoundingClientRect();
+        var x = e.clientX - rect.left;
+        var y = e.clientY - rect.top;
+        
+        var xc = rect.width / 2;
+        var yc = rect.height / 2;
+        
+        var angleX = -(y - yc) / (rect.height / 8); // maximum tilt angle
+        var angleY = (x - xc) / (rect.width / 8);
+        
+        card.style.transform = `perspective(1000px) rotateX(${angleX}deg) rotateY(${angleY}deg) scale3d(1.02, 1.02, 1.02)`;
+        card.style.boxShadow = `0 15px 30px rgba(var(--primary-rgb), 0.1)`;
+    });
+
+    document.addEventListener('mouseout', function(e) {
+        var card = e.target.closest('.hover-card-trigger, #mcq-card-container');
+        if (!card) return;
+        card.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)';
+        card.style.boxShadow = '';
+    });
+
+    // ४. Gyroscope Orientation Tracking (Device Tilting fallback)
+    if (typeof window.DeviceOrientationEvent !== 'undefined') {
+        window.addEventListener('deviceorientation', function(event) {
+            if (!window.__KRISHI_VISIBLE__ && document.hidden) return;
+            var tiltX = Math.min(15, Math.max(-15, event.beta || 0));  // -15 to 15 deg
+            var tiltY = Math.min(15, Math.max(-15, event.gamma || 0)); // -15 to 15 deg
+            
+            requestAnimationFrame(function() {
+                var splashBg = document.querySelector('#splash-screen::before');
+                if (splashBg) {
+                    splashBg.style.transform = `translate3d(${tiltY * 1.5}px, ${tiltX * 1.5}px, 0) scale(1.1) rotate(5deg)`;
+                }
+            });
+        }, { passive: true });
+    }
+
+    // ५. Dynamic Vector Field Magnetic Particles Engine overlay
+    var canvas, ctx, particles = [], animationFrameId = null;
+    
+    function createMagneticFieldLayer() {
+        if (canvas) return;
+        canvas = document.createElement('canvas');
+        canvas.style.position = 'fixed';
+        canvas.style.inset = '0';
+        canvas.style.pointerEvents = 'none';
+        canvas.style.zIndex = '99999';
+        
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        
+        document.body.appendChild(canvas);
+        ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+    }
+
+    function spawnVectorParticles() {
+        createMagneticFieldLayer();
+        particles = [];
+        var count = 30;
+        for (var i = 0; i < count; i++) {
+            particles.push({
+                x: window.innerWidth / 2 + (Math.random() - 0.5) * 100,
+                y: window.innerHeight / 2 + (Math.random() - 0.5) * 100,
+                vx: (Math.random() - 0.5) * 4,
+                vy: (Math.random() - 0.5) * 4,
+                life: 1.0,
+                decay: 0.01 + Math.random() * 0.02,
+                color: 'rgba(' + Math.floor(Math.random()*150) + ',185,129,'
+            });
+        }
+        
+        if (!animationFrameId) {
+            runVectorLoop();
+        }
+    }
+
+    function runVectorLoop() {
+        if (document.hidden || !canvas) {
+            stopVectorLoop();
             return;
         }
-
-        let q = state.questions[state.currentIndex];
-        if (!q) return;
-
-        let btn = document.getElementById('q-ai-explain-btn');
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = "⏳ Thinking...";
+        
+        ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        
+        for (var i = particles.length - 1; i >= 0; i--) {
+            var p = particles[i];
+            
+            // Vector Field Force Calculations (Magnetic rotational drift)
+            var dx = p.x - window.innerWidth / 2;
+            var dy = p.y - window.innerHeight / 2;
+            var dist = Math.sqrt(dx*dx + dy*dy) || 1;
+            
+            // Rotational force
+            p.vx += (-dy / dist) * 0.15;
+            p.vy += (dx / dist) * 0.15;
+            
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= p.decay;
+            
+            if (p.life <= 0) {
+                particles.splice(i, 1);
+            } else {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4 * p.life, 0, Math.PI * 2);
+                ctx.fillStyle = p.color + p.life + ')';
+                ctx.fill();
+            }
         }
+        
+        if (particles.length > 0) {
+            animationFrameId = requestAnimationFrame(runVectorLoop);
+        } else {
+            stopVectorLoop();
+        }
+    }
 
-        let prompt = `As an elite agriculture education expert, explain why option "${q.opts[q.ans]}" is the correct answer for this multiple-choice question, and briefly explain why other options are incorrect. Keep the tone professional, educational, and easy to understand. Respond in a mixture of simple Nepali and English (bilingual) so a Nepalese civil service (Loksewa) aspirant can easily understand. Max limit 150 words.
+    function stopVectorLoop() {
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
+            animationFrameId = null;
+        }
+        if (canvas) {
+            canvas.remove();
+            canvas = null;
+            ctx = null;
+        }
+    }
 
-Question: ${q.q}
-Options:
-A. ${q.opts[0]}
-B. ${q.opts[1]}
-C. ${q.opts[2]}
-D. ${q.opts[3] || ""}
+    // ६. Spring Animation Helper function for Page and Card Transitions
+    window.applySpringTransition = function(element, properties, callback) {
+        if (!element) return;
+        element.classList.add('spring-active');
+        
+        requestAnimationFrame(function() {
+            for (var prop in properties) {
+                element.style[prop] = properties[prop];
+            }
+            setTimeout(function() {
+                element.classList.remove('spring-active');
+                if (typeof callback === 'function') callback();
+            }, 600); // matching cubic-bezier duration
+        });
+    };
 
-Correct Option: ${q.opts[q.ans]}`;
+    // Achievements वा Milestone पुग्दा चुम्बकीय प्रवाही कणहरू स्वतः देखाउने हुक
+    var originalTriggerConfetti = window.triggerConfetti;
+    window.triggerConfetti = function() {
+        if (typeof originalTriggerConfetti === 'function') {
+            originalTriggerConfetti();
+        }
+        spawnVectorParticles(); // अतिरिक्त प्रवाही चुम्बकीय इफेक्ट थपिएको
+    };
 
-        try {
-            const model = getGeminiModel();
-            const temp = getGeminiTemp();
-            let res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: temp }
-                })
-            });
+    console.log('[Ultra-Futuristic Layer] Successfully applied safely with 0% risk!');
+})();
+// ==================== 2026 SIX FUTURISTIC ANIMATIONS ENGINE ====================
+(function() {
+    // कडा सुरक्षा जाँच: एप बाहिर ट्याब बन्द हुँदा एनिमेसन बन्द गर्ने
+    var isAppVisible = true;
+    document.addEventListener('visibilitychange', function() {
+        isAppVisible = !document.hidden;
+    });
 
-            let d = await res.json();
-            if (d.error) {
-                throw new Error(d.error.message || 'Gemini API call failed.');
+    // १. बाली वृद्धि र २. पानीको प्रोग्रेस बार डायनामिक रूपमा थप्ने हुक
+    var origRenderMCQ = window.renderMCQ;
+    window.renderMCQ = function() {
+        if (typeof origRenderMCQ === 'function') {
+            origRenderMCQ();
+        }
+        setupPlantAndIrrigationUI();
+    };
+
+    var origSubmitMCQAnswer = window.submitMCQAnswer;
+    window.submitMCQAnswer = function() {
+        if (typeof origSubmitMCQAnswer === 'function') {
+            origSubmitMCQAnswer();
+        }
+        updatePlantAndIrrigationState();
+    };
+
+    function setupPlantAndIrrigationUI() {
+        var mcqCard = document.getElementById('mcq-card-container');
+        if (!mcqCard) return;
+
+        // बाली वृद्धिको बक्स थप्ने
+        var plantWidget = document.getElementById('plant-growth-indicator');
+        if (!plantWidget) {
+            plantWidget = document.createElement('div');
+            plantWidget.id = 'plant-growth-indicator';
+            plantWidget.className = 'plant-growth-widget';
+            mcqCard.appendChild(plantWidget);
+        }
+        
+        // पानीको प्रोग्रेस बार थप्ने (पुरानो बार लुकाएर नयाँ थप्ने)
+        var oldBar = document.getElementById('progress-bar');
+        if (oldBar) {
+            oldBar.style.opacity = '0'; // पुरानो हरियो रङ मात्र लुकाइदिने
+            var parent = oldBar.parentElement;
+            if (parent && !parent.querySelector('.irrigation-wave-canvas')) {
+                parent.className = 'irrigation-wave-container';
+                var canvas = document.createElement('canvas');
+                canvas.className = 'irrigation-wave-canvas';
+                parent.appendChild(canvas);
+                animateWaterWave(canvas);
+            }
+        }
+        updatePlantAndIrrigationState();
+    }
+
+    // बाली र छालको प्रोग्रेसको ताजा अपडेट
+    function updatePlantAndIrrigationState() {
+       var total = (typeof state !== 'undefined' && state) ? state.totalQuestions : 10;
+var current = (typeof state !== 'undefined' && state) ? state.currentIndex : 0;
+var score = (typeof state !== 'undefined' && state) ? state.score : 0;
+var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
+
+        var progressPercent = total > 0 ? (current / total) : 0;
+        
+        // बाली वृद्धिको चरणहरू (Seed -> Sprout -> Growth -> Flower)
+        var plantWidget = document.getElementById('plant-growth-indicator');
+        if (plantWidget) {
+            var plantStageSVG = '';
+            var scale = 0.5 + (progressPercent * 0.5); // बोट आकारमा बढ्दै जाने
+            
+            if (progressPercent < 0.25) {
+                // स्टेज १: माटो र सानो बिउ
+                plantStageSVG = `<svg class="plant-growth-svg" viewBox="0 0 50 50"><circle cx="25" cy="40" r="4" fill="#a16207"/><line x1="10" y1="42" x2="40" y2="42" stroke="#78350f" stroke-width="3"/></svg>`;
+            } else if (progressPercent < 0.6) {
+                // स्टेज २: सानो टुसा उम्रेको
+                plantStageSVG = `<svg class="plant-growth-svg" viewBox="0 0 50 50"><path d="M25,42 Q25,30 20,24" fill="none" stroke="#22c55e" stroke-width="3"/><path d="M20,24 Q15,20 18,17 Q22,17 21,23" fill="#4ade80"/><line x1="10" y1="42" x2="40" y2="42" stroke="#78350f" stroke-width="3"/></svg>`;
+            } else if (progressPercent < 0.85) {
+                // स्टेज ३: ठूलो बिरुवा पातहरू सहित
+                plantStageSVG = `<svg class="plant-growth-svg" viewBox="0 0 50 50"><path d="M25,42 Q25,20 28,15" fill="none" stroke="#16a34a" stroke-width="4"/><path d="M25,30 Q15,25 20,20 Q28,24 25,30" fill="#22c55e"/><path d="M25,22 Q35,15 32,20 Q26,24 25,22" fill="#22c55e"/><line x1="10" y1="42" x2="40" y2="42" stroke="#78350f" stroke-width="3"/></svg>`;
+            } else {
+                // स्टेज ४: ढकमक्क फुलेको फूल
+                plantStageSVG = `<svg class="plant-growth-svg" viewBox="0 0 50 50"><path d="M25,42 L25,18" fill="none" stroke="#16a34a" stroke-width="4"/><circle cx="25" cy="14" r="7" fill="#fbbf24"/><circle cx="25" cy="7" r="4" fill="#ef4444"/><circle cx="32" cy="14" r="4" fill="#ef4444"/><circle cx="18" cy="14" r="4" fill="#ef4444"/><circle cx="25" cy="21" r="4" fill="#ef4444"/><line x1="10" y1="42" x2="40" y2="42" stroke="#78350f" stroke-width="3"/></svg>`;
+            }
+            
+            plantWidget.innerHTML = plantStageSVG;
+            var svgNode = plantWidget.querySelector('svg');
+            if (svgNode) {
+                svgNode.style.transform = `scale(${scale})`;
             }
 
-            let rawText = d.candidates[0].content.parts[0].text;
-            if (!rawText) throw new Error("Empty response from AI.");
-
-            let explContainer = document.getElementById('q-explanation-container');
-            let explBox = document.getElementById('q-explanation');
-            if (explContainer && explBox) {
-                explContainer.classList.remove('hidden');
-                explBox.innerHTML = `<div class="mb-2 font-black text-purple-650 dark:text-purple-400">✨ AI Explanation Assistant:</div><div class="leading-relaxed whitespace-pre-wrap">${rawText.trim()}</div>` + 
-                (q.expl ? `<hr class="my-2 border-dashed border-slate-200 dark:border-slate-700"><div class="font-bold text-slate-400">📝 Standard Explanation:</div><div class="mt-1">${q.expl}</div>` : '');
-            }
-            showToast("✨ AI Explanation Loaded!");
-        } catch (err) {
-            console.error("[PWA AI] Explanation generation failed:", err);
-            showToast(`⚠️ AI Error: ${err.message}`, 4000);
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = "✨ AI Explain";
+            // गल्ती उत्तर हुँदा ओइलाएको देखाउने (Withered Class)
+            if (answered && score < current) {
+                plantWidget.classList.add('withered-plant');
+            } else {
+                plantWidget.classList.remove('withered-plant');
             }
         }
     }
 
-    </script>
+    // प्रगति बारमा सिंचाइको छाल देखाउने क्यानभास एनिमेसन
+    var waveOffsets = [0, Math.PI];
+    function animateWaterWave(canvas) {
+    if (canvas.dataset.waveRunning === 'true') return;
+    canvas.dataset.waveRunning = 'true';
+    var ctx = canvas.getContext('2d');
+    function draw() {
+        if (!isAppVisible || !canvas.parentNode) {
+            canvas.dataset.waveRunning = 'false';
+            return;
+        }
+        
+        var dpr = window.devicePixelRatio || 1;
+        var w = canvas.parentElement ? canvas.parentElement.clientWidth : 0;
+        var h = canvas.parentElement ? canvas.parentElement.clientHeight : 0;
+        
+        if (!w || !h) {
+            requestAnimationFrame(draw);
+            return;
+        }
+        
+        if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        
+        ctx.clearRect(0, 0, w, h);
+        
+        var total = (typeof state !== 'undefined' && state) ? state.totalQuestions : 10;
+        var current = (typeof state !== 'undefined' && state) ? state.currentIndex : 0;
+        var progress = total > 0 ? (current / total) : 0;
+        
+        var fillWidth = w * progress;
+        if (fillWidth <= 0) {
+            requestAnimationFrame(draw);
+            return;
+        }
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, fillWidth, h);
+        ctx.clip();
+        
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.85)';
+        ctx.beginPath();
+        for (var x = 0; x <= fillWidth; x++) {
+            var y = h/2 + Math.sin(x * 0.05 + waveOffsets[0]) * 2;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.lineTo(fillWidth, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.45)';
+        ctx.beginPath();
+        for (var x = 0; x <= fillWidth; x++) {
+            var y = h/2 + Math.sin(x * 0.04 + waveOffsets[1]) * 2;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.lineTo(fillWidth, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.restore();
+        
+        waveOffsets[0] += 0.08;
+        waveOffsets[1] += 0.05;
+        
+        requestAnimationFrame(draw);
+    }
+    draw();
+}
+
+    // ३. मस्तिष्क-सञ्जाल शैलीको ज्ञान नक्सा (Neural-Network Knowledge Map)
+    var origNavigate = window.navigate;
+    window.navigate = function(pageId) {
+        if (typeof origNavigate === 'function') {
+            origNavigate(pageId);
+        }
+        if (pageId === 'page-analytics') {
+            setupNeuralMindMap();
+        } else if (pageId === 'page-study-planner') {
+            setup3DSeasonalWheel();
+        }
+    };
+
+    function setupNeuralMindMap() {
+        var analyticsPage = document.getElementById('page-analytics');
+        if (!analyticsPage) return;
+
+        var mapCard = document.getElementById('neural-map-widget-container');
+        if (!mapCard) {
+            mapCard = document.createElement('div');
+            mapCard.id = 'neural-map-widget-container';
+            mapCard.className = 'neural-mindmap-card';
+            
+            // एनालिटिक्सको विषय सूची भन्दा ठीक माथि थप्ने
+            var targetList = document.getElementById('analytics-subjects-v2');
+            if (targetList) {
+                targetList.parentNode.insertBefore(mapCard, targetList);
+            } else {
+                analyticsPage.appendChild(mapCard);
+            }
+        }
+        
+        mapCard.innerHTML = `
+            <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block mb-1">🧠 मस्तिष्क-सञ्जाल ज्ञान नक्सा (Subjects Competence Network)</span>
+            <canvas class="neural-canvas"></canvas>
+        `;
+        
+        drawNeuralMap(mapCard.querySelector('.neural-canvas'));
+    }
+
+    function drawNeuralMap(canvas) {
+        var ctx = canvas.getContext('2d');
+        var nodes = [];
+        var subjects = typeof window.getAllSubjects === 'function' ? window.getAllSubjects().slice(0, 4) : ['Agronomy', 'Soil', 'Horti', 'Pathology'];
+        
+        function init() {
+            var w = canvas.parentElement.clientWidth;
+            var h = 180;
+            canvas.width = w * window.devicePixelRatio;
+            canvas.height = h * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            
+            nodes = [];
+            // मुख्य केन्द्र नोड (Core)
+            nodes.push({ x: w/2, y: h/2, r: 16, label: "ज्ञान केन्द्र", color: '#4f46e5', pulse: 0 });
+            
+            // शाखाहरू (Subject Nodes)
+            subjects.forEach(function(sub, idx) {
+                var angle = (idx * 2 * Math.PI) / subjects.length;
+                var dist = 55;
+                
+                // वास्तविक नतिजाको प्रतिशत निकाल्ने
+                var stats = window.localData.stats.subjectStats[sub] || {solved: 0, correct: 0};
+                var acc = stats.solved > 0 ? Math.round((stats.correct / stats.solved) * 100) : 0;
+                
+                // एनिमेसन डेमों को अवस्थामा राम्रो डेटा राख्ने
+                if (window.analyticsUseDemoMode) {
+                    acc = [92, 85, 48, 42][idx] || 70;
+                }
+
+                var color = acc >= 75 ? '#10b981' : (acc >= 50 ? '#f59e0b' : '#ef4444');
+                var radius = 10 + (acc * 0.08); // राम्रो नतिजा हुँदा आकार ठूलो हुने
+
+                nodes.push({
+                    x: w/2 + Math.cos(angle) * dist,
+                    y: h/2 + Math.sin(angle) * dist,
+                    r: radius,
+                    label: sub.split(' ')[0],
+                    color: color,
+                    shake: acc < 50 // कमजोर विषय हल्का हल्लिने
+                });
+            });
+        }
+
+        function render() {
+            if (!isAppVisible || !canvas.parentNode) return;
+            var w = canvas.width / window.devicePixelRatio;
+            var h = canvas.height / window.devicePixelRatio;
+            ctx.clearRect(0, 0, w, h);
+
+            // रेखाहरू कोर्ने (Connections)
+            var core = nodes[0];
+            if (core) {
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = document.documentElement.classList.contains('dark') ? '#334155' : '#e2e8f0';
+                for (var i = 1; i < nodes.length; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(core.x, core.y);
+                    ctx.lineTo(nodes[i].x, nodes[i].y);
+                    ctx.stroke();
+                }
+            }
+
+            // नोडहरू कोर्ने (Nodes)
+            nodes.forEach(function(node, idx) {
+                ctx.save();
+                if (node.shake) {
+                    // कमजोर विषयमा हल्का कम्पन
+                    var ox = Math.sin(Date.now() * 0.04 + idx) * 1.5;
+                    ctx.translate(ox, 0);
+                }
+                
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+                ctx.fillStyle = node.color;
+                ctx.fill();
+                
+                // पल्स इफेक्ट
+                if (idx === 0) {
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, node.r + Math.sin(Date.now() * 0.005) * 4, 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(79, 70, 229, 0.25)';
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = document.documentElement.classList.contains('dark') ? '#f1f5f9' : '#1e293b';
+                ctx.font = 'bold 8px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(node.label, node.x, node.y + node.r + 10);
+                ctx.restore();
+            });
+
+            requestAnimationFrame(render);
+        }
+
+        init();
+        render();
+        window.addEventListener('resize', init);
+    }
+
+    // ४. मौसम अनुकूल वातावरणीय पृष्ठभूमि क्यानभास
+    var bgCanvas = document.createElement('canvas');
+    bgCanvas.id = 'weather-ambient-canvas';
+    document.body.appendChild(bgCanvas);
+    var bgCtx = bgCanvas.getContext('2d');
+    var bgParticles = [];
+
+    function initBgCanvas() {
+        bgCanvas.width = window.innerWidth;
+        bgCanvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', initBgCanvas);
+    initBgCanvas();
+
+    function drawAmbientBackground() {
+        if (!isAppVisible) {
+            requestAnimationFrame(drawAmbientBackground);
+            return;
+        }
+        bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+        
+        var streak = typeof window.getStreakCount === 'function' ? window.getStreakCount() : 0;
+        
+        // यदि राम्रो प्रदर्शन भइरहेको छ भने सुनौलो तोरीको पातहरू उडेको देखाउने, नत्र शीत झरेको देखाउने
+        if (Math.random() < 0.015 && bgParticles.length < 25) {
+            bgParticles.push({
+                x: Math.random() * bgCanvas.width,
+                y: -10,
+                vy: 0.5 + Math.random() * 1.2,
+                vx: (Math.random() - 0.5) * 1,
+                r: 2 + Math.random() * 4,
+                color: streak >= 3 ? 'rgba(234, 179, 8, 0.15)' : 'rgba(59, 130, 246, 0.12)'
+            });
+        }
+
+        for (var i = bgParticles.length - 1; i >= 0; i--) {
+            var p = bgParticles[i];
+            p.y += p.vy;
+            p.x += p.vx;
+            
+            bgCtx.beginPath();
+            bgCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            bgCtx.fillStyle = p.color;
+            bgCtx.fill();
+
+            if (p.y > bgCanvas.height) {
+                bgParticles.splice(i, 1);
+            }
+        }
+        requestAnimationFrame(drawAmbientBackground);
+    }
+    drawAmbientBackground();
+
+    // ५. कन्सेप्ट स्क्यान लेजर बीम एनिमेसन
+    function triggerLaserScanEffect(parentContainer) {
+        if (!parentContainer) return;
+        var overlay = parentContainer.querySelector('.specular-scan-beam-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'specular-scan-beam-overlay';
+            overlay.innerHTML = '<div class="specular-laser-line"></div>';
+            parentContainer.style.position = 'relative';
+            parentContainer.appendChild(overlay);
+        }
+        
+        overlay.style.display = 'block';
+        setTimeout(function() {
+            overlay.style.display = 'none';
+        }, 2500); // २.५ सेकेन्डसम्म चल्ने
+    }
+
+    // पुरानो स्क्यान प्रक्रिया सुरु हुँदा स्वतः लेजर बीम अन गर्ने हुक
+    var origProcessFile = window.processFile;
+    window.processFile = function() {
+        var box = document.querySelector('#page-file-scan .border');
+        if (box) triggerLaserScanEffect(box);
+        if (typeof origProcessFile === 'function') {
+            origProcessFile();
+        }
+    };
+
+    var origProcessScan = window.processScan;
+    window.processScan = function() {
+        var box = document.getElementById('page-smart-scan');
+        if (box) triggerLaserScanEffect(box);
+        if (typeof origProcessScan === 'function') {
+            origProcessScan();
+        }
+    };
+
+    // ६. ३डी ऋतु चक्र र बाली चक्र कनवर्टर (3D Interactive Crop Wheel)
+    var activeSeasonIdx = 0;
+    var seasonsData = [
+        { name: "वर्षा (Kharif)", angle: 0, crops: "धान, मकै, कोदो, भटमास", tip: "यो मौसममा सिंचाइ र ढुसीजन्य रोगको बढी सम्भावना हुन्छ। सिंचाइ र वनस्पति रोगको पाठ्यक्रम दोहोर्‍याउनुहोस्।" },
+        { name: "शरद (Autumn)", angle: 120, crops: "तोरी, आलु, सागपात, तोरी", tip: "यो माटोमा मल र नाइट्रोजनको मात्रा मिलाउन आवश्यक समय हो। माटो विज्ञान र मलको राम्रो अध्ययन गर्नुहोस्।" },
+        { name: "वसन्त (Winter)", angle: 240, crops: "गहुँ, प्याज, गोलभेडा, चना", tip: "कीट नियन्त्रण (IPM) र हरितगृह व्यवस्थापनको परीक्षा प्रश्नहरूमा बढी ध्यान दिनुहोस्।" }
+    ];
+
+    function setup3DSeasonalWheel() {
+        var plannerPage = document.getElementById('page-study-planner');
+        if (!plannerPage) return;
+
+        var wheelCard = document.getElementById('3d-crop-wheel-widget');
+        if (!wheelCard) {
+            wheelCard = document.createElement('div');
+            wheelCard.id = '3d-crop-wheel-widget';
+            wheelCard.className = 'seasonal-crop-wheel-card';
+            
+            // स्टडी प्लानरको अन्त्यमा थप्ने
+            plannerPage.appendChild(wheelCard);
+        }
+
+        renderCropWheel();
+    }
+
+    function renderCropWheel() {
+        var widget = document.getElementById('3d-crop-wheel-widget');
+        if (!widget) return;
+
+        var current = seasonsData[activeSeasonIdx];
+        widget.innerHTML = `
+            <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
+            <div class="crop-wheel-3d-wrapper">
+                <div class="crop-wheel-circle" style="transform: rotateZ(${current.angle}deg);">
+                    <div style="transform: rotateZ(${-current.angle}deg);">${current.name}</div>
+                </div>
+            </div>
+            <div class="text-center space-y-1">
+                <p class="text-xs font-black text-slate-800 dark:text-slate-100">🌾 सिफारिस बाली: <span class="text-emerald-500">${current.crops}</span></p>
+                <p class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
+            </div>
+            <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
+                अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
+            </button>
+        `;
+
+        widget.querySelector('#btn-rotate-wheel').onclick = function() {
+            window.triggerHaptic('click');
+            activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
+            renderCropWheel();
+        };
+    }
+
+    console.log('[Spec 2026 Enhanced Animations] Activated smoothly!');
+})();
+
+// एकीकृत सुरक्षित अभ्यास प्रोग्रेस सेभर (Unified Secure Practice Progress Saver)
+function savePracticeProgress() {
+    try {
+        if (state && state.questions && state.questions.length > 0 && !state.answered) {
+            const progressData = {
+                questions: state.questions,
+                currentIndex: state.currentIndex,
+                score: state.score,
+                sessionResults: state.sessionResults,
+                isMock: state.isMock,
+                timerSec: state.timerSec
+            };
+            localStorage.setItem('krishi_saved_practice', JSON.stringify(progressData));
+        }
+    } catch (error) {
+        console.warn("[State Safety] savePracticeProgress failed safely:", error);
+    }
+}
+
+// २. सुरक्षित राखिएको अधुरो अभ्यासलाई हटाउने फङ्सन
+function clearPracticeProgress() {
+    localStorage.removeItem('krishi_saved_practice');
+}
+// ==================== GLOBAL TOUCH/CLICK RIPPLE INJECTOR ====================
+// यसले उत्तर छनौट गर्दा औंलाले छोएको ठाउँबाट पानीको लहर फैलाउँछ
+document.addEventListener('click', function(e) {
+    let btn = e.target.closest('.option-btn');
+    if (!btn) return;
+    
+    // गोलो लहरको तत्व सिर्जना गर्ने
+    let ripple = document.createElement('span');
+    ripple.className = 'click-ripple';
+    
+    let rect = btn.getBoundingClientRect();
+    let x = e.clientX - rect.left;
+    let y = e.clientY - rect.top;
+    
+    // तरंगको आकार बटनको साइज अनुसार मिलाउने
+    let size = Math.max(rect.width, rect.height);
+    ripple.style.width = size + 'px';
+    ripple.style.height = size + 'px';
+    
+    ripple.style.left = (x - size / 2) + 'px';
+    ripple.style.top = (y - size / 2) + 'px';
+    
+    btn.appendChild(ripple);
+    
+    // काम सकिएपछि तत्व हटाउने
+    setTimeout(() => {
+        ripple.remove();
+    }, 500);
+});
+ </script>
 
     <!--
     Optimization Summary (May 2026)

@@ -222,11 +222,17 @@ self.addEventListener('sync', event => {
 // ==================== PERIODIC BACKGROUND SYNCHRONIZATION ====================
 function updateAppContentInBackground() {
   console.log('[Service Worker] Executing W3C Periodic Background Sync content pre-caching...');
-  const ASSETS_TO_UPDATE = [
-    './index.html',
-    './manifest.json',
-    './icon.svg'
-  ];
+  const ASSETS_TO_UPDATE =[
+        '/',
+        '/index.html',
+        '/manifest.json',
+        '/icon.svg',
+        'https://cdn.tailwindcss.com',
+        'https://unpkg.com/lucide@latest',
+        'https://cdn.quilljs.com/1.3.7/quill.min.js',
+        'https://cdn.quilljs.com/1.3.7/quill.snow.css'
+    ];
+
   return caches.open(CACHE_NAME).then(cache => {
     return Promise.all(
       ASSETS_TO_UPDATE.map(url => {

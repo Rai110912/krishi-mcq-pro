@@ -5628,7 +5628,20 @@ function openEditImportModal(idx) {
                 this.y += this.vy;
                 if (this.gravity) {
                     this.vy += this.gravity;
+                    // Add wind drift waves dynamically using sine waves
+                    this.x += Math.sin(this.y * 0.04 + this.rotation) * 0.5;
                 }
+                
+                // Bouncing boundaries off the viewport sides
+                const w = window.innerWidth;
+                if (this.x < 0) {
+                    this.x = 0;
+                    this.vx *= -0.6;
+                } else if (this.x > w) {
+                    this.x = w;
+                    this.vx *= -0.6;
+                }
+
                 this.alpha -= this.decay;
                 this.rotation += this.rotationSpeed;
                 return this.alpha > 0;
@@ -10554,11 +10567,13 @@ function triggerHaptic(type) {
 
     try {
         if (type === 'correct') {
-            navigator.vibrate(40); // सही हुँदा एउटा छोटो झट्का
+            navigator.vibrate([50, 40, 50]); // सही हुँदा सन्तोषजनक डबल-हार्टबिट कम्पन
         } else if (type === 'wrong') {
-            navigator.vibrate([100, 50, 100]); // गलत हुँदा दुईवटा झट्का
+            navigator.vibrate([120, 80, 120]); // गलत हुँदा सचेत गराउने डबल कम्पन
         } else if (type === 'click') {
-            navigator.vibrate(15); // बटन थिच्दा एकदमै सानो झट्का
+            navigator.vibrate(10); // बटन थिच्दा एकदमै सानो झट्का
+        } else if (type === 'celebrate') {
+            navigator.vibrate([40, 40, 40, 40, 80, 50, 150]); // लक्ष्य पूरा हुँदा प्रिमियम विजयी कम्पन
         }
     } catch (e) {
         // केही कारणले ब्राउजरमा एरर आएमा सुरक्षित रूपमा ह्यान्डल गर्ने
@@ -11102,7 +11117,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         widget.innerHTML = `
             <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
             <div class="crop-wheel-3d-wrapper">
-                <div class="crop-wheel-circle" style="transform: rotateZ(${current.angle}deg);">
+                <div class="crop-wheel-circle" style="--crop-angle: ${current.angle}deg;">
                     <div style="transform: rotateZ(${-current.angle}deg);">${current.name}</div>
                 </div>
             </div>

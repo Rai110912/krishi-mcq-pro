@@ -938,13 +938,13 @@ body {
     width: 100%;
     height: 4px;
     background: linear-gradient(90deg, transparent, var(--primary) 50%, transparent);
-    box-shadow: 0 0 15px var(--primary), 0 0 5px var(--primary);
+    box-shadow: 0 0 25px var(--primary), 0 0 10px var(--primary), 0 0 35px rgba(16, 185, 129, 0.6);
     animation: sweepScanningBeam 2.5s ease-in-out infinite;
 }
 @keyframes sweepScanningBeam {
-    0% { top: 0%; }
-    50% { top: 100%; }
-    100% { top: 0%; }
+    0% { top: 0%; filter: brightness(1.2); }
+    50% { top: 100%; filter: brightness(0.8); }
+    100% { top: 0%; filter: brightness(1.2); }
 }
 
 /* ६. ३डी ऋतु चक्र र बाली चक्र कनवर्टर */
@@ -959,12 +959,13 @@ body {
     gap: 12px;
 }
 .crop-wheel-3d-wrapper {
-    perspective: 800px;
+    perspective: 1000px;
     width: 120px;
     height: 120px;
     display: flex;
     align-items: center;
     justify-content: center;
+    transform-style: preserve-3d;
 }
 .crop-wheel-circle {
     width: 110px;
@@ -979,12 +980,14 @@ body {
     background: var(--primary-light);
     color: var(--primary-dark);
     transform-style: preserve-3d;
-    transition: transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    box-shadow: var(--shadow);
+    transform: rotateX(24deg) rotateY(12deg) rotateZ(var(--crop-angle, 0deg));
+    transition: transform 0.85s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15), inset 0 2px 5px rgba(255, 255, 255, 0.2);
 }
 .dark .crop-wheel-circle {
     background: var(--primary-dark);
     color: var(--primary-light);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35), inset 0 1px 2px rgba(255, 255, 255, 0.05);
 }
 
 /* ==================== NESTED CUSTOM STYLES ==================== */

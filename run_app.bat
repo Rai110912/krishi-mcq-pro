@@ -1,6 +1,6 @@
 @echo off
 title 🌾 Krishi MCQ Pro Server Dashboard 🌾
-cd /d "d:\Downloads\MCQ pro"
+cd /d "%~dp0"
 cls
 
 echo ==============================================================

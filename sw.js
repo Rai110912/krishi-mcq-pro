@@ -1,14 +1,20 @@
-const CACHE_NAME = 'agriculture-exam-v4';
+const CACHE_NAME = 'agriculture-exam-v6';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Pre-caching minimal offline shell assets and Firebase SDKs...');
+        console.log('[Service Worker] Pre-caching minimal offline shell assets, Firebase SDKs, and modular code...');
         return Promise.all([
           fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
           fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
+          fetch('./index.css', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css', r); }),
+          fetch('./questions.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./questions.json', r); }),
+          fetch('./js/canvas_charts.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js', r); }),
+          fetch('./js/spaced_rep.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js', r); }),
+          fetch('./js/pwa_helpers.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js', r); }),
+          fetch('./js/app.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js', r); }),
           fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
           fetch('./js/firebase-database-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-database-compat.js', r); }),
           fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); })
@@ -182,6 +188,33 @@ function clearQueuedSyncData() {
   });
 }
 
+function toFirestoreValue(val) {
+  if (typeof val === 'number') {
+    return { "doubleValue": val };
+  } else if (typeof val === 'boolean') {
+    return { "booleanValue": val };
+  } else if (typeof val === 'string') {
+    return { "stringValue": val };
+  } else if (Array.isArray(val)) {
+    return {
+      "arrayValue": {
+        "values": val.map(item => toFirestoreValue(item))
+      }
+    };
+  } else if (val && typeof val === 'object') {
+    const fields = {};
+    Object.entries(val).forEach(([k, v]) => {
+      fields[k] = toFirestoreValue(v);
+    });
+    return {
+      "mapValue": {
+        "fields": fields
+      }
+    };
+  }
+  return { "nullValue": null };
+}
+
 self.addEventListener('sync', event => {
   if (event.tag === 'krishi-db-sync') {
     event.waitUntil(
@@ -192,23 +225,38 @@ self.addEventListener('sync', event => {
 
         const syncKey = syncData.syncKey;
         const payload = syncData.payload;
-        const url = `https://krishi-mcq-pro-default-rtdb.firebaseio.com/sync_keys/${syncKey}.json`;
+        const projectId = syncData.projectId || 'krishi-mcq-pro';
+        
+        // Firestore REST API PATCH URL to dynamically update documents
+        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/sync_keys/${syncKey}`;
 
-        console.log('[Service Worker] Executing W3C Background Sync for key:', syncKey);
+        console.log('[Service Worker] Executing W3C Background Sync (Firestore REST PATCH) for key:', syncKey);
+
+        const firestoreFields = {};
+        Object.entries(payload).forEach(([k, v]) => {
+          firestoreFields[k] = toFirestoreValue(v);
+        });
+
+        // Set the active updated time dynamically
+        firestoreFields['updatedAt'] = toFirestoreValue(Date.now());
+
+        const firestoreDoc = {
+          "fields": firestoreFields
+        };
 
         return fetch(url, {
-          method: 'PUT',
+          method: 'PATCH',
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(firestoreDoc)
         }).then(res => {
           if (res.status === 200 || res.ok) {
             console.log('[Service Worker] Background Sync completed successfully!');
             return clearQueuedSyncData();
           } else {
-            console.warn('[Service Worker] Firebase REST API responded with error:', res.status);
-            throw new Error('Firebase REST error: ' + res.status);
+            console.warn('[Service Worker] Firestore REST API responded with error:', res.status);
+            throw new Error('Firestore REST error: ' + res.status);
           }
         }).catch(err => {
           console.error('[Service Worker] Background Sync failed during network fetch:', err);
@@ -223,10 +271,10 @@ self.addEventListener('sync', event => {
 function updateAppContentInBackground() {
   console.log('[Service Worker] Executing W3C Periodic Background Sync content pre-caching...');
   const ASSETS_TO_UPDATE =[
-        '/',
-        '/index.html',
-        '/manifest.json',
-        '/icon.svg',
+        './',
+        './index.html',
+        './manifest.json',
+        './icon.svg',
         'https://cdn.tailwindcss.com',
         'https://unpkg.com/lucide@latest',
         'https://cdn.quilljs.com/1.3.7/quill.min.js',

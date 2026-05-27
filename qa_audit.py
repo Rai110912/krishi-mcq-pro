@@ -10,17 +10,32 @@ if sys.stdout.encoding != 'utf-8':
         pass
 
 def run_qa_audit():
-    with open(r'd:\Downloads\MCQ pro\index.html', 'r', encoding='utf-8') as f:
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(script_dir, 'index.html')
+    with open(html_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
     print("==================================================")
     print("         Senior Frontend QA Audit Report          ")
     print("==================================================")
 
-    # 1. Extract all defined JS functions
-    # Catch both standard function declarations and arrow functions
+    # 1. Extract all defined JS functions (HTML inline + external split files)
     script_blocks = re.findall(r'<script.*?>((?:(?!</script>).)*)</script>', content, re.DOTALL)
-    js_content = "\n".join(script_blocks)
+    
+    # Read modular split files from js/ directory, ignoring compatibility libraries
+    external_js = []
+    js_folder = os.path.join(script_dir, 'js')
+    if os.path.exists(js_folder):
+        for file in os.listdir(js_folder):
+            if file.endswith('.js') and not file.startswith('firebase-'):
+                try:
+                    with open(os.path.join(js_folder, file), 'r', encoding='utf-8') as js_f:
+                        external_js.append(js_f.read())
+                except Exception as e:
+                    print(f"Warning: Failed to read external js file {file}: {e}")
+                    
+    js_content = "\n".join(script_blocks + external_js)
     
     defined_funcs = set()
     # Standard: function name(

@@ -916,7 +916,7 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: -5;
+    z-index: 0;
     pointer-events: none;
     opacity: 0.6;
 }
@@ -988,6 +988,23 @@ body {
     background: var(--primary-dark);
     color: var(--primary-light);
     box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35), inset 0 1px 2px rgba(255, 255, 255, 0.05);
+}
+
+/* ८. एड्भान्स एनिमेसन कन्ट्रोलर रेन्ज इनपुट स्लाइडरहरू */
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #10b981;
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+    transition: transform 0.15s ease, background-color 0.15s;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.25);
+    background: #059669;
 }
 
 /* ==================== NESTED CUSTOM STYLES ==================== */
@@ -1084,3 +1101,20 @@ body {
                 .animate-slide-up { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
                 .animate-fire { animation: glowFire 2s infinite ease-in-out; }
                 .animate-pulse-slow { animation: pulseSlow 3s infinite ease-in-out; }
+
+/* ==================== PREMIUM 3D ANIMATION CANVAS STYLES ==================== */
+#daily-target-3d-canvas {
+    width: 48px;
+    height: 48px;
+    display: block;
+}
+.neural-canvas {
+    width: 100%;
+    height: 180px;
+    display: block;
+}
+#carousel-3d-canvas {
+    width: 100%;
+    height: 100px;
+    display: block;
+}

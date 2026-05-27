@@ -112,6 +112,17 @@
                 <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] rounded-xl shadow-3xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
             </div>
 
+            <!-- 3D Progress Globe Map Card -->
+            <div id="home-nepal-globe-card" class="p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl space-y-3 hidden relative overflow-hidden">
+                <div class="flex justify-between items-center">
+                    <span class="text-[9px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🌏 3D Nepal Province Progress Globe</span>
+                </div>
+                <div class="relative w-full h-40 flex items-center justify-center">
+                    <canvas id="nepal-globe-canvas" class="w-full h-full max-w-[280px] max-h-[150px] cursor-pointer"></canvas>
+                    <div id="globe-province-tooltip" class="absolute bg-slate-950/80 backdrop-blur-xs text-white text-[9px] px-2 py-1 rounded-lg border border-slate-700 pointer-events-none opacity-0 transition-opacity duration-200 z-50"></div>
+                </div>
+            </div>
+
             <!-- Dynamic Widgets Destination -->
             <div id="home-widgets-container" class="space-y-4">
                 <!-- Dynamically populated widgets based on user arrangement will be injected here. -->
@@ -1499,8 +1510,20 @@
         </div>
 
         <!-- SETTINGS PAGE -->
-        <div id="page-settings" class="page p-4 space-y-4">
-            <h2 class="text-lg font-bold">Settings</h2>
+        <div id="page-settings" class="page p-4 space-y-3">
+            <h2 class="text-lg font-bold select-none">Settings</h2>
+            
+            <!-- Segmented Tab Selector -->
+            <div class="flex bg-slate-100 dark:bg-slate-900 rounded-xl p-1 mb-1 shadow-inner border border-slate-150 dark:border-slate-850">
+                <button id="settings-tab-btn-general" onclick="switchSettingsTab('general')" class="flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer">
+                    ⚙️ Core Settings
+                </button>
+                <button id="settings-tab-btn-visuals" onclick="switchSettingsTab('visuals')" class="flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer">
+                    ✨ Visuals & Anims
+                </button>
+            </div>
+            
+            <div id="settings-group-general" class="space-y-4">
             <!-- Advanced AI Gemini Integration Card -->
             <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                 <div class="flex items-center justify-between">
@@ -1690,23 +1713,109 @@
                     </label>
                 </div>
             </div>
-<!-- Haptic Feedback Settings -->
-<div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
-    <div class="flex items-center justify-between">
-        <div>
-            <h3 class="text-xs font-black uppercase text-slate-400">📳 Tactile Haptics</h3>
-            <p class="text-[9px] text-slate-500">उत्तर दिँदा मोबाइलमा हल्का भाइब्रेसन महसुस गर्नुहोस्।</p>
-        </div>
-        <label class="relative inline-flex items-center cursor-pointer select-none">
-            <input id="haptic-enabled" type="checkbox" checked onchange="toggleHapticSetting()" class="sr-only peer">
-            <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
-        </label>
-    </div>
-    <div id="haptic-test-area" class="flex justify-between items-center hidden">
-        <span class="text-[9px] font-bold text-slate-400">Intensity: Standard</span>
-        <button onclick="triggerHaptic('correct')" class="text-[9px] font-black text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-3 py-1 rounded-lg">Test Haptic ⚡</button>
-    </div>
-</div>
+            </div><!-- Close settings-group-general -->
+            
+            <div id="settings-group-visuals" class="space-y-4 hidden">
+                <!-- Elite Visualizations Settings -->
+                <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-xs font-black uppercase text-slate-400">✨ Elite Visualizations</h3>
+                            <p class="text-[9px] text-slate-500">Enable 3D maps, neural mindmaps, interactive crop widgets, and weather canvases.</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer select-none">
+                            <input id="elite-animations-enabled" type="checkbox" onchange="toggleEliteAnimationsSetting()" class="sr-only peer">
+                            <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                    
+                    <!-- Dedicated Animations Tuning Dashboard (Permanently open inside dedicated tab) -->
+                    <div class="border-t border-slate-150 dark:border-slate-700/60 pt-3.5 mt-2 space-y-3.5">
+                        <span class="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider block text-emerald-600 dark:text-emerald-400">🎨 Advanced Animations Tuning Dashboard</span>
+                        
+                        <!-- Globe Speed -->
+                        <div class="space-y-1">
+                            <div class="flex justify-between items-center text-[10px] font-bold text-slate-400">
+                                <span>🌏 NEPAL GLOBE ROTATION SPEED</span>
+                                <span id="ind-globe-speed" class="text-emerald-500 font-mono">1.0x</span>
+                            </div>
+                            <input id="slider-globe-speed" type="range" min="0" max="4" step="0.2" value="1" oninput="handleAnimConfigChange(this, 'globeRotationSpeed')" class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        </div>
+
+                        <!-- Weather Density -->
+                        <div class="space-y-1">
+                            <div class="flex justify-between items-center text-[10px] font-bold text-slate-400">
+                                <span>🌦️ WEATHER PARTICLE DENSITY</span>
+                                <span id="ind-weather-density" class="text-emerald-500 font-mono">25 particles</span>
+                            </div>
+                            <input id="slider-weather-density" type="range" min="5" max="50" step="5" value="25" oninput="handleAnimConfigChange(this, 'weatherParticleDensity')" class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        </div>
+
+                        <!-- Laser Frequency -->
+                        <div class="space-y-1">
+                            <div class="flex justify-between items-center text-[10px] font-bold text-slate-400">
+                                <span>🧠 NEURAL CONNECTIONS SPEED</span>
+                                <span id="ind-laser-freq" class="text-emerald-500 font-mono">1.0x</span>
+                            </div>
+                            <input id="slider-laser-freq" type="range" min="0.2" max="2.5" step="0.1" value="1" oninput="handleAnimConfigChange(this, 'laserSignalFrequency')" class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        </div>
+
+                        <!-- Smart Auto-Throttle -->
+                        <div class="flex justify-between items-center py-0.5">
+                            <div>
+                                <span class="text-[10px] font-bold text-slate-400 uppercase block">📉 SMART FPS BUDGET ENGINE</span>
+                                <span class="text-[8px] text-slate-500 block leading-tight">Auto-throttle to save battery if FPS drops below 55 FPS.</span>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer select-none">
+                                <input id="toggle-fps-throttle" type="checkbox" onchange="handleAnimConfigChange(this, 'fpsAutoThrottle')" class="sr-only peer">
+                                <div class="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-600"></div>
+                            </label>
+                        </div>
+
+                        <!-- FPS Low-Throttled Warning Alert -->
+                        <div id="fps-throttle-alert" class="hidden flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 text-[9px] text-amber-600 dark:text-amber-400 font-medium">
+                            <span>⚠️ Performance Budget triggered: animations throttled to save power!</span>
+                        </div>
+
+                        <!-- Reset Button -->
+                        <button onclick="resetEliteAnimsConfig(); playSound('click');" class="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/60 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-200 py-1.5 rounded-lg font-black text-[9px] cursor-pointer transition uppercase">
+                            Reset Custom Configurations 🔄
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Haptic Feedback Settings -->
+                <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-xs font-black uppercase text-slate-400">📳 Tactile Haptics</h3>
+                            <p class="text-[9px] text-slate-500">उत्तर दिँदा मोबाइलमा हल्का भाइब्रेसन महसुस गर्नुहोस्।</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer select-none">
+                            <input id="haptic-enabled" type="checkbox" checked onchange="toggleHapticSetting()" class="sr-only peer">
+                            <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                    
+                    <!-- Tactile Haptic Selection (Aligned here inside the Dedicated tab) -->
+                    <div class="flex justify-between items-center border-t border-slate-100 dark:border-slate-700/50 pt-3 mt-1.5">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase">⚡ Haptic Vibration Level</span>
+                        <select id="select-haptic-level" onchange="handleAnimConfigChange(this, 'hapticIntensity')" class="text-[10px] font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md px-1.5 py-0.5 text-slate-600 dark:text-slate-300">
+                            <option value="soft">Soft 📳</option>
+                            <option value="medium" selected>Medium ⚡</option>
+                            <option value="strong">Strong 🔥</option>
+                            <option value="off">Off ❌</option>
+                        </select>
+                    </div>
+                    
+                    <div id="haptic-test-area" class="flex justify-between items-center hidden mt-2.5">
+                        <span class="text-[9px] font-bold text-slate-400">Intensity: Custom Scaled</span>
+                        <button onclick="triggerHaptic('correct')" class="text-[9px] font-black text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-3 py-1 rounded-lg">Test Haptic ⚡</button>
+                    </div>
+                </div>
+            </div><!-- Close settings-group-visuals -->
+            
+            <div id="settings-group-general-bottom" class="space-y-4">
             <!-- App Version & Updates Settings Card -->
             <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                 <div class="flex items-center justify-between">
@@ -1744,6 +1853,7 @@
             <button onclick="navigate('page-admin')" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🛠️ Question Admin Insert panel</button>
             <button onclick="clearCache()" class="w-full p-3 bg-white dark:bg-slate-800 rounded-xl border text-left font-bold text-xs">🗑️ Clear Application Cache</button>
             <button onclick="resetAllData()" class="w-full p-3 rounded-xl border text-left font-bold text-xs text-red-500">⚠️ Hard Reset all data</button>
+            </div><!-- Close settings-group-general-bottom -->
         </div>
 
         <!-- SUBJECT MANAGER PAGE -->
@@ -2424,6 +2534,8 @@
 
     
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
+    <script src="./js/elite_animations_controller.js" defer></script>
+    <script src="./js/elite_3d_engine.js" defer></script>
     <script src="./js/canvas_charts.js" defer></script>
     <script src="./js/spaced_rep.js" defer></script>
     <script src="./js/pwa_helpers.js" defer></script>

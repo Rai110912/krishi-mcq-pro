@@ -1,4 +1,4 @@
-const CACHE_NAME = 'agriculture-exam-v6';
+const CACHE_NAME = 'agriculture-exam-v7';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -15,6 +15,8 @@ self.addEventListener('install', event => {
           fetch('./js/spaced_rep.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js', r); }),
           fetch('./js/pwa_helpers.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js', r); }),
           fetch('./js/app.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js', r); }),
+          fetch('./js/elite_animations_controller.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js', r); }),
+          fetch('./js/elite_3d_engine.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js', r); }),
           fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
           fetch('./js/firebase-database-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-database-compat.js', r); }),
           fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); })
@@ -84,6 +86,7 @@ self.addEventListener('fetch', event => {
                         event.request.url.includes('fonts.googleapis.com') ||
                         event.request.url.includes('fonts.gstatic.com') ||
                         event.request.url.includes('/js/firebase-') ||
+                        event.request.url.includes('/js/elite_') ||
                         event.request.url.includes('unpkg.com');
 
   if (isStaticAsset) {

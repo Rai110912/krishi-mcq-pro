@@ -417,6 +417,7 @@ async function loadStaticQuestions() {
         initPracticeSoundSettings();
         initHapticUI();
         initPerfSettingsUI();
+        if (typeof initEliteAnimationsUI === 'function') initEliteAnimationsUI();
 // Resume session logic
     setTimeout(() => {
         let saved = localStorage.getItem('krishi_saved_practice');
@@ -7916,19 +7917,37 @@ document.querySelectorAll('button').forEach(btn => {
             }
         }
 
+        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+
+        // Calculate seedling morph progression (even at 0%, a tiny seedling is visible)
+        let stemOffset = 100 - 12 - (percent * 0.68);
+        let leaf1Scale = percent >= 30 ? 1 : (0.15 + (percent / 30) * 0.85).toFixed(2);
+        let leaf1Opacity = percent >= 30 ? 1 : (0.3 + (percent / 30) * 0.7).toFixed(2);
+        let leaf2Scale = percent >= 65 ? 1 : (percent >= 30 ? (0.1 + ((percent - 30) / 35) * 0.9).toFixed(2) : 0);
+        let leaf2Opacity = percent >= 65 ? 1 : (percent >= 30 ? (0.2 + ((percent - 30) / 35) * 0.8).toFixed(2) : 0);
+        let flowerScale = percent >= 100 ? 1 : 0;
+        let flowerOpacity = percent >= 100 ? 1 : 0;
+
         return `
             <div class="p-3.5 rounded-xl border hover-card-trigger" style="background:var(--card); border-color:var(--border);">
                 <div class="flex justify-between items-center mb-1">
-                    <div>
+                    <div class="space-y-0.5">
                         <p class="text-[9px] font-extrabold uppercase tracking-wide text-slate-400">Daily Solved Milestone</p>
                         <h4 class="font-black text-xs text-slate-850 dark:text-slate-100">${solvedToday} / ${target} Solved</h4>
+                        ${percent >= 100 ? `<p class="text-[9px] text-emerald-500 mt-1 font-semibold flex items-center gap-1">🏆 Target met! Great commitment!</p>` : ''}
                     </div>
-                    <span class="text-[10px] font-bold ${percent >= 100 ? 'text-emerald-500' : 'text-slate-500'} bg-slate-50 dark:bg-slate-950 px-2 py-0.5 rounded-full border border-slate-150 dark:border-slate-850">${percent}%</span>
+                    <div class="flex items-center gap-3">
+                        ${isElite ? `
+                        <div class="w-12 h-12 flex items-center justify-center bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800/80">
+                            <canvas id="daily-target-3d-canvas" class="w-12 h-12 select-none cursor-grab active:cursor-grabbing"></canvas>
+                        </div>
+                        ` : ''}
+                        <span class="text-[10px] font-bold ${percent >= 100 ? 'text-emerald-500' : 'text-slate-500'} bg-slate-50 dark:bg-slate-950 px-2 py-0.5 rounded-full border border-slate-150 dark:border-slate-850">${percent}%</span>
+                    </div>
                 </div>
                 <div class="w-full h-2 bg-slate-150 dark:bg-slate-850 rounded-full mt-2 overflow-hidden shadow-inner">
                     <div class="bg-emerald-500 h-full rounded-full transition-all duration-500 ease" style="width: ${percent}%;"></div>
                 </div>
-                ${percent >= 100 ? `<p class="text-[9px] text-emerald-500 mt-1.5 font-semibold flex items-center gap-1">🏆 Target met! Fantastic commitment!</p>` : ''}
             </div>
         `;
     }
@@ -8417,6 +8436,20 @@ document.querySelectorAll('button').forEach(btn => {
             if (elStreakCounters.length > 0) {
                 let streakVal = getStreakCount();
                 elStreakCounters.forEach(el => animateStreakCountUp(streakVal, el));
+            }
+            
+            // Initialize 3D Crop Growth sandbox if canvas exists
+            let cropCanvas = document.getElementById('daily-target-3d-canvas');
+            if (cropCanvas && typeof window.init3DCropGrowthSandbox === 'function') {
+                let stats = localData.stats;
+                let target = getDailyTarget() || 50;
+                let todayStr = getLocalDateString();
+                let solvedToday = (localData.streak && localData.streak[todayStr] && localData.streak[todayStr].solved) || 0;
+                let percent = Math.min(100, Math.round((solvedToday / target) * 100));
+                
+                setTimeout(() => {
+                    window.init3DCropGrowthSandbox(cropCanvas, percent);
+                }, 50);
             }
             
             // Compatibility fallback elements
@@ -10849,10 +10882,6 @@ function initHapticUI() {
 // ==================== 2026 SIX FUTURISTIC ANIMATIONS ENGINE ====================
 (function() {
     // कडा सुरक्षा जाँच: एप बाहिर ट्याब बन्द हुँदा एनिमेसन बन्द गर्ने
-    var isAppVisible = true;
-    document.addEventListener('visibilitychange', function() {
-        isAppVisible = !document.hidden;
-    });
 
     // १. बाली वृद्धि र २. पानीको प्रोग्रेस बार डायनामिक रूपमा थप्ने हुक
     var origRenderMCQ = window.renderMCQ;
@@ -10956,38 +10985,65 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         if (typeof origNavigate === 'function') {
             origNavigate(pageId);
         }
-        if (pageId === 'page-analytics') {
-            setupNeuralMindMap();
-        } else if (pageId === 'page-study-planner') {
-            setup3DSeasonalWheel();
+        // Run setups dynamically if elite animations are enabled
+        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        if (isElite) {
+            if (pageId === 'page-study-planner') {
+                setupNeuralMindMap();
+                setup3DSeasonalWheel();
+            } else if (pageId === 'page-home') {
+                setTimeout(initNepalGlobe, 50);
+            }
         }
     };
 
     function setupNeuralMindMap() {
-        var analyticsPage = document.getElementById('page-analytics');
-        if (!analyticsPage) return;
+        var plannerPage = document.getElementById('page-study-planner');
+        if (!plannerPage) return;
 
         var mapCard = document.getElementById('neural-map-widget-container');
         if (!mapCard) {
             mapCard = document.createElement('div');
             mapCard.id = 'neural-map-widget-container';
             mapCard.className = 'neural-mindmap-card';
+            mapCard.style.background = 'transparent';
+            mapCard.style.border = 'none';
             
-            // एनालिटिक्सको विषय सूची भन्दा ठीक माथि थप्ने
-            var targetList = document.getElementById('analytics-subjects-v2');
-            if (targetList) {
-                targetList.parentNode.insertBefore(mapCard, targetList);
+            // Robust Sibling Search by Text Content
+            var syllabusCard = null;
+            var divs = plannerPage.querySelectorAll('div');
+            for (var i = 0; i < divs.length; i++) {
+                if (divs[i].textContent.includes('Advanced Syllabus Tracker')) {
+                    syllabusCard = divs[i].closest('.animate-slide-up');
+                    break;
+                }
+            }
+
+            if (syllabusCard) {
+                syllabusCard.parentNode.insertBefore(mapCard, syllabusCard);
             } else {
-                analyticsPage.appendChild(mapCard);
+                plannerPage.appendChild(mapCard);
             }
         }
         
+        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        if (!isElite) {
+            mapCard.style.display = 'none';
+            return;
+        } else {
+            mapCard.style.display = 'block';
+        }
+
         mapCard.innerHTML = `
-            <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block mb-1">🧠 मस्तिष्क-सञ्जाल ज्ञान नक्सा (Subjects Competence Network)</span>
-            <canvas class="neural-canvas"></canvas>
+            <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block mb-1">🧠 Subjects Competence Neural Mindmap</span>
+            <canvas class="neural-canvas cursor-grab active:cursor-grabbing"></canvas>
         `;
         
-        drawNeuralMap(mapCard.querySelector('.neural-canvas'));
+        if (typeof window.init3DSyllabusDome === 'function') {
+            window.init3DSyllabusDome(mapCard.querySelector('.neural-canvas'));
+        } else {
+            drawNeuralMap(mapCard.querySelector('.neural-canvas'));
+        }
     }
 
     
@@ -10997,7 +11053,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     // ४. मौसम अनुकूल वातावरणीय पृष्ठभूमि क्यानभास
     var bgCanvas = document.createElement('canvas');
     bgCanvas.id = 'weather-ambient-canvas';
-    document.body.appendChild(bgCanvas);
+    document.body.insertBefore(bgCanvas, document.body.firstChild);
     var bgCtx = bgCanvas.getContext('2d');
     var bgParticles = [];
 
@@ -11009,38 +11065,111 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     initBgCanvas();
 
     function drawAmbientBackground() {
-        if (!isAppVisible) {
-            requestAnimationFrame(drawAmbientBackground);
+        let eliteEnabled = localStorage.getItem('krishi_elite_animations') !== 'false';
+        if (!eliteEnabled || document.hidden) {
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            setTimeout(() => {
+                requestAnimationFrame(drawAmbientBackground);
+            }, 300);
             return;
         }
+
+        if (bgCanvas.width !== window.innerWidth || bgCanvas.height !== window.innerHeight) {
+            bgCanvas.width = window.innerWidth;
+            bgCanvas.height = window.innerHeight;
+        }
+
         bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
         
-        var streak = typeof window.getStreakCount === 'function' ? window.getStreakCount() : 0;
+        let baseDensity = (window.EliteAnimsConfig && typeof window.EliteAnimsConfig.weatherParticleDensity !== 'undefined') ? window.EliteAnimsConfig.weatherParticleDensity : 25;
+        let maxP = window.EliteAnimsConfig.throttled ? Math.round(baseDensity * 0.5) : baseDensity;
+        let spawnRate = 0.02 + (maxP / 50) * 0.08;
+        let season = typeof activeSeasonIdx !== 'undefined' ? activeSeasonIdx : 0;
         
-        // यदि राम्रो प्रदर्शन भइरहेको छ भने सुनौलो तोरीको पातहरू उडेको देखाउने, नत्र शीत झरेको देखाउने
-        if (Math.random() < 0.015 && bgParticles.length < 25) {
-            bgParticles.push({
-                x: Math.random() * bgCanvas.width,
-                y: -10,
-                vy: 0.5 + Math.random() * 1.2,
-                vx: (Math.random() - 0.5) * 1,
-                r: 2 + Math.random() * 4,
-                color: streak >= 3 ? 'rgba(234, 179, 8, 0.15)' : 'rgba(59, 130, 246, 0.12)'
-            });
+        if (Math.random() < spawnRate && bgParticles.length < maxP) {
+            if (season === 0) { // Kharif - Monsoon Rain
+                bgParticles.push({
+                    type: 'rain',
+                    x: Math.random() * bgCanvas.width,
+                    y: -20,
+                    vy: 3.5 + Math.random() * 3.5,
+                    vx: -1.0 - Math.random() * 1.5,
+                    len: 8 + Math.random() * 12,
+                    color: 'rgba(59, 130, 246, 0.14)'
+                });
+            } else if (season === 1) { // Autumn Leaves
+                bgParticles.push({
+                    type: 'leaf',
+                    x: Math.random() * bgCanvas.width,
+                    y: -20,
+                    vy: 0.8 + Math.random() * 1.0,
+                    vx: (Math.random() - 0.5) * 1.2,
+                    r: 4 + Math.random() * 4,
+                    wiggle: Math.random() * 10,
+                    wiggleSpeed: 0.02 + Math.random() * 0.02,
+                    color: ['rgba(249, 115, 22, 0.12)', 'rgba(234, 179, 8, 0.12)', 'rgba(194, 65, 12, 0.12)'][Math.floor(Math.random() * 3)]
+                });
+            } else { // Spring Pollen
+                bgParticles.push({
+                    type: 'pollen',
+                    x: Math.random() * bgCanvas.width,
+                    y: bgCanvas.height + 20,
+                    vy: -0.3 - Math.random() * 0.6,
+                    vx: (Math.random() - 0.5) * 0.8,
+                    r: 1.5 + Math.random() * 2.5,
+                    wiggle: Math.random() * 10,
+                    wiggleSpeed: 0.01 + Math.random() * 0.015,
+                    color: 'rgba(16, 185, 129, 0.12)'
+                });
+            }
         }
 
         for (var i = bgParticles.length - 1; i >= 0; i--) {
             var p = bgParticles[i];
-            p.y += p.vy;
-            p.x += p.vx;
             
-            bgCtx.beginPath();
-            bgCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            bgCtx.fillStyle = p.color;
-            bgCtx.fill();
+            if (p.type === 'rain') {
+                p.y += p.vy;
+                p.x += p.vx;
+                bgCtx.beginPath();
+                bgCtx.moveTo(p.x, p.y);
+                bgCtx.lineTo(p.x + p.vx * 1.2, p.y + p.vy * 1.2);
+                bgCtx.strokeStyle = p.color;
+                bgCtx.lineWidth = 1.0;
+                bgCtx.stroke();
+                
+                if (p.y > bgCanvas.height || p.x < -20) {
+                    bgParticles.splice(i, 1);
+                }
+            } else if (p.type === 'leaf') {
+                p.y += p.vy;
+                p.wiggle += p.wiggleSpeed;
+                p.x += p.vx + Math.sin(p.wiggle) * 0.4;
+                
+                bgCtx.save();
+                bgCtx.translate(p.x, p.y);
+                bgCtx.rotate(Math.sin(p.wiggle) * 0.3);
+                bgCtx.beginPath();
+                bgCtx.ellipse(0, 0, p.r * 1.4, p.r * 0.8, 0, 0, Math.PI * 2);
+                bgCtx.fillStyle = p.color;
+                bgCtx.fill();
+                bgCtx.restore();
 
-            if (p.y > bgCanvas.height) {
-                bgParticles.splice(i, 1);
+                if (p.y > bgCanvas.height + 20) {
+                    bgParticles.splice(i, 1);
+                }
+            } else if (p.type === 'pollen') {
+                p.y += p.vy;
+                p.wiggle += p.wiggleSpeed;
+                p.x += p.vx + Math.sin(p.wiggle) * 0.2;
+                
+                bgCtx.beginPath();
+                bgCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                bgCtx.fillStyle = p.color;
+                bgCtx.fill();
+
+                if (p.y < -20) {
+                    bgParticles.splice(i, 1);
+                }
             }
         }
         requestAnimationFrame(drawAmbientBackground);
@@ -11086,6 +11215,9 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
 
     // ६. ३डी ऋतु चक्र र बाली चक्र कनवर्टर (3D Interactive Crop Wheel)
     var activeSeasonIdx = 0;
+    window.updateActiveSeasonIndex = function(idx) {
+        activeSeasonIdx = idx;
+    };
     var seasonsData = [
         { name: "वर्षा (Kharif)", angle: 0, crops: "धान, मकै, कोदो, भटमास", tip: "यो मौसममा सिंचाइ र ढुसीजन्य रोगको बढी सम्भावना हुन्छ। सिंचाइ र वनस्पति रोगको पाठ्यक्रम दोहोर्‍याउनुहोस्।" },
         { name: "शरद (Autumn)", angle: 120, crops: "तोरी, आलु, सागपात, तोरी", tip: "यो माटोमा मल र नाइट्रोजनको मात्रा मिलाउन आवश्यक समय हो। माटो विज्ञान र मलको राम्रो अध्ययन गर्नुहोस्।" },
@@ -11114,27 +11246,59 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         if (!widget) return;
 
         var current = seasonsData[activeSeasonIdx];
-        widget.innerHTML = `
-            <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
-            <div class="crop-wheel-3d-wrapper">
-                <div class="crop-wheel-circle" style="--crop-angle: ${current.angle}deg;">
-                    <div style="transform: rotateZ(${-current.angle}deg);">${current.name}</div>
-                </div>
-            </div>
-            <div class="text-center space-y-1">
-                <p class="text-xs font-black text-slate-800 dark:text-slate-100">🌾 सिफारिस बाली: <span class="text-emerald-500">${current.crops}</span></p>
-                <p class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
-            </div>
-            <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
-                अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
-            </button>
-        `;
+        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
 
-        widget.querySelector('#btn-rotate-wheel').onclick = function() {
-            window.triggerHaptic('click');
-            activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
-            renderCropWheel();
-        };
+        if (isElite) {
+            widget.innerHTML = `
+                <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
+                <div class="crop-wheel-3d-wrapper" style="width: 100%; height: 100px;">
+                    <canvas id="carousel-3d-canvas" class="w-full h-[100px] cursor-pointer"></canvas>
+                </div>
+                <div class="text-center space-y-1">
+                    <p class="text-xs font-black text-slate-850 dark:text-slate-100">🌾 सिफारिस बाली: <span id="carousel-3d-crops" class="text-emerald-500">${current.crops}</span></p>
+                    <p id="carousel-3d-tip" class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
+                </div>
+                <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
+                    अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
+                </button>
+            `;
+
+            if (typeof window.init3DSeasonalCarousel === 'function') {
+                window.init3DSeasonalCarousel(document.getElementById('carousel-3d-canvas'));
+            }
+
+            widget.querySelector('#btn-rotate-wheel').onclick = function() {
+                if (typeof window.rotateSeasonal3DCarousel === 'function') {
+                    window.rotateSeasonal3DCarousel();
+                } else {
+                    window.triggerHaptic('click');
+                    activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
+                    renderCropWheel();
+                }
+            };
+        } else {
+            widget.innerHTML = `
+                <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
+                <div class="crop-wheel-3d-wrapper">
+                    <div class="crop-wheel-circle" style="--crop-angle: ${current.angle}deg;">
+                        <div style="transform: rotateZ(${-current.angle}deg);">${current.name}</div>
+                    </div>
+                </div>
+                <div class="text-center space-y-1">
+                    <p class="text-xs font-black text-slate-800 dark:text-slate-100">🌾 सिफारिस बाली: <span class="text-emerald-500">${current.crops}</span></p>
+                    <p class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
+                </div>
+                <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
+                    अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
+                </button>
+            `;
+
+            widget.querySelector('#btn-rotate-wheel').onclick = function() {
+                window.triggerHaptic('click');
+                activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
+                renderCropWheel();
+            };
+        }
     }
 
     console.log('[Spec 2026 Enhanced Animations] Activated smoothly!');
@@ -11362,5 +11526,307 @@ window.resetCloudConfig = function() {
             window.location.reload();
         }, 1200);
     }
+};
+
+window.toggleEliteAnimationsSetting = function() {
+    let checkbox = document.getElementById('elite-animations-enabled');
+    if (!checkbox) return;
+    let isEnabled = checkbox.checked;
+    localStorage.setItem('krishi_elite_animations', isEnabled ? 'true' : 'false');
+    
+    let bgCanvasEl = document.getElementById('weather-ambient-canvas');
+    if (bgCanvasEl) {
+        bgCanvasEl.style.display = isEnabled ? 'block' : 'none';
+    }
+    
+    let globeCard = document.getElementById('home-nepal-globe-card');
+    if (globeCard) {
+        globeCard.style.display = isEnabled ? 'block' : 'none';
+        if (isEnabled) {
+            setTimeout(initNepalGlobe, 50);
+        }
+    }
+    
+    let activePage = document.querySelector('.page.active');
+    if (isEnabled && activePage) {
+        let pageId = activePage.id;
+        if (pageId === 'page-study-planner') {
+            setupNeuralMindMap();
+            setup3DSeasonalWheel();
+        } else if (pageId === 'page-home') {
+            initNepalGlobe();
+        }
+    } else if (!isEnabled) {
+        let neuralCard = document.getElementById('neural-map-widget-container');
+        if (neuralCard) {
+            neuralCard.style.display = 'none';
+        }
+    }
+    
+    updateHomePage();
+    
+    if (isEnabled && typeof window.triggerHaptic === 'function') {
+        window.triggerHaptic('correct');
+    }
+};
+
+window.initEliteAnimationsUI = function() {
+    let saved = localStorage.getItem('krishi_elite_animations') !== 'false';
+    let el = document.getElementById('elite-animations-enabled');
+    if (el) {
+        el.checked = saved;
+    }
+    
+    let bgCanvasEl = document.getElementById('weather-ambient-canvas');
+    if (bgCanvasEl) {
+        bgCanvasEl.style.display = saved ? 'block' : 'none';
+    }
+    
+    let globeCard = document.getElementById('home-nepal-globe-card');
+    if (globeCard) {
+        globeCard.style.display = saved ? 'block' : 'none';
+        if (saved) {
+            setTimeout(initNepalGlobe, 50);
+        }
+    }
+};
+
+let isNepalGlobeInitialized = false;
+let nepalGlobeAnimationId = null;
+
+window.initNepalGlobe = function() {
+    let canvas = document.getElementById('nepal-globe-canvas');
+    if (!canvas || isNepalGlobeInitialized) return;
+    isNepalGlobeInitialized = true;
+    
+    let ctx = canvas.getContext('2d');
+    let width = canvas.width;
+    let height = canvas.height;
+    
+    let rotation = 0;
+    
+    const provinces = [
+        { name: "Koshi Province", lon: 0.45, lat: -0.05, color: "#10b981" },
+        { name: "Madhesh Province", lon: 0.28, lat: -0.22, color: "#3b82f6" },
+        { name: "Bagmati Province", lon: 0.12, lat: -0.02, color: "#f59e0b" },
+        { name: "Gandaki Province", lon: -0.08, lat: 0.08, color: "#8b5cf6" },
+        { name: "Lumbini Province", lon: -0.25, lat: -0.15, color: "#ec4899" },
+        { name: "Karnali Province", lon: -0.42, lat: 0.18, color: "#ef4444" },
+        { name: "Sudurpashchim Province", lon: -0.62, lat: 0.12, color: "#06b6d4" }
+    ];
+    
+    let R = 50;
+    let hoveredProvince = null;
+    let lastHoveredName = null;
+    
+    canvas.addEventListener('mousemove', function(e) {
+        let rect = canvas.getBoundingClientRect();
+        let mx = e.clientX - rect.left;
+        let my = e.clientY - rect.top;
+        
+        let found = null;
+        provinces.forEach(p => {
+            if (p.zVal > 0) {
+                let dx = mx - p.screenX;
+                let dy = my - p.screenY;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 10) {
+                    found = p;
+                }
+            }
+        });
+        
+        let tooltip = document.getElementById('globe-province-tooltip');
+        if (found) {
+            hoveredProvince = found;
+            if (tooltip) {
+                tooltip.style.opacity = '1';
+                tooltip.style.left = (mx + 10) + 'px';
+                tooltip.style.top = (my + 10) + 'px';
+                
+                let active = getActiveProfile();
+                let isCurrentTarget = active.province && active.province.toLowerCase().includes(found.name.split(' ')[0].toLowerCase());
+                
+                tooltip.innerHTML = `
+                    <div class="font-extrabold text-[10px] text-white flex items-center gap-1">
+                        <span>📍 ${found.name}</span>
+                        ${isCurrentTarget ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>' : ''}
+                    </div>
+                    <div class="text-[8px] text-slate-300 mt-0.5">
+                        ${isCurrentTarget ? '🎯 Active Exam Target' : 'State Study Center'}
+                    </div>
+                `;
+            }
+            
+            if (lastHoveredName !== found.name) {
+                lastHoveredName = found.name;
+                if (typeof window.triggerHaptic === 'function') {
+                    window.triggerHaptic('click');
+                }
+            }
+        } else {
+            hoveredProvince = null;
+            lastHoveredName = null;
+            if (tooltip) tooltip.style.opacity = '0';
+        }
+    });
+    
+    canvas.addEventListener('mouseleave', function() {
+        hoveredProvince = null;
+        lastHoveredName = null;
+        let tooltip = document.getElementById('globe-province-tooltip');
+        if (tooltip) tooltip.style.opacity = '0';
+    });
+    
+    function draw() {
+        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        let page = document.getElementById('page-home');
+        if (!isElite || !page || !page.classList.contains('active') || document.hidden) {
+            isNepalGlobeInitialized = false;
+            return;
+        }
+        
+        let dpr = window.devicePixelRatio || 1;
+        let cssW = canvas.clientWidth || 280;
+        let cssH = canvas.clientHeight || 150;
+        
+        if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+            canvas.width = cssW * dpr;
+            canvas.height = cssH * dpr;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        
+        ctx.clearRect(0, 0, cssW, cssH);
+        
+        let cx = cssW / 2;
+        let cy = cssH / 2;
+        
+        let grad = ctx.createRadialGradient(cx, cy, R * 0.4, cx, cy, R);
+        if (document.documentElement.classList.contains('dark')) {
+            grad.addColorStop(0, 'rgba(15, 23, 42, 0.45)');
+            grad.addColorStop(0.8, 'rgba(30, 41, 59, 0.6)');
+            grad.addColorStop(1, 'rgba(16, 185, 129, 0.25)');
+        } else {
+            grad.addColorStop(0, 'rgba(248, 250, 252, 0.45)');
+            grad.addColorStop(0.8, 'rgba(241, 245, 249, 0.6)');
+            grad.addColorStop(1, 'rgba(16, 185, 129, 0.2)');
+        }
+        
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        
+        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(16, 185, 129, 0.35)' : 'rgba(16, 185, 129, 0.25)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        
+        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)';
+        ctx.lineWidth = 0.8;
+        
+        [-Math.PI/4, 0, Math.PI/4].forEach(lat => {
+            ctx.beginPath();
+            let step = 0.05;
+            for (let lon = -Math.PI/2; lon <= Math.PI/2; lon += step) {
+                let x = Math.cos(lat) * Math.sin(lon);
+                let y = Math.sin(lat);
+                let sx = cx + x * R;
+                let sy = cy - y * R;
+                if (lon === -Math.PI/2) ctx.moveTo(sx, sy);
+                else ctx.lineTo(sx, sy);
+            }
+            ctx.stroke();
+        });
+        
+        for (let idx = 0; idx < 4; idx++) {
+            let lon = (idx * Math.PI / 2) + rotation;
+            ctx.beginPath();
+            let step = 0.05;
+            for (let lat = -Math.PI/2; lat <= Math.PI/2; lat += step) {
+                let z = Math.cos(lat) * Math.cos(lon);
+                if (z >= 0) {
+                    let x = Math.cos(lat) * Math.sin(lon);
+                    let y = Math.sin(lat);
+                    let sx = cx + x * R;
+                    let sy = cy - y * R;
+                    if (lat === -Math.PI/2) ctx.moveTo(sx, sy);
+                    else ctx.lineTo(sx, sy);
+                }
+            }
+            ctx.stroke();
+        }
+        
+        let activeProfile = getActiveProfile();
+        let activeProvName = (activeProfile.province || "").toLowerCase();
+        
+        provinces.forEach(p => {
+            let rotLon = p.lon + rotation;
+            let x = Math.cos(p.lat) * Math.sin(rotLon);
+            let y = Math.sin(p.lat);
+            let z = Math.cos(p.lat) * Math.cos(rotLon);
+            
+            p.zVal = z;
+            
+            if (z > 0) {
+                p.screenX = cx + x * R;
+                p.screenY = cy - y * R;
+                
+                let isHighlighted = activeProvName.includes(p.name.split(' ')[0].toLowerCase());
+                let isHovered = hoveredProvince && hoveredProvince.name === p.name;
+                
+                let pulse = Math.sin(Date.now() * 0.005);
+                let radius = (isHighlighted ? 5.0 : 3.0) + (isHovered ? 2.0 : 0);
+                
+                ctx.beginPath();
+                ctx.arc(p.screenX, p.screenY, radius * (isHighlighted ? 2.0 : 1.5), 0, Math.PI * 2);
+                ctx.fillStyle = isHighlighted ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.1)';
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.arc(p.screenX, p.screenY, radius, 0, Math.PI * 2);
+                ctx.fillStyle = isHighlighted ? '#f59e0b' : p.color;
+                ctx.fill();
+                
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.0;
+                ctx.stroke();
+                
+                if (isHighlighted || isHovered || (z > 0.85)) {
+                    ctx.fillStyle = document.documentElement.classList.contains('dark') ? '#f1f5f9' : '#1e293b';
+                    ctx.font = isHighlighted ? 'bold 7.5px sans-serif' : '6.5px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(p.name.split(' ')[0], p.screenX, p.screenY - radius - 3);
+                }
+            }
+        });
+        
+        ctx.beginPath();
+        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(16, 185, 129, 0.4)' : 'rgba(16, 185, 129, 0.3)';
+        ctx.lineWidth = 1.5;
+        
+        let firstMove = true;
+        provinces.forEach(p => {
+            if (p.zVal > 0) {
+                if (firstMove) {
+                    ctx.moveTo(p.screenX, p.screenY);
+                    firstMove = false;
+                } else {
+                    ctx.lineTo(p.screenX, p.screenY);
+                }
+            } else {
+                firstMove = true;
+            }
+        });
+        ctx.stroke();
+        
+        let baseSpeed = (window.EliteAnimsConfig && typeof window.EliteAnimsConfig.globeRotationSpeed !== 'undefined') ? window.EliteAnimsConfig.globeRotationSpeed : 1.0;
+        let activeSpeed = window.EliteAnimsConfig.throttled ? baseSpeed * 0.5 : baseSpeed;
+        rotation += 0.004 * activeSpeed;
+        if (rotation > Math.PI * 2) rotation -= Math.PI * 2;
+        
+        nepalGlobeAnimationId = requestAnimationFrame(draw);
+    }
+    
+    draw();
 };
  

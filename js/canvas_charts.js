@@ -267,7 +267,7 @@ function animateWaterWave(canvas) {
     canvas.dataset.waveRunning = 'true';
     var ctx = canvas.getContext('2d');
     function draw() {
-        if (!isAppVisible || !canvas.parentNode) {
+        if (document.hidden || !canvas.parentNode) {
             canvas.dataset.waveRunning = 'false';
             return;
         }
@@ -383,12 +383,18 @@ function drawNeuralMap(canvas) {
         }
 
         function render() {
-            if (!isAppVisible || !canvas.parentNode) return;
+            if (!canvas.parentNode) return;
+            if (document.hidden) {
+                setTimeout(function() {
+                    requestAnimationFrame(render);
+                }, 300);
+                return;
+            }
             var w = canvas.width / window.devicePixelRatio;
             var h = canvas.height / window.devicePixelRatio;
             ctx.clearRect(0, 0, w, h);
 
-            // रेखाहरू कोर्ने (Connections)
+            // रेखाहरू कोर्ने (Connections with pulsing laser signals)
             var core = nodes[0];
             if (core) {
                 ctx.lineWidth = 1.5;
@@ -398,6 +404,28 @@ function drawNeuralMap(canvas) {
                     ctx.moveTo(core.x, core.y);
                     ctx.lineTo(nodes[i].x, nodes[i].y);
                     ctx.stroke();
+                }
+
+                // Laser pulse signals traveling along lines
+                let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+                if (isElite) {
+                    let baseFreq = (window.EliteAnimsConfig && typeof window.EliteAnimsConfig.laserSignalFrequency !== 'undefined') ? window.EliteAnimsConfig.laserSignalFrequency : 1.0;
+                    let activeFreq = window.EliteAnimsConfig.throttled ? baseFreq * 0.5 : baseFreq;
+                    var pulseTime = Date.now() * 0.002 * activeFreq;
+                    for (var i = 1; i < nodes.length; i++) {
+                        var target = nodes[i];
+                        var t = (pulseTime + i * 0.25) % 1.0;
+                        var px = core.x + (target.x - core.x) * t;
+                        var py = core.y + (target.y - core.y) * t;
+                        
+                        ctx.beginPath();
+                        ctx.arc(px, py, 2.2, 0, Math.PI * 2);
+                        ctx.fillStyle = '#10b981';
+                        ctx.shadowBlur = 6;
+                        ctx.shadowColor = '#10b981';
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+                    }
                 }
             }
 
@@ -435,5 +463,8 @@ function drawNeuralMap(canvas) {
 
         init();
         render();
-        window.addEventListener('resize', init);
+        if (!canvas.__krishi_resize_bound__) {
+            canvas.__krishi_resize_bound__ = true;
+            window.addEventListener('resize', init);
+        }
     }

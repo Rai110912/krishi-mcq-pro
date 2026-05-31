@@ -1,0 +1,29 @@
+[debug] [2026-05-31T12:41:17.546Z] ----------------------------------------------------------------------
+[debug] [2026-05-31T12:41:17.552Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\pc\AppData\Local\npm-cache\_npx\7750544ccf494d8b\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting
+[debug] [2026-05-31T12:41:17.552Z] CLI Version:   15.19.0
+[debug] [2026-05-31T12:41:17.553Z] Platform:      win32
+[debug] [2026-05-31T12:41:17.553Z] Node Version:  v26.2.0
+[debug] [2026-05-31T12:41:17.553Z] Time:          Sun May 31 2026 18:26:17 GMT+0545 (Nepal Time)
+[debug] [2026-05-31T12:41:17.554Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-05-31T12:41:17.559Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-05-31T12:41:21.327Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-05-31T12:41:21.328Z] > authorizing via signed-in user (arunrai20234@gmail.com)
+[debug] [2026-05-31T12:41:21.328Z] [iam] checking project krishi-mcq-pro for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-05-31T12:41:21.330Z] Checked if tokens are valid: false, expires at: 1779875992306
+[debug] [2026-05-31T12:41:21.330Z] Checked if tokens are valid: false, expires at: 1779875992306
+[debug] [2026-05-31T12:41:21.331Z] > refreshing access token with scopes: []
+[debug] [2026-05-31T12:41:21.333Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-05-31T12:41:21.334Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-05-31T12:41:28.771Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-05-31T12:41:28.771Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-05-31T12:41:28.787Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/krishi-mcq-pro:testIamPermissions [none]
+[debug] [2026-05-31T12:41:28.787Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/krishi-mcq-pro:testIamPermissions  x-goog-user-project=krishi-mcq-pro
+[debug] [2026-05-31T12:41:28.787Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/krishi-mcq-pro:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-05-31T12:41:29.135Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-05-31T12:41:29.135Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2026-05-31T12:41:30.845Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/krishi-mcq-pro:testIamPermissions 200
+[debug] [2026-05-31T12:41:30.846Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/krishi-mcq-pro:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-05-31T12:41:30.847Z] Checked if tokens are valid: true, expires at: 1780234887772
+[debug] [2026-05-31T12:41:30.847Z] Checked if tokens are valid: true, expires at: 1780234887772
+[debug] [2026-05-31T12:41:30.848Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/krishi-mcq-pro [none]

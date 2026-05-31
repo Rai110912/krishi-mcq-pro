@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "krishi-mcq-pro",
     "public": "www",
     "ignore": [
       "firebase.json",

@@ -1,0 +1,27 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Capacitor
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/
+
+# CRITICAL: Never commit keystore files!
+*.keystore
+*.jks
+android/keystore.properties
+
+# Build artifacts
+android/app/src/main/assets/public/
+
+# Firebase
+.firebase/
+.firebaserc
+
+# Misc
+.DS_Store
+Thumbs.db
+*.bak.*

@@ -1,0 +1,36 @@
+{
+  "appId": "com.krishimcqpro.app",
+  "appName": "Krishi MCQ Pro",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "url": "https://krishi-mcq-pro.web.app",
+    "allowNavigation": [
+      "krishi-mcq-pro.web.app"
+    ]
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2500,
+      "launchAutoHide": true,
+      "backgroundColor": "#0a1628",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "StatusBar": {
+      "style": "Dark",
+      "backgroundColor": "#0a1628",
+      "overlaysWebView": false
+    },
+    "Keyboard": {
+      "resize": "body",
+      "style": "dark"
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+[
+  {
+    "id": 1,
+    "q": "Which crop is known as the 'King of Cereals'?",
+    "opts": [
+      "Wheat",
+      "Rice",
+      "Maize",
+      "Barley"
+    ],
+    "ans": 0,
+    "expl": "Wheat is the King of Cereals.",
+    "sub": "Agronomy"
+  },
+  {
+    "id": 2,
+    "q": "Optimal pH for neutral soil?",
+    "opts": [
+      "4.5-5.5",
+      "6.5-7.5",
+      "8.0-9.0",
+      "5.0-6.0"
+    ],
+    "ans": 1,
+    "expl": "6.5-7.5 is neutral.",
+    "sub": "Soil Science"
+  },
+  {
+    "id": 3,
+    "q": "Nitrogen deficiency causes?",
+    "opts": [
+      "Chlorosis",
+      "Purple leaves",
+      "Root rot",
+      "Wilting"
+    ],
+    "ans": 0,
+    "expl": "Nitrogen is vital for chlorophyll.",
+    "sub": "Soil Science"
+  },
+  {
+    "id": 4,
+    "q": "Seed rate for wheat (kg/ha)?",
+    "opts": [
+      "50",
+      "100",
+      "120",
+      "150"
+    ],
+    "ans": 2,
+    "expl": "120 kg/ha is recommended.",
+    "sub": "Agronomy"
+  }
+]

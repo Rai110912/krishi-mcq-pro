@@ -15,4 +15,4 @@
 [1mProject Console:[22m https://console.firebase.google.com/project/krishi-mcq-pro/overview
 [1mHosting URL:[22m https://krishi-mcq-pro.web.app
 
-[32m[1m+  hosting:channel:[22m[39m Channel URL ([1mkrishi-mcq-pro[22m): https://krishi-mcq-pro--staging-i45h40ep.web.app [expires [1m2026-08-23 14:20:58[22m]
+[32m[1m+  hosting:channel:[22m[39m Channel URL ([1mkrishi-mcq-pro[22m): https://krishi-mcq-pro--staging-i45h40ep.web.app [expires [1m2026-08-23 14:28:29[22m]

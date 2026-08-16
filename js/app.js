@@ -132,7 +132,7 @@ async function loadStaticQuestions() {
         bookmarked:[], wrong:[], bookmarkedLog:{}, wrongLog:{}, customQuestions:[], streak:{},
         stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[]
     };
-
+    // Removed legacy sm2Data variable
     let tempBatch=[];
     let tempBulkParsed=[];
     let selectedManageQIds=[];
@@ -1192,7 +1192,7 @@ function loadData(){
             if (v !== null && v !== undefined) localData[k] = v;
         });
 
-        loadSM2();
+        // Legacy loadSM2() removed
     }
 
     function saveData(){
@@ -1256,7 +1256,6 @@ function loadData(){
                 .catch(err => console.error('[IndexedDB] Custom questions save failed:', err));
         }
         
-        try { saveSM2(); } catch(e) {}
         try { Storage.flush(); } catch(e) {}
         triggerBackgroundSync();
         KrishiStorage.setItem('krishi_last_updated_at', Date.now());
@@ -1264,12 +1263,6 @@ function loadData(){
         savePracticeProgress();
 
     }
-
-    
-// Function loadSM2 moved to external module
-
-    
-// Function saveSM2 moved to external module
 
 
     // ==================== CLOUD SYNCHRONIZATION ENGINE ====================
@@ -4376,50 +4369,7 @@ function loadData(){
             config.count = pool.length;
             config.isSpacedReview = true;
             showToast(`🧠 SM-2 Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
-        } 
-        else if (mode === 'smart') {
-            // Smart Session Generator: Mix of SM-2 Due, Mistakes, Weak Topics, and Random
-            let target = getDailyTarget();
-            let needed = Math.max(10, target - getSolvedTodayCount());
-            if (needed > 30) needed = 30; // Max per session
-
-            let sm2Pool = window.KrishiSM2Engine ? window.KrishiSM2Engine.getDueQuestions(allQ) : [];
-            let mistakePool = allQ.filter(q => (localData.wrong || []).includes(q.id));
-            
-            let weakSubjects = Object.entries(localData.stats.subjectStats || {})
-                .filter(([s, stats]) => stats.solved > 10 && (stats.correct/stats.solved) < 0.6)
-                .map(([s]) => s);
-            let weakPool = allQ.filter(q => weakSubjects.includes(q.sub));
-
-            let selected = [];
-            
-            // 1. Prioritize SM-2 (up to 40%)
-            let sm2Count = Math.min(Math.ceil(needed * 0.4), sm2Pool.length);
-            selected.push(...shuffle(sm2Pool).slice(0, sm2Count));
-            
-            // 2. Add Mistakes (up to 20%)
-            let mistakeCount = Math.min(Math.ceil(needed * 0.2), mistakePool.length);
-            selected.push(...shuffle(mistakePool).slice(0, mistakeCount));
-
-            // 3. Add Weak Topics (up to 20%)
-            let weakCount = Math.min(Math.ceil(needed * 0.2), weakPool.length);
-            selected.push(...shuffle(weakPool).slice(0, weakCount));
-
-            // 4. Fill remainder with random questions
-            let rem = needed - selected.length;
-            if (rem > 0) {
-                let existingIds = new Set(selected.map(q => q.id));
-                let remainingQ = allQ.filter(q => !existingIds.has(q.id));
-                selected.push(...shuffle(remainingQ).slice(0, rem));
-            }
-
-            pool = shuffle(selected);
-            config.count = pool.length;
-            config.isSmartSession = true;
-            config.isSpacedReview = sm2Count > 0;
-            showToast(`🤖 Smart Session Ready! A personalized mix of ${pool.length} questions.`);
         }
-
         else if (mode === 'daily') {
             let solvedToday = getSolvedTodayCount();
             let target = getDailyTarget();
@@ -7154,7 +7104,7 @@ function openEditImportModal(idx) {
                 // Staged SM2 Spaced repetition validation
                 let stagedSm2 = null;
                 if (d.sm2 !== undefined) {
-                    if (typeof d.sm2 !== 'object' || d.sm2 === null) throw new Error('Spaced repetition sm2Data must be a valid object.');
+                    if (d.sm2 && typeof d.sm2 !== 'object') throw new Error('Spaced repetition sm2Data must be a valid object.');
                     stagedSm2 = d.sm2;
                 }
 
@@ -7182,8 +7132,8 @@ function openEditImportModal(idx) {
                 localData.stats = staged.stats;
                 localData.achievements = staged.achievements;
                 
-                if (stagedSm2 !== null && window.KrishiSM2Engine) {
-                    window.KrishiSM2Engine._saveData(stagedSm2);
+                if (stagedSm2 !== null) {
+                    if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(stagedSm2);
                 }
 
                 if (stagedTimingLog !== null) {
@@ -11971,9 +11921,9 @@ document.querySelectorAll('button').forEach(btn => {
         if (rawPool.length === 0) rawPool = getAllQuestions();
 
         // 2. Partition by New vs Review Ratio (Bug 4)
-        let sm2Store = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
-        let reviewQs = rawPool.filter(q => sm2Store[q.id] !== undefined);
-        let newQs = rawPool.filter(q => sm2Store[q.id] === undefined);
+        let sm2EngineData = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+        let reviewQs = rawPool.filter(q => sm2EngineData[q.id] !== undefined);
+        let newQs = rawPool.filter(q => sm2EngineData[q.id] === undefined);
 
         let newRatio = settings.newRatio || 50; // percentage of new questions
         let targetNewCount = Math.round(count * (newRatio / 100));
@@ -12248,15 +12198,36 @@ document.querySelectorAll('button').forEach(btn => {
         }
 
         // 6. Active Spaced Repeater Dashboard Metrics values
-        let stats = window.KrishiSM2Engine ? window.KrishiSM2Engine.getStats() : {dueCount:0, overdueCount:0, upcomingCount:0, masteredCount:0};
         let dueList = window.KrishiSM2Engine ? window.KrishiSM2Engine.getDueQuestions(getAllQuestions()) : [];
         let wrongCountReal = getValidWrongCount();
         
-        let dueCountVal = stats.dueCount;
-        let overdueCountVal = stats.overdueCount;
-        let upcomingCountVal = stats.upcomingCount;
-        let masteredCountVal = stats.masteredCount;
+        let dueCountVal = dueList.length;
+        let overdueCountVal = 0;
+        let upcomingCountVal = 0;
+        let masteredCountVal = 0;
 
+        let todayStamp = getLocalDateString();
+        if (getPlannerSettings().adaptiveReview) {
+            let sm2EngineData = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+            for (let id in sm2EngineData) {
+                let node = sm2EngineData[id];
+                if (node.nextReviewDate < todayStamp) overdueCountVal++;
+                else if (node.nextReviewDate === todayStamp) dueCountVal++;
+                else upcomingCountVal++;
+                if (node.repetitions >= 4 || node.easeFactor >= 2.6) masteredCountVal++;
+            }
+        } else {
+            let sm2EngineData = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+            for (let id in sm2EngineData) {
+                let node = sm2EngineData[id];
+                let dst = node.nextReviewDate;
+                if (dst) {
+                    if (dst < todayStamp) overdueCountVal++;
+                    else if (dst === todayStamp) dueCountVal++;
+                    else upcomingCountVal++;
+                }
+            }
+        }
 
         if (plannerDemoModeActive) {
             dueCountVal = 6;
@@ -13279,9 +13250,7 @@ ${text}`;
             if (Array.isArray(data.achievements)) { localData.achievements = data.achievements; changed = true; }
             
             if (data.sm2 && typeof data.sm2 === 'object') {
-                if (window.KrishiSM2Engine) {
-                    window.KrishiSM2Engine._saveData(data.sm2);
-                }
+                if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
                 changed = true;
             }
         }
@@ -15730,18 +15699,17 @@ window.initNepalGlobe = function() {
                     }
                 });
                 
-                // Apply sm2Data safely to FSRS
+                // Apply sm2Data safely
                 if (imported.sm2Data && window.KrishiSM2Engine) {
-                    let currentSM2 = window.KrishiSM2Engine._getData();
+                    let currentSm2 = window.KrishiSM2Engine._getData();
                     Object.keys(imported.sm2Data).forEach(id => {
-                        currentSM2[id] = imported.sm2Data[id];
+                        currentSm2[id] = imported.sm2Data[id];
                     });
-                    window.KrishiSM2Engine._saveData(currentSM2);
+                    window.KrishiSM2Engine._saveData(currentSm2);
                 }
                 
                 // Batch write to LocalStorage
                 saveData();
-                saveSM2();
                 
                 showToast('✅ Study progress imported! Reloading app...', 2500);
                 triggerHaptic('success');

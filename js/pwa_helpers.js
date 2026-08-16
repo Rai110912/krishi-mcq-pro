@@ -689,29 +689,16 @@ class KrishiSM2Engine {
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
         const now = todayEnd.getTime();
-        
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const startNow = todayStart.getTime();
-
         let dueCount = 0;
-        let overdueCount = 0;
-        let upcomingCount = 0;
         let masteredCount = 0;
         let totalTracked = Object.keys(data).length;
 
         Object.values(data).forEach(rec => {
             if (rec.status === 'mastered') masteredCount++;
-            else if (rec.nextReview) {
-                if (rec.nextReview < startNow) overdueCount++;
-                else if (rec.nextReview <= now) dueCount++;
-                else upcomingCount++;
-            } else if (rec.status === 'due') {
-                dueCount++;
-            }
+            else if (rec.status === 'due' || (rec.nextReview && rec.nextReview <= now)) dueCount++;
         });
 
-        return { dueCount, overdueCount, upcomingCount, masteredCount, totalTracked };
+        return { dueCount, masteredCount, totalTracked };
     }
 
     static updateHUDStats() {

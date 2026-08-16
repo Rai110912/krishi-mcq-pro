@@ -1,11 +1,11 @@
 @echo off
 setlocal enabledelayedexpansion
-title 🚀 Krishi MCQ Pro - Advanced OTA Deployer 🚀
+title Krishi MCQ Pro - Advanced OTA Deployer
 cd /d "%~dp0"
 cls
 
 echo ==============================================================
-echo       🚀 Krishi MCQ Pro - Advanced OTA Deployer 🚀
+echo       Krishi MCQ Pro - Advanced OTA Deployer
 echo ==============================================================
 echo.
 
@@ -95,7 +95,7 @@ echo [Logging] Writing to Deploy History...
 echo [%date% %time%] Successfully deployed %backup_name% (Mode: %deploy_mode%) >> deploy_history.txt
 
 echo ==============================================================
-echo  🎉 LIVE UPDATE DEPLOY COMPLETE! 🎉
+echo   LIVE UPDATE DEPLOY COMPLETE!
 echo  Your mobile app will receive this update automatically!
 echo ==============================================================
 pause

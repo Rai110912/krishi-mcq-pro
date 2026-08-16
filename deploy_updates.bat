@@ -65,14 +65,22 @@ echo.
 
 echo [6/8] Obfuscating & Minifying Core JS...
 call npx.cmd -y terser www\js\app.js -o www\js\app.js -c -m
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Minification failed for app.js! Deploy aborted.
+    goto error_exit
+)
 call npx.cmd -y terser www\js\pwa_helpers.js -o www\js\pwa_helpers.js -c -m
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Minification failed for pwa_helpers.js! Deploy aborted.
+    goto error_exit
+)
 echo  =^> Code Minification Complete!
 echo.
 
 echo [7/8] Creating Rollback Backup...
 if not exist .backups mkdir .backups
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
-set backup_name=www_backup_%datetime:~0,4%%datetime:~4,2%%datetime:~6,2%_%datetime:~8,2%%datetime:~10,2%%datetime:~12,2%.zip
+for /f "usebackq" %%I in (`powershell -NoProfile -Command "Get-Date -Format 'yyyyMMdd_HHmmss'"`) do set datetime=%%I
+set backup_name=www_backup_!datetime!.zip
 powershell -Command "Compress-Archive -Path www\* -DestinationPath .backups\%backup_name% -Force"
 echo  =^> Backup saved to .backups\%backup_name%
 echo.

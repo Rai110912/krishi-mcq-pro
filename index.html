@@ -18,7 +18,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-    <link href="./index.css?v=sj5dz6f" rel="stylesheet">
+    <link href="./index.css?v=20uwlf8" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by clearing old caches if a new version is active
         if ('serviceWorker' in navigator && window.caches) {
@@ -3374,18 +3374,19 @@
     </div> <!-- End of Right Workspace Column -->
     </div> <!-- End of Outer Responsive Layout Container -->
 
-    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden bottom-0 w-full bg-[#0f172a] border-t border-slate-800 flex justify-around items-center h-[60px]" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
+    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden bottom-0 w-full bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex justify-around items-center h-[60px]" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
         <!-- Left vertical green indicator line -->
         <div class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-8 bg-emerald-500 rounded-r-md"></div>
         
         <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="गृहपृष्ठ (Home Screen)">
-            <i data-lucide="home" class="w-6 h-6"></i>
+            <div><i data-lucide="home" class="w-6 h-6"></i></div>
+            <span class="text-[8px] font-bold tracking-wider uppercase hidden">Home</span>
         </button>
 
         <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item flex flex-col items-center justify-center gap-[2px] w-12 transition-colors" aria-label="अभ्यास खण्ड (Practice Suite)">
             <div class="relative">
                 <i data-lucide="book-open" class="w-[22px] h-[22px]"></i>
-                <span class="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-slate-900">2</span>
+                <div class="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-white dark:border-slate-900">2</div>
             </div>
             <span class="text-[8px] font-bold tracking-wider uppercase">Practice</span>
         </button>
@@ -3393,17 +3394,20 @@
         <!-- Center FAB (Create/Edit) -->
         <div class="relative flex justify-center w-16">
             <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 bg-emerald-500/30 blur-xl rounded-full pointer-events-none"></div>
-            <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item relative z-10 w-[50px] h-[50px] bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
+            <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item relative z-10 w-[50px] h-[50px] bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-[0_4px_15px_rgba(16,185,129,0.3)]" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
                 <i data-lucide="edit" class="w-5 h-5 text-slate-300"></i>
+                <span class="hidden">Create</span>
             </button>
         </div>
 
         <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="अध्ययन योजनाकार (Study Planner)">
-            <i data-lucide="calendar" class="w-[22px] h-[22px]"></i>
+            <div><i data-lucide="calendar" class="w-[22px] h-[22px]"></i></div>
+            <span class="hidden">Planner</span>
         </button>
 
         <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
-            <i data-lucide="bar-chart-2" class="w-[22px] h-[22px]"></i>
+            <div><i data-lucide="bar-chart-2" class="w-[22px] h-[22px]"></i></div>
+            <span class="hidden">Stats</span>
         </button>
     </nav>
     <div id="krishi-offline-queue-badge" class="hidden" style="display:none !important;"></div>
@@ -3422,14 +3426,14 @@
     </script>
 
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
-    <script src="./js/elite_animations_controller.js?v=sj5dz6f" defer></script>
-    <script src="./js/elite_3d_engine.js?v=sj5dz6f" defer></script>
-    <script src="./js/canvas_charts.js?v=sj5dz6f" defer></script>
-    <script src="./js/spaced_rep.js?v=sj5dz6f" defer></script>
-    <script src="./js/pwa_helpers.js?v=sj5dz6f" defer></script>
-    <script src="./js/sqlite_db.js?v=sj5dz6f" defer></script>
-    <script src="./js/krishi_idb.js?v=sj5dz6f"></script>
-    <script src="./js/app.js?v=sj5dz6f" defer></script>
+    <script src="./js/elite_animations_controller.js?v=20uwlf8" defer></script>
+    <script src="./js/elite_3d_engine.js?v=20uwlf8" defer></script>
+    <script src="./js/canvas_charts.js?v=20uwlf8" defer></script>
+    <script src="./js/spaced_rep.js?v=20uwlf8" defer></script>
+    <script src="./js/pwa_helpers.js?v=20uwlf8" defer></script>
+    <script src="./js/sqlite_db.js?v=20uwlf8" defer></script>
+    <script src="./js/krishi_idb.js?v=20uwlf8"></script>
+    <script src="./js/app.js?v=20uwlf8" defer></script>
 
 
     <!--
@@ -3457,7 +3461,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=sj5dz6f" defer></script>
+    <script src="./js/voice_assistant.js?v=20uwlf8" defer></script>
 </body>
 </html>
 

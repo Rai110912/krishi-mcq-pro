@@ -1419,48 +1419,7 @@ button, a, input, select, textarea {
 
 /* macOS-style Floating Zoom Dock */
 @media (max-width: 1023px) {
-    #mobile-bottom-nav {
-        left: 50% !important;
-        right: auto !important;
-        transform: translateX(-50%) translateY(0);
-        width: auto !important;
-        max-width: 90vw;
-        padding: 6px 14px !important;
-        border-radius: 9999px !important;
-        border: 1px solid var(--border) !important;
-        background: rgba(255, 255, 255, calc(var(--app-card-opacity, 0.7) * 0.9)) !important;
-        backdrop-filter: blur(25px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(25px) saturate(180%) !important;
-        display: flex;
-        justify-content: center;
-        align-items: flex-end;
-        gap: 10px !important;
-        bottom: calc(12px + env(safe-area-inset-bottom, 12px)) !important;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important;
-        height: 52px !important;
-        overflow: visible !important;
-        transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
-    }
-
-    /* Elegant physical lift & neon glow on zoom interaction */
-    #mobile-bottom-nav.dock-zooming {
-        background: rgba(255, 255, 255, var(--app-card-opacity, 0.82)) !important;
-        border-color: rgba(16, 185, 129, 0.45) !important;
-        box-shadow: 0 15px 35px rgba(16, 185, 129, 0.24) !important;
-        transform: translateX(-50%) translateY(-2px) scale(1.02);
-    }
-
-    .dark #mobile-bottom-nav {
-        background: rgba(15, 23, 42, calc(var(--app-card-opacity, 0.7) * 0.9)) !important;
-        border-color: rgba(255, 255, 255, 0.08) !important;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
-    }
-
-    .dark #mobile-bottom-nav.dock-zooming {
-        background: rgba(15, 23, 42, var(--app-card-opacity, 0.82)) !important;
-        border-color: rgba(16, 185, 129, 0.45) !important;
-        box-shadow: 0 15px 35px rgba(16, 185, 129, 0.35) !important;
-    }
+/* Removed mobile-bottom-nav floating dock styles to restore the original full-width bar */
 }
 
 @media (min-width: 1024px) {
@@ -2509,4 +2468,4 @@ aside {
 
 
 
-
+

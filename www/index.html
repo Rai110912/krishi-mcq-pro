@@ -18,7 +18,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-    <link href="./index.css?v=y7r45et" rel="stylesheet">
+    <link href="./index.css?v=doqp8qn" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by clearing old caches if a new version is active
         if ('serviceWorker' in navigator && window.caches) {
@@ -993,8 +993,8 @@
                             <span class="text-slate-500 font-bold block text-[9px] uppercase">Mistake Pattern:</span>
                             <p class="text-slate-600 dark:text-slate-400 text-[10px]" id="res-mistake-pattern">Solving speed remains steady, focus is advised.</p>
                         </div>
-                        <div class="p-2 bg-indigo-50 dark:bg-slate-900 border border-indigo-100/30 rounded-xl">
-                            <span class="text-indigo-600 dark:text-indigo-400 font-black text-[9px] uppercase block mb-0.5">Recommended focus:</span>
+                        <div class="p-2 bg-emerald-50 dark:bg-black border border-emerald-100 dark:border-emerald-900/50 rounded-xl">
+                            <span class="text-emerald-600 dark:text-emerald-500 font-black text-[9px] uppercase block mb-0.5">Recommended focus:</span>
                             <p id="res-recommended-mode" class="font-bold text-slate-800 dark:text-slate-200 text-xs">Spaced Review on agronomy definitions</p>
                         </div>
                     </div>
@@ -1008,10 +1008,10 @@
                     <button id="res-btn-practice-weak" onclick="practiceWeakestSubjectFromResult(); playSound('click');" class="w-full bg-amber-600 hover:bg-amber-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
                         🎯 Practice Weak subject topic
                     </button>
-                    <button onclick="saveResultToAnalyticsDashboard(); playSound('click');" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button onclick="saveResultToAnalyticsDashboard(); playSound('click');" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
                         💾 Save result to analytics Log
                     </button>
-                    <button onclick="closeSessionResults(); playSound('click');" class="w-full bg-slate-50 text-slate-800 dark:bg-slate-700 dark:text-slate-100 border border-slate-200 dark:border-slate-650 py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button onclick="closeSessionResults(); playSound('click');" class="w-full bg-white dark:bg-white text-slate-200 py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
                         ← Back to Practice Selectors
                     </button>
                 </div>
@@ -3374,31 +3374,36 @@
     </div> <!-- End of Right Workspace Column -->
     </div> <!-- End of Outer Responsive Layout Container -->
 
-    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden nav-transition" style="left: 50% !important; right: auto !important; transform: translateX(-50%) translateY(0); bottom: calc(12px + env(safe-area-inset-bottom, 12px)) !important; width: auto !important; max-width: 90vw; padding: 6px 14px !important; border-radius: 9999px !important; border: 1px solid var(--border) !important; background: rgba(255,255,255,0.7) !important; backdrop-filter: blur(25px) saturate(180%) !important; -webkit-backdrop-filter: blur(25px) saturate(180%) !important; gap: 10px !important; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important; height: 52px !important; overflow: visible !important; transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), background 0.3s ease, border-color 0.3s ease;" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
-        <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="गृहपृष्ठ (Home Screen)">
-            <span class="text-base" aria-hidden="true" style="font-size: 20px;">🏠</span>
-            <span class="dock-text">Home</span>
-            <span class="dock-tooltip">Home Hub</span>
+    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden bottom-0 w-full bg-[#0f172a] border-t border-slate-800 flex justify-around items-center h-[60px]" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
+        <!-- Left vertical green indicator line -->
+        <div class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-8 bg-emerald-500 rounded-r-md"></div>
+        
+        <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="गृहपृष्ठ (Home Screen)">
+            <i data-lucide="home" class="w-6 h-6"></i>
         </button>
-        <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="अभ्यास खण्ड (Practice Suite)">
-            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📚</span>
-            <span class="dock-text">Practice</span>
-            <span class="dock-tooltip">Practice Suite</span>
+
+        <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item flex flex-col items-center justify-center gap-[2px] w-12 transition-colors" aria-label="अभ्यास खण्ड (Practice Suite)">
+            <div class="relative">
+                <i data-lucide="book-open" class="w-[22px] h-[22px]"></i>
+                <span class="absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-slate-900">2</span>
+            </div>
+            <span class="text-[8px] font-bold tracking-wider uppercase">Practice</span>
         </button>
-        <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="अध्ययन योजनाकार (Study Planner)">
-            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📅</span>
-            <span class="dock-text">Planner</span>
-            <span class="dock-tooltip">Study Planner</span>
+
+        <!-- Center FAB (Create/Edit) -->
+        <div class="relative flex justify-center w-16">
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 bg-emerald-500/30 blur-xl rounded-full pointer-events-none"></div>
+            <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item relative z-10 w-[50px] h-[50px] bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
+                <i data-lucide="edit" class="w-5 h-5 text-slate-300"></i>
+            </button>
+        </div>
+
+        <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="अध्ययन योजनाकार (Study Planner)">
+            <i data-lucide="calendar" class="w-[22px] h-[22px]"></i>
         </button>
-        <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
-            <span class="text-base" aria-hidden="true" style="font-size: 20px;">✍️</span>
-            <span class="dock-text">Create</span>
-            <span class="dock-tooltip">MCQ Creator</span>
-        </button>
-        <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
-            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📊</span>
-            <span class="dock-text">Stats</span>
-            <span class="dock-tooltip">Analytics Hub</span>
+
+        <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item flex flex-col items-center justify-center w-12 transition-colors" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
+            <i data-lucide="bar-chart-2" class="w-[22px] h-[22px]"></i>
         </button>
     </nav>
     <div id="krishi-offline-queue-badge" class="hidden" style="display:none !important;"></div>
@@ -3417,14 +3422,14 @@
     </script>
 
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
-    <script src="./js/elite_animations_controller.js?v=y7r45et" defer></script>
-    <script src="./js/elite_3d_engine.js?v=y7r45et" defer></script>
-    <script src="./js/canvas_charts.js?v=y7r45et" defer></script>
-    <script src="./js/spaced_rep.js?v=y7r45et" defer></script>
-    <script src="./js/pwa_helpers.js?v=y7r45et" defer></script>
-    <script src="./js/sqlite_db.js?v=y7r45et" defer></script>
-    <script src="./js/krishi_idb.js?v=y7r45et"></script>
-    <script src="./js/app.js?v=y7r45et" defer></script>
+    <script src="./js/elite_animations_controller.js?v=doqp8qn" defer></script>
+    <script src="./js/elite_3d_engine.js?v=doqp8qn" defer></script>
+    <script src="./js/canvas_charts.js?v=doqp8qn" defer></script>
+    <script src="./js/spaced_rep.js?v=doqp8qn" defer></script>
+    <script src="./js/pwa_helpers.js?v=doqp8qn" defer></script>
+    <script src="./js/sqlite_db.js?v=doqp8qn" defer></script>
+    <script src="./js/krishi_idb.js?v=doqp8qn"></script>
+    <script src="./js/app.js?v=doqp8qn" defer></script>
 
 
     <!--
@@ -3452,7 +3457,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=y7r45et" defer></script>
+    <script src="./js/voice_assistant.js?v=doqp8qn" defer></script>
 </body>
 </html>
 

@@ -18,7 +18,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-    <link href="./index.css?v=x764het" rel="stylesheet">
+    <link href="./index.css?v=jnd8hyp" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by clearing old caches if a new version is active
         if ('serviceWorker' in navigator && window.caches) {
@@ -76,6 +76,40 @@
     </script>
 </head>
 <body>
+    <!-- Mobile Bottom Navigation (Moved to direct child of body to prevent CSS transform trap) -->
+    <nav id="mobile-bottom-nav" class="fixed lg:hidden left-1/2 -translate-x-1/2 w-[92%] max-w-[400px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-around items-center p-2 rounded-2xl shadow-[0_20px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-in-out" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)" style="bottom: 12px !important; z-index: 99999 !important;">
+        <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item dock-item transition-colors" aria-label="गृहपृष्ठ (Home Screen)">
+            <i data-lucide="home" class="w-5 h-5 flex-shrink-0"></i>
+            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Home</span>
+        </button>
+
+        <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item dock-item transition-colors" aria-label="अभ्यास खण्ड (Practice Suite)">
+            <div class="relative flex items-center justify-center flex-shrink-0">
+                <i data-lucide="book-open" class="w-5 h-5"></i>
+                <div class="absolute -top-1.5 -right-2 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-white dark:border-slate-900">2</div>
+            </div>
+            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Practice</span>
+        </button>
+
+        <!-- Center FAB (Create/Edit) -->
+        <div class="relative flex justify-center w-14 mx-1">
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-emerald-500/30 blur-xl rounded-full pointer-events-none"></div>
+            <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item relative z-10 w-[44px] h-[44px] bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-[0_4px_15px_rgba(16,185,129,0.3)]" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
+                <i data-lucide="edit-3" class="w-5 h-5"></i>
+                <span class="hidden">Create</span>
+            </button>
+        </div>
+
+        <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item dock-item transition-colors" aria-label="अध्ययन योजनाकार (Study Planner)">
+            <i data-lucide="calendar" class="w-5 h-5 flex-shrink-0"></i>
+            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Planner</span>
+        </button>
+
+        <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item dock-item transition-colors" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
+            <i data-lucide="bar-chart-2" class="w-5 h-5 flex-shrink-0"></i>
+            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Stats</span>
+        </button>
+    </nav>
     <!-- Real-Time Rendering Diagnostics Overlay -->
     <div id="fps-monitor-badge" class="fixed top-4 left-4 z-[99999] hidden px-2.5 py-1 rounded-full font-mono text-[9px] font-black shadow-lg border backdrop-blur-md transition-all duration-300 active:scale-95 cursor-pointer" style="background:rgba(15, 23, 42, 0.75); border-color:rgba(255,255,255,0.15); color:#10b981; box-shadow:0 4px 12px rgba(0,0,0,0.2);" onclick="this.classList.add('hidden'); document.getElementById('toggle-fps-monitor').checked = false;">FPS: --</div>
 <!-- New Feature Toast Container -->
@@ -3374,39 +3408,7 @@
     </div> <!-- End of Right Workspace Column -->
     </div> <!-- End of Outer Responsive Layout Container -->
 
-    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden bottom-2 left-1/2 -translate-x-1/2 w-[92%] max-w-[400px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-around items-center p-2 rounded-2xl shadow-[0_20px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-in-out" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
-        <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item dock-item transition-colors" aria-label="गृहपृष्ठ (Home Screen)">
-            <i data-lucide="home" class="w-5 h-5 flex-shrink-0"></i>
-            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Home</span>
-        </button>
-
-        <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item dock-item transition-colors" aria-label="अभ्यास खण्ड (Practice Suite)">
-            <div class="relative flex items-center justify-center flex-shrink-0">
-                <i data-lucide="book-open" class="w-5 h-5"></i>
-                <div class="absolute -top-1.5 -right-2 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-white dark:border-slate-900">2</div>
-            </div>
-            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Practice</span>
-        </button>
-
-        <!-- Center FAB (Create/Edit) -->
-        <div class="relative flex justify-center w-14 mx-1">
-            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-emerald-500/30 blur-xl rounded-full pointer-events-none"></div>
-            <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item relative z-10 w-[44px] h-[44px] bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-[0_4px_15px_rgba(16,185,129,0.3)]" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
-                <i data-lucide="edit-3" class="w-5 h-5"></i>
-                <span class="hidden">Create</span>
-            </button>
-        </div>
-
-        <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item dock-item transition-colors" aria-label="अध्ययन योजनाकार (Study Planner)">
-            <i data-lucide="calendar" class="w-5 h-5 flex-shrink-0"></i>
-            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Planner</span>
-        </button>
-
-        <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item dock-item transition-colors" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
-            <i data-lucide="bar-chart-2" class="w-5 h-5 flex-shrink-0"></i>
-            <span class="dock-text hidden text-[10px] font-bold tracking-wider uppercase ml-1.5 whitespace-nowrap">Stats</span>
-        </button>
-    </nav>
+    <!-- Remaining bottom nav parts moved to top -->
     <div id="krishi-offline-queue-badge" class="hidden" style="display:none !important;"></div>
 
     <!-- Capacitor Core Engine Bridge (Loaded dynamically only on native Android/iOS WebViews to prevent PWA 404 spam) -->
@@ -3423,14 +3425,14 @@
     </script>
 
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
-    <script src="./js/elite_animations_controller.js?v=x764het" defer></script>
-    <script src="./js/elite_3d_engine.js?v=x764het" defer></script>
-    <script src="./js/canvas_charts.js?v=x764het" defer></script>
-    <script src="./js/spaced_rep.js?v=x764het" defer></script>
-    <script src="./js/pwa_helpers.js?v=x764het" defer></script>
-    <script src="./js/sqlite_db.js?v=x764het" defer></script>
-    <script src="./js/krishi_idb.js?v=x764het"></script>
-    <script src="./js/app.js?v=x764het" defer></script>
+    <script src="./js/elite_animations_controller.js?v=jnd8hyp" defer></script>
+    <script src="./js/elite_3d_engine.js?v=jnd8hyp" defer></script>
+    <script src="./js/canvas_charts.js?v=jnd8hyp" defer></script>
+    <script src="./js/spaced_rep.js?v=jnd8hyp" defer></script>
+    <script src="./js/pwa_helpers.js?v=jnd8hyp" defer></script>
+    <script src="./js/sqlite_db.js?v=jnd8hyp" defer></script>
+    <script src="./js/krishi_idb.js?v=jnd8hyp"></script>
+    <script src="./js/app.js?v=jnd8hyp" defer></script>
 
 
     <!--
@@ -3458,7 +3460,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=x764het" defer></script>
+    <script src="./js/voice_assistant.js?v=jnd8hyp" defer></script>
 </body>
 </html>
 

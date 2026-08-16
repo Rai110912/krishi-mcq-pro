@@ -526,9 +526,22 @@ class KrishiSM2Engine {
 
     static _getData() {
         let data = {};
+        let dataMigrated = false;
         try {
             const raw = localStorage.getItem(this.STORAGE_KEY);
             data = raw ? JSON.parse(raw) : {};
+            
+            Object.values(data).forEach(item => {
+                if (item.nextReviewDate && !item.nextReview) {
+                    item.nextReview = new Date(item.nextReviewDate).getTime();
+                    dataMigrated = true;
+                }
+                if (item.repetitions !== undefined && item.reviews === undefined) {
+                    item.reviews = item.repetitions;
+                    dataMigrated = true;
+                }
+            });
+            if (dataMigrated) this._saveData(data);
         } catch(e) {}
         
         // Backward compatibility migration from legacy krishi_review

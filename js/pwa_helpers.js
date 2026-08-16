@@ -371,7 +371,9 @@ async function checkAndSyncDeltaQuestions() {
             showUpdateProgressHUD(`⚡ पृष्ठभूमिमा ${data.added_questions.length} वटा नयाँ कृषि प्रश्नहरू सिङ्क हुँदैछन्...`, 'syncing', 0);
         }
 
-        if (!Array.isArray(window.allQuestions)) {
+        if (typeof window.getAllQuestions === 'function') {
+            window.allQuestions = window.getAllQuestions();
+        } else if (!Array.isArray(window.allQuestions)) {
             window.allQuestions = [];
         }
 
@@ -386,6 +388,10 @@ async function checkAndSyncDeltaQuestions() {
                 existingMap.add(qKey);
             }
         });
+
+        if (data.timestamp) {
+            localStorage.setItem('krishi_last_delta_sync_time', String(data.timestamp));
+        }
 
         if (newItemsToInsert.length > 0) {
             console.log(`[DeltaSync] Successfully merged ${newItemsToInsert.length} new questions into active memory.`);
@@ -405,10 +411,6 @@ async function checkAndSyncDeltaQuestions() {
             });
             if (deferredMediaUrls.length > 0 && window.KrishiPreCachePriorityManager) {
                 window.KrishiPreCachePriorityManager.scheduleDeferredMediaCache(deferredMediaUrls);
-            }
-
-            if (data.timestamp) {
-                localStorage.setItem('krishi_last_delta_sync_time', String(data.timestamp));
             }
 
             const successMsg = `✅ ${newItemsToInsert.length} वटा नयाँ प्रश्नहरू स्वतः जोडिए! (जम्मा: ${window.allQuestions.length})`;

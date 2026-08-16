@@ -1764,7 +1764,7 @@ function loadData(){
             const statLogs = document.getElementById('sync-stat-logs');
 
             if (statBookmarks) statBookmarks.innerText = localData.bookmarked ? localData.bookmarked.length : 0;
-            if (statMistakes) statMistakes.innerText = (localData.wrong || []).length;
+            if (statMistakes) statMistakes.innerText = getValidWrongCount();
             if (statStreak) {
                 const computedStreak = typeof getStreakCount === 'function' ? getStreakCount() : 0;
                 statStreak.innerText = `${computedStreak} days`;
@@ -2625,7 +2625,7 @@ function loadData(){
                 try {
                     const localBms = (localData.bookmarked || []).length;
                     const cloudBms = (cloudData.bookmarked || []).length;
-                    const localWrongs = (localData.wrong || []).length;
+                    const localWrongs = getValidWrongCount();
                     const cloudWrongs = (cloudData.wrong || []).length;
                     
                     const localLogs = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []).length;
@@ -3141,6 +3141,12 @@ function loadData(){
 
     function getAllQuestions(){ return [...defaultQuestions, ...(localData.customQuestions || []).filter(q => !q.deleted)]; }
     function getCustomQuestions(){ return (localData.customQuestions || []).filter(q => !q.deleted); }
+    function getValidWrongCount() {
+        if (!localData || !localData.wrong) return 0;
+        const allQ = getAllQuestions();
+        const validIds = new Set(allQ.map(q => q.id));
+        return localData.wrong.filter(id => validIds.has(id)).length;
+    }
     function getPromoDueCount() {
         return getPlannerSettings().adaptiveReview ? getAdaptiveDueQuestions().length : getSpacedQueue().length;
     }
@@ -4188,7 +4194,7 @@ function loadData(){
 
     function updateSizingDiagnosticsInSetup() {
         // Load metrics counting
-        document.getElementById('prac-cfg-cnt-wrong').textContent = localData.wrong.length;
+        document.getElementById('prac-cfg-cnt-wrong').textContent = getValidWrongCount();
         document.getElementById('prac-cfg-cnt-bookmarks').textContent = localData.bookmarked.length;
         document.getElementById('prac-cfg-cnt-custom').textContent = getCustomQuestions().length;
         
@@ -9923,7 +9929,7 @@ document.querySelectorAll('button').forEach(btn => {
     // Individual Widget Card Template Renderers
     function renderWidgetSmartRecommendation(compact) {
         
-        let wrongCount = (localData.wrong || []).length;
+        let wrongCount = getValidWrongCount();
         let dueCount = getPromoDueCount();
         let target = getDailyTarget() || 50;
         let todayStr = getLocalDateString();
@@ -10038,7 +10044,7 @@ document.querySelectorAll('button').forEach(btn => {
             let sGoal = getGoalSettings();
             let weakSub = getWeakestSubject().subject;
             let target = getDailyTarget() || 50;
-            let incorrects = (localData.wrong || []).length;
+            let incorrects = getValidWrongCount();
             
             activePlanSequenceHTML = `
                 <div class="space-y-2.5 text-xs text-slate-800 dark:text-slate-250">
@@ -10570,7 +10576,7 @@ document.querySelectorAll('button').forEach(btn => {
 
     function renderWidgetReviewMistakes(compact) {
         
-        let wrongCount = (localData.wrong || []).length;
+        let wrongCount = getValidWrongCount();
         let pulseClass = wrongCount > 0 ? 'pulse-wrong-accent' : '';
         return `
             <button onclick="navigate('page-wrong-questions'); playSound('click');" class="w-full p-3.5 rounded-xl border text-left flex justify-between items-center hover-card-trigger ${pulseClass}" style="background:var(--card); border-color:var(--border);">
@@ -10763,7 +10769,7 @@ document.querySelectorAll('button').forEach(btn => {
             let elSpaced = document.getElementById('spaced-count');
             if (elSpaced) elSpaced.textContent = '(' + dueCount + ' due)';
             let elWrong = document.getElementById('wrong-count-home');
-            if (elWrong) elWrong.textContent = (localData.wrong ? localData.wrong.length : 0) + ' pending';
+            if (elWrong) elWrong.textContent = getValidWrongCount() + ' pending';
 
             if (typeof translateAppLabels === 'function') {
                 translateAppLabels();
@@ -10775,7 +10781,7 @@ document.querySelectorAll('button').forEach(btn => {
 
         // Update general dashboard counts
         let customCount = getCustomQuestions().length;
-        let wrongCount = (localData.wrong || []).length;
+        let wrongCount = getValidWrongCount();
         let bookmarkedCount = (localData.bookmarked || []).length;
         let totalCount = all.length;
         
@@ -11539,7 +11545,7 @@ document.querySelectorAll('button').forEach(btn => {
                 appVersion: 'Krishi MCQ Pro v28',
                 settings: getPlannerSettings(),
                 stats: localData.stats || {},
-                wrongQuestions: (localData.wrong || []).length,
+                wrongQuestions: getValidWrongCount(),
                 streakData: { current: localData.stats ? (localData.stats.streakDays || 0) : 0 },
                 totalSolved: localData.stats ? (localData.stats.totalSolved || 0) : 0,
                 subjectStats: localData.stats ? (localData.stats.subjectStats || {}) : {},
@@ -11828,7 +11834,7 @@ document.querySelectorAll('button').forEach(btn => {
         let mcqTarget = 30;
         let studyTime = "1 hour";
         let reviewCount = Math.min(10, getPromoDueCount());
-        let wrongCount = Math.min(15, (localData.wrong || []).length);
+        let wrongCount = Math.min(15, getValidWrongCount());
 
         if (plannerDemoModeActive) {
             wrongCount = 8;
@@ -12206,7 +12212,7 @@ document.querySelectorAll('button').forEach(btn => {
 
         // 6. Active Spaced Repeater Dashboard Metrics values
         let dueList = getPlannerSettings().adaptiveReview ? getAdaptiveDueQuestions() : getSpacedQueue();
-        let wrongCountReal = localData.wrong.length;
+        let wrongCountReal = getValidWrongCount();
         
         let dueCountVal = dueList.length;
         let overdueCountVal = 0;
@@ -12849,7 +12855,7 @@ document.querySelectorAll('button').forEach(btn => {
                 if (analyticsUseDemoMode) {
                     repMistakeEl.textContent = "You missed 'Soil profile and horizon layers' 3 times in your simulated tests.";
                 } else {
-                    let _filteredWr = (localData.wrong || []).length;
+                    let _filteredWr = getValidWrongCount();
                     if (_filteredWr > 0) {
                         repMistakeEl.textContent = `You currently have ${_filteredWr} pending incorrect questions requiring correction.`;
                     } else {
@@ -13680,7 +13686,7 @@ function updatePracticePage() {
     let subjects = getAllSubjects(); 
     let all = getAllQuestions();
     let dueCount = getPromoDueCount();
-    let wrongCount = (localData.wrong || []).length;
+    let wrongCount = getValidWrongCount();
     let bookmarkedCount = (localData.bookmarked || []).length;
 
     // १. नयाँ स्मार्ट इन्जिन रेन्डर गर्ने
@@ -15510,6 +15516,13 @@ window.initNepalGlobe = function() {
         let q = window.swiperState.cards[window.swiperState.index];
         if (q) {
             updateSpacedRepetition(q.id, true, 5);
+            if (localData && localData.wrong && localData.wrong.includes(q.id)) {
+                localData.wrong = localData.wrong.filter(id => id !== q.id);
+                if (!localData.wrongLog) localData.wrongLog = {};
+                let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
+                localData.wrongLog[q.id] = { action: 'remove', timestamp: Date.now(), _rev: rev + 1 };
+                saveData();
+            }
         }
 
         playSound('correct');

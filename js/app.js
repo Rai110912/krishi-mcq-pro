@@ -4931,7 +4931,7 @@ function loadData(){
             detail: { isCorrect: isCorrect, correctOptionText: correctOptionText } 
         }));
 
-        if (window.KrishiSM2Engine) {
+        if (window.KrishiSM2Engine && state.activeConfig?.isSpacedReview) {
             window.KrishiSM2Engine.recordAnswer(q.id || q.q, isCorrect, secondsSpent);
         }
 
@@ -12201,30 +12201,30 @@ document.querySelectorAll('button').forEach(btn => {
         let dueList = window.KrishiSM2Engine ? window.KrishiSM2Engine.getDueQuestions(getAllQuestions()) : [];
         let wrongCountReal = getValidWrongCount();
         
-        let dueCountVal = dueList.length;
+        let dueCountVal = 0;
         let overdueCountVal = 0;
         let upcomingCountVal = 0;
         let masteredCountVal = 0;
 
-        let todayStamp = getLocalDateString();
-        if (getPlannerSettings().adaptiveReview) {
-            let sm2EngineData = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+        if (window.KrishiSM2Engine) {
+            let sm2EngineData = window.KrishiSM2Engine._getData();
+            let now = new Date();
+            let startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            let endOfToday = startOfToday + (24 * 3600 * 1000) - 1;
+
             for (let id in sm2EngineData) {
                 let node = sm2EngineData[id];
-                if (node.nextReviewDate < todayStamp) overdueCountVal++;
-                else if (node.nextReviewDate === todayStamp) dueCountVal++;
-                else upcomingCountVal++;
-                if (node.repetitions >= 4 || node.easeFactor >= 2.6) masteredCountVal++;
-            }
-        } else {
-            let sm2EngineData = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
-            for (let id in sm2EngineData) {
-                let node = sm2EngineData[id];
-                let dst = node.nextReviewDate;
-                if (dst) {
-                    if (dst < todayStamp) overdueCountVal++;
-                    else if (dst === todayStamp) dueCountVal++;
-                    else upcomingCountVal++;
+                if (node.status === 'mastered') {
+                    masteredCountVal++;
+                } else if (node.status !== 'suspended') {
+                    if (node.status === 'due') {
+                        // Immediately due because of fail
+                        dueCountVal++;
+                    } else if (node.nextReview) {
+                        if (node.nextReview < startOfToday) overdueCountVal++;
+                        else if (node.nextReview <= endOfToday) dueCountVal++;
+                        else upcomingCountVal++;
+                    }
                 }
             }
         }
@@ -15486,7 +15486,6 @@ window.initNepalGlobe = function() {
 
         let q = window.swiperState.cards[window.swiperState.index];
         if (q) {
-            if (window.KrishiSM2Engine) window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, 5);
             if (localData && localData.wrong && !localData.wrong.includes(q.id)) {
                 localData.wrong.push(q.id);
                 saveData();
@@ -15513,7 +15512,6 @@ window.initNepalGlobe = function() {
 
         let q = window.swiperState.cards[window.swiperState.index];
         if (q) {
-            if (window.KrishiSM2Engine) window.KrishiSM2Engine.recordAnswer(q.id || q.q, true, 5);
             if (localData && localData.wrong && localData.wrong.includes(q.id)) {
                 localData.wrong = localData.wrong.filter(id => id !== q.id);
                 if (!localData.wrongLog) localData.wrongLog = {};

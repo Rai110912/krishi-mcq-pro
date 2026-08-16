@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v94-gy9zl1o';;
+const CACHE_NAME = 'krishi-mcq-v95-5tp3kke';;
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -11,19 +11,19 @@ self.addEventListener('install', event => {
           fetch('./index.html', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.html', r); }),
           fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
           fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
-          fetch('./index.css?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=gy9zl1o', r); }),
+          fetch('./index.css?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=5tp3kke', r); }),
           fetch('./questions.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./questions.json', r); }),
           fetch('./js/libs/tailwindcss.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/tailwindcss.js', r); }),
           fetch('./js/libs/lucide.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lucide.js', r); }),
-          fetch('./js/canvas_charts.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=gy9zl1o', r); }),
-          fetch('./js/spaced_rep.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js?v=gy9zl1o', r); }),
-          fetch('./js/pwa_helpers.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=gy9zl1o', r); }),
-          fetch('./js/app.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=gy9zl1o', r); }),
-          fetch('./js/elite_animations_controller.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=gy9zl1o', r); }),
-          fetch('./js/elite_3d_engine.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=gy9zl1o', r); }),
+          fetch('./js/canvas_charts.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=5tp3kke', r); }),
+          fetch('./js/spaced_rep.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js?v=5tp3kke', r); }),
+          fetch('./js/pwa_helpers.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=5tp3kke', r); }),
+          fetch('./js/app.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=5tp3kke', r); }),
+          fetch('./js/elite_animations_controller.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=5tp3kke', r); }),
+          fetch('./js/elite_3d_engine.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=5tp3kke', r); }),
           fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
           fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); }),
-          fetch('./js/sqlite_db.js?v=gy9zl1o', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=gy9zl1o', r); }),
+          fetch('./js/sqlite_db.js?v=5tp3kke', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=5tp3kke', r); }),
           fetch('./js/ambient_player.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/ambient_player.js', r); }),
           fetch('./js/firebase-firestore-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-firestore-compat.js', r); }),
           fetch('./js/libs/qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/qrcode.min.js', r); }),

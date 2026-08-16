@@ -525,12 +525,43 @@ class KrishiSM2Engine {
     static STORAGE_KEY = 'krishi_sm2';
 
     static _getData() {
+        let data = {};
         try {
             const raw = localStorage.getItem(this.STORAGE_KEY);
-            return raw ? JSON.parse(raw) : {};
+            data = raw ? JSON.parse(raw) : {};
+        } catch(e) {}
+        
+        // Backward compatibility migration from legacy krishi_review
+        try {
+            let legacyRaw = localStorage.getItem('krishi_review');
+            if (legacyRaw) {
+                let legacyData = JSON.parse(legacyRaw);
+                if (legacyData && typeof legacyData === 'object' && !Array.isArray(legacyData)) {
+                    let migrated = false;
+                    Object.entries(legacyData).forEach(([qid, date]) => {
+                        let id = String(qid);
+                        if (!data[id]) {
+                            data[id] = { 
+                                reviews: 0, interval: 1, easeFactor: 2.5, lapses: 0, status: 'due',
+                                difficulty: 5, stability: 0.5, retrievability: 0,
+                                nextReview: new Date(date).getTime()
+                            };
+                            migrated = true;
+                        } else if (!data[id].nextReview) {
+                            data[id].nextReview = new Date(date).getTime();
+                            migrated = true;
+                        }
+                    });
+                    if (migrated) {
+                        this._saveData(data);
+                    }
+                }
+                localStorage.removeItem('krishi_review');
+            }
         } catch(e) {
-            return {};
+            localStorage.removeItem('krishi_review');
         }
+        return data;
     }
 
     static _saveData(data) {
@@ -658,16 +689,29 @@ class KrishiSM2Engine {
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
         const now = todayEnd.getTime();
+        
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const startNow = todayStart.getTime();
+
         let dueCount = 0;
+        let overdueCount = 0;
+        let upcomingCount = 0;
         let masteredCount = 0;
         let totalTracked = Object.keys(data).length;
 
         Object.values(data).forEach(rec => {
             if (rec.status === 'mastered') masteredCount++;
-            else if (rec.status === 'due' || (rec.nextReview && rec.nextReview <= now)) dueCount++;
+            else if (rec.nextReview) {
+                if (rec.nextReview < startNow) overdueCount++;
+                else if (rec.nextReview <= now) dueCount++;
+                else upcomingCount++;
+            } else if (rec.status === 'due') {
+                dueCount++;
+            }
         });
 
-        return { dueCount, masteredCount, totalTracked };
+        return { dueCount, overdueCount, upcomingCount, masteredCount, totalTracked };
     }
 
     static updateHUDStats() {

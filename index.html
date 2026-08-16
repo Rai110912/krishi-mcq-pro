@@ -18,7 +18,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-    <link href="./index.css?v=gy9zl1o" rel="stylesheet">
+    <link href="./index.css?v=5tp3kke" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by clearing old caches if a new version is active
         if ('serviceWorker' in navigator && window.caches) {
@@ -869,53 +869,67 @@
             </button>
 
             <!-- SMART PRACTICE MODES -->
-            <div class="space-y-2">
+            <div class="space-y-3">
                 <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider" style="color:var(--text-secondary);">⚡ Smart Practice Engine</h3>
+                
+                <!-- START SMART PRACTICE (Hybrid) Mega Button -->
+                <div onclick="startSmartPracticeMode('smart'); playSound('click');" class="p-4 bg-gradient-to-r from-indigo-500 to-purple-600 border-none rounded-2xl flex flex-col justify-center items-center cursor-pointer hover:shadow-lg hover:shadow-indigo-500/30 transition active:scale-97 text-white text-center shadow-md">
+                    <span class="text-3xl mb-1 drop-shadow-sm">🤖</span>
+                    <h4 class="font-black text-base">Start Smart Practice</h4>
+                    <p class="text-[9px] text-indigo-100 font-medium mt-1">Personalized mix of Due, Weak & Mistake topics</p>
+                </div>
+
                 <div class="grid grid-cols-2 gap-2.5">
-                    <!-- SM-2 Memory Refresh Spaced Repetition Drill -->
+                    <!-- SM-2 Memory Refresh -->
                     <div id="sm2-dashboard-card" onclick="startSmartPracticeMode('sm2'); playSound('click');" class="p-3 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 dark:from-emerald-900/30 dark:to-teal-900/30 border border-emerald-500/30 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-500 transition active:scale-97 col-span-2">
                         <span class="text-xl">🧠</span>
                         <div class="flex-1 flex justify-between items-center">
                             <div>
-                                <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">SM-2 Spaced Repetition Memory Refresh</p>
-                                <p class="text-[8.5px] text-slate-500 dark:text-slate-400">कण्ठ गर्नुपर्ने प्रश्नहरू (Scientific Spaced Review)</p>
+                                <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">SM-2 Spaced Repetition</p>
+                                <p class="text-[8.5px] text-slate-500 dark:text-slate-400">Review due flashcards</p>
                             </div>
                             <span class="bg-emerald-600 text-white font-mono font-bold text-[10px] px-2 py-0.5 rounded-full shadow-sm" id="sm2-due-badge-count">0</span>
                         </div>
                     </div>
-                    <!-- Weak Topic -> based on stats -->
+                    
+                    <!-- Mistake Recovery -->
+                    <div onclick="startSmartPracticeMode('wrong'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-rose-400 dark:hover:border-rose-500 transition active:scale-97">
+                        <span class="text-lg">🩹</span>
+                        <div>
+                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Mistakes</p>
+                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Fix recent errors</p>
+                        </div>
+                    </div>
+
+                    <!-- Weak Topics -->
                     <div onclick="startSmartPracticeMode('weak'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
                         <span class="text-lg">📉</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Weak Topics</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Focus low-accuracy topics</p>
+                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Focus on low accuracy</p>
                         </div>
                     </div>
-                    <!-- Bookmark Practice -->
-                    <div onclick="startSmartPracticeMode('bookmark'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">★</span>
+                    
+                    <!-- Bookmarks -->
+                    <div onclick="startSmartPracticeMode('bookmark'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-amber-400 dark:hover:border-amber-500 transition active:scale-97">
+                        <span class="text-lg">⭐</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Bookmarks</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-bookmark-count-lbl">0 saved items</p>
+                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-bookmark-count-lbl">Saved items</p>
                         </div>
                     </div>
+
                     <!-- Speed practice -->
-                    <div onclick="startSmartPracticeMode('speed'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
+                    <div onclick="startSmartPracticeMode('speed'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition active:scale-97">
                         <span class="text-lg">⏱</span>
                         <div>
-                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Speed Practice</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">30s per-question sprint</p>
+                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Speed</p>
+                            <p class="text-[8px] text-slate-500 dark:text-slate-400">30s sprint</p>
                         </div>
                     </div>
-                    <!-- Daily Target -->
-                    <div onclick="startSmartPracticeMode('daily'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">🎯</span>
-                        <div>
-                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Daily Target</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-daily-count-lbl">Practice to hit target</p>
-                        </div>
-                    </div>
-                    <!-- Tinder Flashcard Swiper (Permanently Active) -->
+                </div>
+                
+                <!-- Tinder Flashcard Swiper (Permanently Active) -->
                     <div id="hybrid-tinder-swiper-btn" onclick="startFlashcardSwiper(); playSound('click');" class="p-3 bg-gradient-to-r from-emerald-50 to-teal-50/50 dark:from-emerald-950/10 dark:to-teal-950/10 border border-emerald-500/20 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-400 transition active:scale-97 col-span-2">
                         <span class="text-lg">🎴</span>
                         <div>
@@ -3426,14 +3440,14 @@
     </script>
 
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
-    <script src="./js/elite_animations_controller.js?v=gy9zl1o" defer></script>
-    <script src="./js/elite_3d_engine.js?v=gy9zl1o" defer></script>
-    <script src="./js/canvas_charts.js?v=gy9zl1o" defer></script>
-    <script src="./js/spaced_rep.js?v=gy9zl1o" defer></script>
-    <script src="./js/pwa_helpers.js?v=gy9zl1o" defer></script>
-    <script src="./js/sqlite_db.js?v=gy9zl1o" defer></script>
-    <script src="./js/krishi_idb.js?v=gy9zl1o"></script>
-    <script src="./js/app.js?v=gy9zl1o" defer></script>
+    <script src="./js/elite_animations_controller.js?v=5tp3kke" defer></script>
+    <script src="./js/elite_3d_engine.js?v=5tp3kke" defer></script>
+    <script src="./js/canvas_charts.js?v=5tp3kke" defer></script>
+
+    <script src="./js/pwa_helpers.js?v=5tp3kke" defer></script>
+    <script src="./js/sqlite_db.js?v=5tp3kke" defer></script>
+    <script src="./js/krishi_idb.js?v=5tp3kke"></script>
+    <script src="./js/app.js?v=5tp3kke" defer></script>
 
 
     <!--
@@ -3461,7 +3475,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=gy9zl1o" defer></script>
+    <script src="./js/voice_assistant.js?v=5tp3kke" defer></script>
 </body>
 </html>
 

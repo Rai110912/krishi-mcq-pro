@@ -1413,8 +1413,12 @@ button, a, input, select, textarea {
 .header-hide {
     transform: translateY(-100%);
 }
+#nav-btn-2:not([style*="var(--primary)"]) {
+    color: #e2e8f0 !important;
+}
+
 .bottom-nav-hide {
-    transform: translateX(-50%) translateY(140%) !important;
+    transform: translateY(140%) !important;
 }
 
 /* macOS-style Floating Zoom Dock */

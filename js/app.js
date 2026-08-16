@@ -482,10 +482,8 @@ async function loadStaticQuestions() {
             // Allow 50px threshold before hiding to prevent jitter
             if (currentScrollY > lastScrollY && currentScrollY > 60) {
                 if(mobileHeader) mobileHeader.classList.add('header-hide');
-                if(mobileBottomNav) mobileBottomNav.classList.add('bottom-nav-hide');
             } else {
                 if(mobileHeader) mobileHeader.classList.remove('header-hide');
-                if(mobileBottomNav) mobileBottomNav.classList.remove('bottom-nav-hide');
             }
             lastScrollY = currentScrollY;
         }, { passive: true });

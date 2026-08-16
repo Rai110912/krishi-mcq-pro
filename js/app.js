@@ -12241,6 +12241,18 @@ document.querySelectorAll('button').forEach(btn => {
         document.getElementById('lbl-review-upcoming').textContent = upcomingCountVal;
         document.getElementById('lbl-review-mastered').textContent = masteredCountVal;
 
+        // Update bottom nav Practice Tab badge
+        let navPracticeBadge = document.getElementById('nav-practice-badge');
+        if (navPracticeBadge) {
+            let totalPracticePending = dueCountVal + overdueCountVal + wrongCountReal;
+            if (totalPracticePending > 0) {
+                navPracticeBadge.textContent = totalPracticePending > 99 ? '99+' : totalPracticePending;
+                navPracticeBadge.classList.remove('hidden');
+            } else {
+                navPracticeBadge.classList.add('hidden');
+            }
+        }
+
         // 7. Render Subject Proficiency Matrix Lists
         let matrixHTML = '';
         getAllSubjects().forEach(sub => {

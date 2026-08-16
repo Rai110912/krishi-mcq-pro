@@ -4090,6 +4090,7 @@ function loadData(){
     function startMockTest(cnt, mins){
         stopTimer();
         let pool = shuffle(getAllQuestions()).slice(0, cnt);
+        state.activeConfig = { subject: 'all', topic: 'all', difficulty: 'all', count: cnt, timer: 'on', timerMin: mins, perQTimer: 'off', perQSec: 0, negativeMarking: 'on', feedback: 'end', shuffleQs: true, shuffleOpts: true, isMock: true };
         setupMCQSession(pool, true, mins * 60);
     }
 
@@ -4101,6 +4102,7 @@ function loadData(){
         if(sub!=='all') pool=pool.filter(q=>q.sub===sub);
         pool = shuffle(pool).slice(0, Math.min(cnt, pool.length));
         if(pool.length===0){ showToast('No questions matched filters!'); return; }
+        state.activeConfig = { subject: sub, topic: 'all', difficulty: 'all', count: cnt, timer: 'on', timerMin: mins, perQTimer: 'off', perQSec: 0, negativeMarking: 'on', feedback: 'end', shuffleQs: true, shuffleOpts: true, isMock: true };
         setupMCQSession(pool, true, mins * 60);
     }
 
@@ -4571,19 +4573,65 @@ function loadData(){
         state.answered = true;
         
         let q = state.questions[state.currentIndex];
+        let secondsSpent = state.activeConfig?.perQSec || 30;
+        state.totalTimeSpent += secondsSpent;
         recordQuestionTime(q.id, q.sub, q.difficulty||'Easy', false);
-        state.timeSpentArray.push({ id: q.id, sub: q.sub, sec: state.activeConfig?.perQSec || 30, correct: false });
+        state.timeSpentArray.push({ id: q.id, sub: q.sub, seconds: secondsSpent, correct: false });
+        
+        let showAnswersEnd = state.activeConfig && state.activeConfig.feedback === 'end';
         
         // Highlight wrong and correct
         let btns = document.querySelectorAll('.option-btn');
-        btns.forEach(b => b.classList.add('disabled'));
-        btns[q.ans].classList.add('correct');
+        let correctBtnNode = null;
+        btns.forEach(b => {
+            b.classList.add('disabled');
+            let oIdx = parseInt(b.dataset.originalIndex);
+            if (oIdx === q.ans) correctBtnNode = b;
+        });
         
-        if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
-        state.sessionResults.push({ id: q.id, correct: false, userAns: -1, timeout: true });
+        if (!showAnswersEnd && correctBtnNode) correctBtnNode.classList.add('glow-correct');
+        
+        // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
+        if (!state.activeConfig?.isSpacedReview) {
+            if (!localData.wrong) localData.wrong = [];
+            if (!localData.wrong.includes(q.id)) {
+                localData.wrong.push(q.id);
+                if (!localData.wrongLog) localData.wrongLog = {};
+                let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
+                localData.wrongLog[q.id] = { action: 'add', timestamp: Date.now(), _rev: rev + 1 };
+                saveData();
+            }
+        }
+        
+        // Decrement hearts in Premium Hybrid mode
+        const hybridEnabled = KrishiStorage.getItem('krishi_premium_hybrid') !== 'false';
+        if (hybridEnabled) {
+            if (typeof state.hybridHearts === 'undefined') state.hybridHearts = 5;
+            if (state.hybridHearts > 0) {
+                state.hybridHearts--;
+                let hybridHeartsCount = document.getElementById('hybrid-hearts-count');
+                if (hybridHeartsCount) {
+                    hybridHeartsCount.textContent = state.hybridHearts;
+                    let heartsBadge = document.getElementById('hybrid-hearts-badge');
+                    if (heartsBadge) {
+                        heartsBadge.classList.add('scale-125');
+                        heartsBadge.style.color = '#e11d48';
+                        setTimeout(() => {
+                            heartsBadge.classList.remove('scale-125');
+                            heartsBadge.style.color = '';
+                        }, 300);
+                    }
+                }
+                if (state.hybridHearts === 0) {
+                    showToast('💔 Hearts सकियो! तर चिन्ता नगर्नुहोस्, यो अभ्यास जारी राख्नुहोस्।');
+                }
+            }
+        }
+        
+        state.sessionResults.push({ id: q.id, correct: false, userAns: -1, timeout: true, seconds: secondsSpent, confidence: 'Low' });
 
         // If not silent simulator
-        if (state.activeConfig?.feedback !== 'end') {
+        if (!showAnswersEnd) {
             document.getElementById('q-explanation-container').classList.remove('hidden');
             document.getElementById('q-explanation').textContent = q.expl || 'Explanation not provided.';
         }
@@ -4830,10 +4878,10 @@ function loadData(){
         let showAnswersEnd = state.activeConfig && state.activeConfig.feedback === 'end';
 
         if(isCorrect){
-            playSound('correct');
-            triggerHaptic('correct');
-            showFeedbackSpeechTag("🎯 Correct answer!");
             if (!showAnswersEnd) {
+                playSound('correct');
+                triggerHaptic('correct');
+                showFeedbackSpeechTag("🎯 Correct answer!");
                 if (selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
             }
             state.score++;
@@ -4845,10 +4893,10 @@ function loadData(){
                 localData.wrongLog[q.id] = { action: 'remove', timestamp: Date.now(), _rev: rev + 1 };
             }
         } else {
-            playSound('wrong');
-            triggerHaptic('wrong');
-            showFeedbackSpeechTag("❌ Incorrect!");
             if (!showAnswersEnd) {
+                playSound('wrong');
+                triggerHaptic('wrong');
+                showFeedbackSpeechTag("❌ Incorrect!");
                 if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
                 if (correctBtnNode) correctBtnNode.classList.add('glow-correct');
             }

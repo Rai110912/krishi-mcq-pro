@@ -1,0 +1,18 @@
+
+[1m[37m===[39m Deploying to 'krishi-mcq-pro'...[22m
+
+[36m[1mi [22m[39m deploying [1mhosting[22m
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m beginning deploy...
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m found 35 files in [1mwww[22m
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m file upload complete
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m finalizing version...
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m version finalized
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m releasing new version...
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m release complete
+
+[32m[1m+ [22m[39m [1m[4mDeploy complete![24m[22m
+
+[1mProject Console:[22m https://console.firebase.google.com/project/krishi-mcq-pro/overview
+[1mHosting URL:[22m https://krishi-mcq-pro.web.app
+
+[32m[1m+  hosting:channel:[22m[39m Channel URL ([1mkrishi-mcq-pro[22m): https://krishi-mcq-pro--staging-i45h40ep.web.app [expires [1m2026-08-23 13:19:36[22m]

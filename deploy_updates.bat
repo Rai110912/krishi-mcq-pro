@@ -78,12 +78,24 @@ echo  =^> Backup saved to .backups\%backup_name%
 echo.
 
 echo [8/8] Uploading to Firebase Hosting...
-call npx.cmd -y -p firebase-tools !FIREBASE_CMD!
+echo ⏳ Please wait, this may take 10-30 seconds. Do not close the window...
+set FORCE_COLOR=0
+call npx.cmd -y -p firebase-tools !FIREBASE_CMD! > firebase_deploy_log.txt 2>&1
+type firebase_deploy_log.txt
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Firebase deploy failed!
     goto error_exit
 )
 echo.
+
+if "%deploy_mode%"=="1" (
+    echo ==============================================================
+    echo  🔎 YOUR SECRET PREVIEW LINK IS READY!
+    echo ==============================================================
+    powershell -Command "$lines = Get-Content firebase_deploy_log.txt; $url = ''; foreach ($line in $lines) { if ($line -match 'Channel URL|Hosting URL|URL:') { $url = [regex]::Match($line, 'https://[a-zA-Z0-9\-\.]+').Value; break; } }; if ($url) { Write-Host ' 🔗 CLICK OR COPY THIS LINK: ' -NoNewline; Write-Host $url -ForegroundColor Cyan -BackgroundColor Black; } else { Write-Host ' [Warning] Could not parse URL from logs.' }"
+    echo ==============================================================
+    echo.
+)
 
 echo [Bonus] Saving to Git Repository...
 git add .

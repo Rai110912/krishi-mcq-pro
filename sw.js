@@ -1,4 +1,4 @@
-const CACHE_NAME = 'agriculture-exam-v9';
+const CACHE_NAME = 'krishi-mcq-v67-z2wpz2l';;
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -11,18 +11,24 @@ self.addEventListener('install', event => {
           fetch('./index.html', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.html', r); }),
           fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
           fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
-          fetch('./index.css', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css', r); }),
+          fetch('./index.css?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=z2wpz2l', r); }),
           fetch('./questions.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./questions.json', r); }),
           fetch('./js/libs/tailwindcss.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/tailwindcss.js', r); }),
           fetch('./js/libs/lucide.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lucide.js', r); }),
-          fetch('./js/canvas_charts.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js', r); }),
-          fetch('./js/spaced_rep.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js', r); }),
-          fetch('./js/pwa_helpers.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js', r); }),
-          fetch('./js/app.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js', r); }),
-          fetch('./js/elite_animations_controller.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js', r); }),
-          fetch('./js/elite_3d_engine.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js', r); }),
+          fetch('./js/canvas_charts.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=z2wpz2l', r); }),
+          fetch('./js/spaced_rep.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/spaced_rep.js?v=z2wpz2l', r); }),
+          fetch('./js/pwa_helpers.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=z2wpz2l', r); }),
+          fetch('./js/app.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=z2wpz2l', r); }),
+          fetch('./js/elite_animations_controller.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=z2wpz2l', r); }),
+          fetch('./js/elite_3d_engine.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=z2wpz2l', r); }),
           fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
-          fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); })
+          fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); }),
+          fetch('./js/sqlite_db.js?v=z2wpz2l', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=z2wpz2l', r); }),
+          fetch('./js/ambient_player.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/ambient_player.js', r); }),
+          fetch('./js/firebase-firestore-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-firestore-compat.js', r); }),
+          fetch('./js/libs/qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/qrcode.min.js', r); }),
+          fetch('./js/libs/html5-qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/html5-qrcode.min.js', r); }),
+          fetch('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js', r); })
         ]);
       })
       .then(() => self.skipWaiting())
@@ -90,11 +96,14 @@ self.addEventListener('fetch', event => {
                         event.request.url.includes('fonts.gstatic.com') ||
                         event.request.url.includes('/js/firebase-') ||
                         event.request.url.includes('/js/elite_') ||
-                        event.request.url.includes('unpkg.com');
+                        event.request.url.includes('unpkg.com') ||
+                        event.request.url.includes('tesseract.js') ||
+                        event.request.url.includes('tessdata') ||
+                        event.request.url.includes('projectnaptha');
 
   if (isStaticAsset) {
     event.respondWith(
-      caches.match(event.request, { ignoreSearch: true })
+      caches.match(event.request)
         .then(cachedResponse => {
           if (cachedResponse) {
             return cachedResponse;
@@ -113,6 +122,17 @@ self.addEventListener('fetch', event => {
             });
         })
     );
+    return;
+  }
+
+  const isApiRequest = event.request.url.includes('firestore.googleapis.com') ||
+                       event.request.url.includes('generativelanguage.googleapis.com') ||
+                       event.request.url.includes('identitytoolkit.googleapis.com') ||
+                       event.request.url.includes('securetoken.googleapis.com') ||
+                       event.request.url.includes('elevenlabs.io');
+
+  if (isApiRequest) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
@@ -146,132 +166,7 @@ self.addEventListener('fetch', event => {
 });
 
 // ==================== BACKGROUND SYNCHRONIZATION EVENT ====================
-function getQueuedSyncData() {
-  return new Promise((resolve) => {
-    if (typeof indexedDB === 'undefined') {
-      resolve(null);
-      return;
-    }
-    const request = indexedDB.open('KrishiOfflineSyncDB', 1);
-    request.onerror = () => resolve(null);
-    request.onsuccess = event => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains('sync_queue')) {
-        resolve(null);
-        return;
-      }
-      try {
-        const tx = db.transaction('sync_queue', 'readonly');
-        const store = tx.objectStore('sync_queue');
-        const getReq = store.get('pending_sync');
-        getReq.onsuccess = () => resolve(getReq.result);
-        getReq.onerror = () => resolve(null);
-      } catch (e) {
-        resolve(null);
-      }
-    };
-  });
-}
-
-function clearQueuedSyncData() {
-  return new Promise((resolve) => {
-    if (typeof indexedDB === 'undefined') {
-      resolve();
-      return;
-    }
-    const request = indexedDB.open('KrishiOfflineSyncDB', 1);
-    request.onsuccess = event => {
-      const db = event.target.result;
-      if (db.objectStoreNames.contains('sync_queue')) {
-        try {
-          const tx = db.transaction('sync_queue', 'readwrite');
-          tx.objectStore('sync_queue').delete('pending_sync');
-        } catch (e) {}
-      }
-      resolve();
-    };
-    request.onerror = () => resolve();
-  });
-}
-
-function toFirestoreValue(val) {
-  if (typeof val === 'number') {
-    return { "doubleValue": val };
-  } else if (typeof val === 'boolean') {
-    return { "booleanValue": val };
-  } else if (typeof val === 'string') {
-    return { "stringValue": val };
-  } else if (Array.isArray(val)) {
-    return {
-      "arrayValue": {
-        "values": val.map(item => toFirestoreValue(item))
-      }
-    };
-  } else if (val && typeof val === 'object') {
-    const fields = {};
-    Object.entries(val).forEach(([k, v]) => {
-      fields[k] = toFirestoreValue(v);
-    });
-    return {
-      "mapValue": {
-        "fields": fields
-      }
-    };
-  }
-  return { "nullValue": null };
-}
-
-self.addEventListener('sync', event => {
-  if (event.tag === 'krishi-db-sync') {
-    event.waitUntil(
-      getQueuedSyncData().then(syncData => {
-        if (!syncData || !syncData.syncKey || !syncData.payload) {
-          return;
-        }
-
-        const syncKey = syncData.syncKey;
-        const payload = syncData.payload;
-        const projectId = syncData.projectId || 'krishi-mcq-pro';
-        
-        // Firestore REST API PATCH URL to dynamically update documents
-        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/sync_keys/${syncKey}`;
-
-        console.log('[Service Worker] Executing W3C Background Sync (Firestore REST PATCH) for key:', syncKey);
-
-        const firestoreFields = {};
-        Object.entries(payload).forEach(([k, v]) => {
-          firestoreFields[k] = toFirestoreValue(v);
-        });
-
-        // Set the active updated time dynamically
-        firestoreFields['updatedAt'] = toFirestoreValue(Date.now());
-
-        const firestoreDoc = {
-          "fields": firestoreFields
-        };
-
-        return fetch(url, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(firestoreDoc)
-        }).then(res => {
-          if (res.status === 200 || res.ok) {
-            console.log('[Service Worker] Background Sync completed successfully!');
-            return clearQueuedSyncData();
-          } else {
-            console.warn('[Service Worker] Firestore REST API responded with error:', res.status);
-            throw new Error('Firestore REST error: ' + res.status);
-          }
-        }).catch(err => {
-          console.error('[Service Worker] Background Sync failed during network fetch:', err);
-          throw err;
-        });
-      })
-    );
-  }
-});
+// Custom background REST sync is deprecated; native Firestore offline persistence is utilized instead.
 
 // ==================== PERIODIC BACKGROUND SYNCHRONIZATION ====================
 function updateAppContentInBackground() {
@@ -284,7 +179,9 @@ function updateAppContentInBackground() {
         './js/libs/tailwindcss.js',
         './js/libs/lucide.js',
         'https://cdn.quilljs.com/1.3.7/quill.min.js',
-        'https://cdn.quilljs.com/1.3.7/quill.snow.css'
+        'https://cdn.quilljs.com/1.3.7/quill.snow.css',
+        './js/libs/qrcode.min.js',
+        './js/libs/html5-qrcode.min.js'
     ];
 
   return caches.open(CACHE_NAME).then(cache => {
@@ -314,4 +211,59 @@ self.addEventListener('message', event => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+});
+
+// Sync Event: Listen for background sync request to sync cloud database
+self.addEventListener('sync', event => {
+  if (event.tag === 'sync-cloud-data') {
+    console.log('[Service Worker] Background sync event triggered for cloud data');
+    event.waitUntil(
+      self.clients.matchAll().then(clients => {
+        clients.forEach(client => {
+          client.postMessage({ type: 'BACKGROUND_SYNC_TRIGGER' });
+        });
+      })
+    );
+  }
+});
+
+// ==================== FIREBASE CLOUD MESSAGING (BACKGROUND EVENT) ====================
+self.addEventListener('push', event => {
+  console.log('[Service Worker] Push event received.');
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch(e) {
+      data = { title: 'Notification', body: event.data.text() };
+    }
+  }
+
+  const title = data.title || 'Krishi MCQ Pro 🌾';
+  const options = {
+    body: data.body || 'New update or message available!',
+    icon: data.icon || './icon.svg',
+    badge: './icon.svg',
+    data: data.url || '/'
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window' }).then(clientList => {
+      for (const client of clientList) {
+        if (client.url === event.notification.data && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(event.notification.data || '/');
+      }
+    })
+  );
 });

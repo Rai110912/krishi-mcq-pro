@@ -1,6 +1,5 @@
 {
   "hosting": {
-    "site": "krishi-mcq-pro",
     "public": "www",
     "ignore": [
       "firebase.json",
@@ -8,9 +7,13 @@
       "**/.firebase/**",
       "**/.*",
       "**/node_modules/**",
-      "qa_audit.py",
-      "run_app.bat",
-      "ip.json"
+      "scratch/**",
+      "**/*.py",
+      "**/*.bat",
+      "**/*.exe",
+      "ip.json",
+      "android/**",
+      "ios/**"
     ],
     "headers": [
       {

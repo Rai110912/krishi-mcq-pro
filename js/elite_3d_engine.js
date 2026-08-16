@@ -28,6 +28,12 @@
     // 1. 🌱 Premium 3D Interactive Crop Growth Sandbox
     window.init3DCropGrowthSandbox = function(canvas, percent) {
         if (!canvas) return;
+        
+        // Clean up previous instance if it exists to prevent memory leaks and redundant RAF loops
+        if (canvas._krishi3DCleanup) {
+            canvas._krishi3DCleanup();
+        }
+
         let ctx = canvas.getContext('2d');
         let thetaX = -0.15;
         let thetaY = 0.5;
@@ -66,6 +72,17 @@
         canvas.addEventListener('touchstart', onDown, {passive: true});
         canvas.addEventListener('touchmove', onMove, {passive: true});
         window.addEventListener('touchend', onUp);
+
+        // Store cleanup function on canvas
+        canvas._krishi3DCleanup = function() {
+            canvas.removeEventListener('mousedown', onDown);
+            canvas.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.removeEventListener('touchstart', onDown);
+            canvas.removeEventListener('touchmove', onMove);
+            window.removeEventListener('touchend', onUp);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        };
 
         function generateCrop3DVertices(p) {
             let nodes = [];

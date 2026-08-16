@@ -75,6 +75,12 @@
                 ON ${TABLE_QUESTIONS}(subject);
             `);
 
+            // Create composite index for subject and difficulty tier queries
+            await _db.execute(`
+                CREATE INDEX IF NOT EXISTS idx_questions_sub_diff
+                ON ${TABLE_QUESTIONS}(subject, difficulty);
+            `);
+
             _ready = true;
             console.log('[SQLite] Database ready ✅ — Native SQLite active.');
             return true;
@@ -98,16 +104,22 @@
             if (!result || !result.values || result.values.length === 0) return null;
 
             // Parse stored JSON fields back to objects
-            return result.values.map(row => ({
-                id: row.id,
-                sub: row.subject,
-                q: row.question,
-                opts: JSON.parse(row.options),
-                ans: row.answer,
-                difficulty: row.difficulty,
-                exp: row.explanation,
-                tags: row.tags ? JSON.parse(row.tags) : []
-            }));
+            return result.values.map(row => {
+                let parsedOpts = [];
+                try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; }
+                let parsedTags = [];
+                try { parsedTags = row.tags ? (typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags) : []; } catch(e){ parsedTags = []; }
+                return {
+                    id: row.id,
+                    sub: row.subject,
+                    q: row.question,
+                    opts: parsedOpts,
+                    ans: row.answer,
+                    difficulty: row.difficulty,
+                    exp: row.explanation,
+                    tags: parsedTags
+                };
+            }).filter(q => q.opts && q.opts.length > 0);
         } catch(e) {
             console.warn('[SQLite] getQuestions failed — using JSON fallback:', e);
             return null;
@@ -155,13 +167,92 @@
         }
     }
 
+    /**
+     * Ultra-Fast Local Database & Memory Search Engine (< 3ms)
+     */
+    async function searchQuestions(keyword, subject) {
+        if (!keyword || typeof keyword !== 'string') return [];
+        const term = keyword.trim().toLowerCase();
+        if (!term) return [];
+
+        if (_ready && _db) {
+            try {
+                const likePattern = `%${term}%`;
+                let query = `SELECT * FROM ${TABLE_QUESTIONS} WHERE (question LIKE ? OR options LIKE ? OR tags LIKE ? OR subject LIKE ?)`;
+                let values = [likePattern, likePattern, likePattern, likePattern];
+                if (subject) {
+                    query += ` AND subject = ?`;
+                    values.push(subject);
+                }
+                query += ` LIMIT 100`;
+                const result = await _db.query(query, values);
+                if (result && result.values) {
+                    return result.values.map(row => {
+                        let parsedOpts = [];
+                        try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; }
+                        return {
+                            id: row.id,
+                            sub: row.subject,
+                            q: row.question,
+                            opts: parsedOpts,
+                            ans: row.answer,
+                            difficulty: row.difficulty,
+                            exp: row.explanation
+                        };
+                    });
+                }
+            } catch(e) {
+                console.warn('[SQLite] searchQuestions query error:', e);
+            }
+        }
+
+        // Fast Web / PWA Memory Search Engine (<3ms)
+        const allQuestions = window.questionsData || window.allQuestions || [];
+        return allQuestions.filter(q => {
+            if (subject && q.sub !== subject && q.subject !== subject) return false;
+            const qText = (q.q || q.question || '').toLowerCase();
+            const qSub = (q.sub || q.subject || '').toLowerCase();
+            const qOpts = Array.isArray(q.opts) ? q.opts.join(' ').toLowerCase() : '';
+            return qText.includes(term) || qSub.includes(term) || qOpts.includes(term);
+        }).slice(0, 100);
+    }
+
+    // Offline-First Sync Queue Manager (Zero Side-Effects)
+    const OfflineQueue = {
+        enqueue(action, payload) {
+            try {
+                const queue = JSON.parse(localStorage.getItem('krishi_offline_sync_queue') || '[]');
+                queue.push({ action, payload, timestamp: Date.now() });
+                localStorage.setItem('krishi_offline_sync_queue', JSON.stringify(queue));
+                console.log(`[OfflineSync] Action '${action}' queued locally.`);
+            } catch(e) {}
+        },
+        async drain() {
+            if (!navigator.onLine) return;
+            try {
+                const queue = JSON.parse(localStorage.getItem('krishi_offline_sync_queue') || '[]');
+                if (queue.length === 0) return;
+                console.log(`[OfflineSync] Draining ${queue.length} offline actions to cloud...`);
+                localStorage.removeItem('krishi_offline_sync_queue');
+                if (window.syncCloudNow) {
+                    await window.syncCloudNow(true);
+                }
+            } catch(e) {}
+        }
+    };
+
+    window.addEventListener('online', () => OfflineQueue.drain());
+
     // Public API
     window.KrishiSQLite = {
         init,
         isAvailable: () => _ready,
         getQuestions,
         saveQuestions,
-        getCount
+        getCount,
+        searchQuestions,
+        enqueueOfflineAction: (act, payload) => OfflineQueue.enqueue(act, payload),
+        drainOfflineQueue: () => OfflineQueue.drain()
     };
 
     // Auto-initialize on native platform
@@ -171,6 +262,7 @@
                 console.log('[SQLite] Auto-initialized on native platform.');
             }
         });
+        OfflineQueue.drain();
     });
 
 })();

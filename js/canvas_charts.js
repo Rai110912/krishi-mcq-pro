@@ -339,6 +339,8 @@ function animateWaterWave(canvas) {
 }
 
 function drawNeuralMap(canvas) {
+        if (canvas.dataset.neuralRunning === 'true') return;
+        canvas.dataset.neuralRunning = 'true';
         var ctx = canvas.getContext('2d');
         var nodes = [];
         var subjects = typeof window.getAllSubjects === 'function' ? window.getAllSubjects().slice(0, 4) : ['Agronomy', 'Soil', 'Horti', 'Pathology'];
@@ -383,7 +385,10 @@ function drawNeuralMap(canvas) {
         }
 
         function render() {
-            if (!canvas.parentNode) return;
+            if (!canvas.parentNode || canvas.dataset.neuralRunning === 'false') {
+                canvas.dataset.neuralRunning = 'false';
+                return;
+            }
             if (document.hidden) {
                 setTimeout(function() {
                     requestAnimationFrame(render);

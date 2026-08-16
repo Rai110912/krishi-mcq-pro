@@ -15,37 +15,95 @@
     <script src="./js/libs/tailwindcss.js"></script>
     <script defer src="./js/libs/lucide.js"></script>
     <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
-    <!-- Heavy libraries (Quill/Tesseract/PDF.js) are lazy-loaded on demand for faster first paint -->
-    <link href="./index.css" rel="stylesheet">
+    <script src="./js/libs/qrcode.min.js"></script>
+    <script src="./js/libs/html5-qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+    <link href="./index.css?v=z2wpz2l" rel="stylesheet">
+    <script>
+        // Break PWA caching deadlocks by clearing old caches if a new version is active
+        if ('serviceWorker' in navigator && window.caches) {
+            caches.keys().then(keys => {
+                keys.forEach(key => {
+                    if (!key.startsWith('agriculture-exam-v63')) {
+                        console.log('[Deadlock Breaker] Clearing legacy cache store:', key);
+                        caches.delete(key);
+                    }
+                });
+            });
+            navigator.serviceWorker.getRegistrations().then(regs => {
+                regs.forEach(reg => {
+                    try {
+                        reg.update();
+                    } catch(e) {}
+                });
+            });
+        }
+
+        // Synchronous, early-bound UI Accordion Controller to prevent network-load race conditions
+        function toggleSettingsAccordion(id) {
+            const accordions = ['gemini', 'sync', 'backup'];
+            accordions.forEach(acc => {
+                const body = document.getElementById('accordion-body-' + acc);
+                const chevron = document.getElementById('accordion-chevron-' + acc);
+                if (acc === id) {
+                    if (body) {
+                        const isHidden = body.classList.contains('hidden');
+                        if (isHidden) {
+                            body.classList.remove('hidden');
+                            if (chevron) {
+                                chevron.style.transform = 'rotate(180deg)';
+                                chevron.textContent = '▲';
+                            }
+                        } else {
+                            body.classList.add('hidden');
+                            if (chevron) {
+                                chevron.style.transform = 'rotate(0deg)';
+                                chevron.textContent = '▼';
+                            }
+                        }
+                    }
+                } else {
+                    if (body) body.classList.add('hidden');
+                    if (chevron) {
+                        chevron.style.transform = 'rotate(0deg)';
+                        chevron.textContent = '▼';
+                    }
+                }
+            });
+        }
+        window.toggleSettingsAccordion = toggleSettingsAccordion;
+        window.playSound = window.playSound || function() {};
+    </script>
 </head>
 <body>
     <!-- Real-Time Rendering Diagnostics Overlay -->
     <div id="fps-monitor-badge" class="fixed top-4 left-4 z-[99999] hidden px-2.5 py-1 rounded-full font-mono text-[9px] font-black shadow-lg border backdrop-blur-md transition-all duration-300 active:scale-95 cursor-pointer" style="background:rgba(15, 23, 42, 0.75); border-color:rgba(255,255,255,0.15); color:#10b981; box-shadow:0 4px 12px rgba(0,0,0,0.2);" onclick="this.classList.add('hidden'); document.getElementById('toggle-fps-monitor').checked = false;">FPS: --</div>
 <!-- New Feature Toast Container -->
     <div id="newfeat_toast-container" class="newfeat_toast-container"></div>
-    <!-- Splash Screen -->
+    <!-- Splash Screen (Ultra-HD Glassmorphic Agriculture Theme) -->
     <div id="splash-screen">
         <div class="splash-bg-grain"></div>
         <div id="splash-particles"></div>
-        <div class="text-center relative flex flex-col items-center justify-center h-72 w-80 z-10">
+        <div class="splash-glass-card">
             <!-- Glowing Rotating Ring Logo -->
-            <div class="logo-wrapper mb-6">
+            <div class="logo-wrapper">
                 <div class="logo-ring-outer"></div>
                 <div class="logo-ring-inner"></div>
+                <div class="logo-ring-glow"></div>
                 <div class="logo-emoji">🌾</div>
             </div>
             
             <!-- Krishi Text Brand -->
-            <h1 class="text-2xl font-black text-white tracking-wide uppercase select-none drop-shadow-md">Krishi MCQ Pro</h1>
+            <h1 class="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-emerald-100 to-lime-200 tracking-wider uppercase select-none drop-shadow-md">Krishi MCQ Pro</h1>
             
             <!-- Real-Time Progress Indicator -->
-            <div class="w-48 h-1 bg-white/10 rounded-full mt-6 overflow-hidden relative">
-                <div id="splash-progress" class="h-full bg-gradient-to-r from-emerald-400 to-teal-350 w-0 transition-all duration-100 ease-out" style="box-shadow:0 0 8px #34d399;"></div>
+            <div class="w-52 h-1.5 bg-white/10 rounded-full mt-6 overflow-hidden relative shadow-inner">
+                <div id="splash-progress" class="h-full w-0 transition-all duration-100 ease-out"></div>
             </div>
             
             <!-- Real-Time Status & Message -->
             <p id="splash-message" class="text-[10px] text-emerald-200/90 font-bold uppercase mt-4 select-none tracking-widest min-h-[14px]">Preparing study environment...</p>
-            <p id="splash-percent" class="text-xs text-white/50 font-bold font-mono mt-1 select-none">0%</p>
+            <p id="splash-percent" class="text-xs text-emerald-300/60 font-bold font-mono mt-1 select-none">0%</p>
         </div>
     </div>
 
@@ -84,22 +142,22 @@
             
             <!-- Navigation Sidebar Menu Links -->
             <nav class="flex-1 flex flex-col gap-1.5" aria-label="डेस्कटप साइडबार नेभिगेसन (Desktop Sidebar)">
-                <button onclick="navigate('page-home')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-0" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-home')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-0" style="color:var(--text-secondary);">
                     <span class="text-sm">🏠</span> <span>Home Hub</span>
                 </button>
-                <button onclick="navigate('page-practice')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-1" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-practice')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-1" style="color:var(--text-secondary);">
                     <span class="text-sm">📚</span> <span>Practice Suite</span>
                 </button>
-                <button onclick="navigate('page-mcq-creator')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-2" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-mcq-creator')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-2" style="color:var(--text-secondary);">
                     <span class="text-sm">✍️</span> <span>MCQ Creator</span>
                 </button>
-                <button onclick="navigate('page-analytics')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-3" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-analytics')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-3" style="color:var(--text-secondary);">
                     <span class="text-sm">📊</span> <span>Performance Radar</span>
                 </button>
-                <button onclick="navigate('page-study-planner')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-4" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-study-planner')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-4" style="color:var(--text-secondary);">
                     <span class="text-sm">📅</span> <span>Study Planner</span>
                 </button>
-                <button onclick="navigate('page-settings')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-5" style="color:var(--text-secondary);">
+                <button onclick="navigateTab('page-settings')" class="sidebar-nav-item flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800" id="sidebar-nav-btn-5" style="color:var(--text-secondary);">
                     <span class="text-sm">⚙️</span> <span>Settings & Config</span>
                 </button>
             </nav>
@@ -141,9 +199,9 @@
                         <p class="text-[10px] opacity-75" style="color:var(--text-secondary);">Agriculture Exam Prep</p>
                     </div>
                 </div>
-                <div class="flex items-center gap-2">
-                    <span id="streak-badge" class="text-[10px] font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-800 hidden"></span>
-                    <button onclick="toggleDarkMode()" class="p-2 rounded-xl text-lg">🌓</button>
+                <div class="flex items-center gap-1">
+                    <button onclick="toggleDarkMode()" aria-label="Toggle Dark Mode">🌓</button>
+                    <button onclick="navigate('page-settings')" id="header-settings-btn" class="cursor-pointer transition-all duration-200" aria-label="Settings">⚙️</button>
                 </div>
             </header>
 
@@ -220,16 +278,6 @@
                 <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] rounded-xl shadow-3xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
             </div>
 
-            <!-- 3D Progress Globe Map Card -->
-            <div id="home-nepal-globe-card" class="p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl space-y-3 hidden relative overflow-hidden">
-                <div class="flex justify-between items-center">
-                    <span class="text-[9px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🌏 3D Nepal Province Progress Globe</span>
-                </div>
-                <div class="relative w-full h-40 flex items-center justify-center">
-                    <canvas id="nepal-globe-canvas" class="w-full h-full max-w-[280px] max-h-[150px] cursor-pointer"></canvas>
-                    <div id="globe-province-tooltip" class="absolute bg-slate-950/80 backdrop-blur-xs text-white text-[9px] px-2 py-1 rounded-lg border border-slate-700 pointer-events-none opacity-0 transition-opacity duration-200 z-50"></div>
-                </div>
-            </div>
 
             <!-- Premium Hybrid Exams Shortcuts (shown in Exams tab) -->
             <div id="hybrid-exams-shortcut-card" class="hidden p-5 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl space-y-4">
@@ -789,12 +837,15 @@
             <div class="space-y-2">
                 <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider" style="color:var(--text-secondary);">⚡ Smart Practice Engine</h3>
                 <div class="grid grid-cols-2 gap-2.5">
-                    <!-- Quick Practice -->
-                    <div onclick="startSmartPracticeMode('quick'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">⚡</span>
-                        <div>
-                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Quick Practice</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">10 random questions</p>
+                    <!-- SM-2 Memory Refresh Spaced Repetition Drill -->
+                    <div id="sm2-dashboard-card" onclick="startSmartPracticeMode('sm2'); playSound('click');" class="p-3 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 dark:from-emerald-900/30 dark:to-teal-900/30 border border-emerald-500/30 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-500 transition active:scale-97 col-span-2">
+                        <span class="text-xl">🧠</span>
+                        <div class="flex-1 flex justify-between items-center">
+                            <div>
+                                <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">SM-2 Spaced Repetition Memory Refresh</p>
+                                <p class="text-[8.5px] text-slate-500 dark:text-slate-400">कण्ठ गर्नुपर्ने प्रश्नहरू (Scientific Spaced Review)</p>
+                            </div>
+                            <span class="bg-emerald-600 text-white font-mono font-bold text-[10px] px-2 py-0.5 rounded-full shadow-sm" id="sm2-due-badge-count">0</span>
                         </div>
                     </div>
                     <!-- Weak Topic -> based on stats -->
@@ -803,14 +854,6 @@
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Weak Topics</p>
                             <p class="text-[8px] text-slate-500 dark:text-slate-400">Focus low-accuracy topics</p>
-                        </div>
-                    </div>
-                    <!-- Wrong Questions -> mistakes -->
-                    <div onclick="startSmartPracticeMode('wrong'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">❌</span>
-                        <div>
-                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Mistakes Mode</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-wrong-count-lbl">0 pending wrongs</p>
                         </div>
                     </div>
                     <!-- Bookmark Practice -->
@@ -829,28 +872,12 @@
                             <p class="text-[8px] text-slate-500 dark:text-slate-400">30s per-question sprint</p>
                         </div>
                     </div>
-                    <!-- Spaced Review -->
-                    <div onclick="startSmartPracticeMode('spaced'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">📅</span>
-                        <div>
-                            <p class="font-black text-xs text-slate-800 dark:text-slate-100">Spaced Review</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-spaced-count-lbl">0 revision dued</p>
-                        </div>
-                    </div>
                     <!-- Daily Target -->
                     <div onclick="startSmartPracticeMode('daily'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
                         <span class="text-lg">🎯</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Daily Target</p>
                             <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-daily-count-lbl">Practice to hit target</p>
-                        </div>
-                    </div>
-                    <!-- Exam Simulation -->
-                    <div onclick="startSmartPracticeMode('simulation'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97 col-span-2">
-                        <span class="text-lg">🏛</span>
-                        <div>
-                            <p class="font-black text-xs text-indigo-600 dark:text-indigo-450">Exam Loksewa Simulation</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Full conditions simulation with timer, 20% negative scoring, show at end</p>
                         </div>
                     </div>
                     <!-- Tinder Flashcard Swiper (Permanently Active) -->
@@ -878,7 +905,6 @@
                 <div id="practice-recent-list" class="space-y-2 text-xs">
                     <p class="text-[10px] text-slate-450 dark:text-slate-500 italic">No recent sessions completed today.</p>
                 </div>
-            </div>
             </div>
             </div>
 
@@ -1006,6 +1032,11 @@
                     <div class="flex items-center gap-1.5">
                         <span id="hybrid-streak-badge" class="font-bold flex items-center gap-1 bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded-full text-[10px]">🔥 <span id="hybrid-streak-count">0</span></span>
                         <span id="hybrid-hearts-badge" class="font-bold flex items-center gap-1 bg-rose-500/10 text-rose-500 px-2 py-0.5 rounded-full text-[10px] transition-transform duration-300">❤️ <span id="hybrid-hearts-count">5</span></span>
+                        <!-- Premium real-time autosave state indicator HUD -->
+                        <div id="game-autosave-indicator" class="flex items-center gap-1 text-[9px] font-black text-slate-400 dark:text-slate-500 transition-all duration-300">
+                            <span class="w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300" style="display:inline-block; box-shadow:0 0 0 0 rgba(100,116,139,0.4);"></span>
+                            <span class="indicator-text">Ready</span>
+                        </div>
                     </div>
                 </div>
 
@@ -1041,24 +1072,18 @@
                     <p id="q-text" class="font-bold text-base leading-relaxed text-slate-800 dark:text-slate-100" style="color:var(--text);"></p>
                     <div id="q-options" class="space-y-2.5"></div>
 
-                    <!-- Custom confidence selector -->
-                    <div id="confidence-selector-container" class="pt-3 border-t border-dashed border-slate-150 dark:border-slate-705 space-y-1.5">
-                        <span class="text-[9px] font-black text-slate-400 uppercase tracking-wider">How confident are you with this answer?</span>
-                        <div class="grid grid-cols-3 gap-2">
-                            <button onclick="setMCQConfidence('High')" id="conf-btn-High" class="py-1 rounded-xl bg-slate-50 dark:bg-slate-900 border text-[10px] font-black text-slate-600 dark:text-slate-400 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-850 transition-all border-slate-200 dark:border-slate-700">High</button>
-                            <button onclick="setMCQConfidence('Medium')" id="conf-btn-Medium" class="py-1 rounded-xl bg-indigo-500 text-white border border-indigo-500 text-[10px] font-black cursor-pointer transition-all">Medium</button>
-                            <button onclick="setMCQConfidence('Low')" id="conf-btn-Low" class="py-1 rounded-xl bg-slate-50 dark:bg-slate-900 border text-[10px] font-black text-slate-600 dark:text-slate-400 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-850 transition-all border-slate-200 dark:border-slate-700">Low</button>
-                        </div>
-                    </div>
+                    <!-- Custom confidence selector hidden for automatic Cognitive Hesitation Tracker -->
+                    <div id="confidence-selector-container" class="hidden"></div>
 
                     <div id="q-explanation-container" class="hidden pt-4 border-t border-dashed border-slate-200 dark:border-slate-700">
                         <div id="q-explanation" class="text-xs p-3.5 rounded-xl border leading-relaxed bg-slate-50 border-slate-150 dark:bg-slate-900 dark:border-slate-750 text-slate-750 dark:text-slate-350"></div>
                     </div>
                 </div>
 
-                <button id="submit-btn" onclick="submitMCQAnswer()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl cursor-pointer shadow-sm transition-colors text-sm">Submit Answer</button>
+                <button id="submit-btn" onclick="submitMCQAnswer()" class="hidden w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl cursor-pointer shadow-sm transition-colors text-sm" style="display: none !important;">Submit Answer</button>
                 <button id="next-btn" onclick="nextMCQQuestion()" class="hidden w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 rounded-xl cursor-pointer shadow-sm transition-colors text-sm">Next Question →</button>
                 <button id="finish-btn" onclick="finishSession()" class="hidden w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl cursor-pointer shadow-sm transition-colors text-sm">✅ Finish and view results</button>
+            </div>
             </div>
 
         <!-- ADVANCED PRACTICE SETUP PAGE -->
@@ -1607,8 +1632,35 @@
                                 <span class="h-2 w-2 rounded bg-emerald-850 dark:bg-emerald-450"></span>
                             </div>
                             <span>More</span>
+                </div>
+                
+                <!-- Mastery Breakdown UI -->
+                <div class="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Mastery Breakdown</span>
+                        <span id="analytics-mastery-total" class="text-[10px] font-black text-slate-700 dark:text-slate-300">0 Cards</span>
+                    </div>
+                    <div class="flex h-2.5 w-full rounded-full overflow-hidden bg-slate-100 dark:bg-slate-800 gap-0.5">
+                        <div id="pb-mastered" class="bg-amber-400 transition-all duration-500" style="width: 0%"></div>
+                        <div id="pb-learning" class="bg-sky-400 transition-all duration-500" style="width: 0%"></div>
+                        <div id="pb-leeched" class="bg-rose-500 transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                    <div class="flex justify-between mt-3">
+                        <div class="text-center">
+                            <div class="flex items-center gap-1 text-[10px] text-slate-500"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Mastered</div>
+                            <div id="stat-mastered" class="text-xs font-black text-slate-700 dark:text-slate-200 mt-0.5">0</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="flex items-center gap-1 text-[10px] text-slate-500"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Learning</div>
+                            <div id="stat-learning" class="text-xs font-black text-slate-700 dark:text-slate-200 mt-0.5">0</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="flex items-center gap-1 text-[10px] text-slate-500"><span class="w-2 h-2 rounded-full bg-rose-500"></span> Leeched</div>
+                            <div id="stat-leeched" class="text-xs font-black text-slate-700 dark:text-slate-200 mt-0.5">0</div>
                         </div>
                     </div>
+                </div>
+            </div>
                 </div>
             </div>
         </div>
@@ -1664,236 +1716,313 @@
                 </button>
             </div>
             
-            <div id="settings-group-general" class="space-y-4">
-            <!-- Advanced AI Gemini Integration Card -->
-            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">✨ Gemini AI Integration</h3>
-                        <p class="text-[9px] text-slate-500">Power automated agricultural MCQ generators with Google Gemini AI.</p>
-                    </div>
-                    <span id="gemini-status-badge" class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Empty ⚪</span>
-                </div>
+            <div id="settings-group-general" class="space-y-3.5">
                 
-                <div class="space-y-2 text-xs">
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block">Gemini API Key</label>
-                        <div class="relative flex items-center">
-                            <input id="gemini-api-key" type="password" class="w-full p-2 pr-10 border rounded-lg text-xs font-mono" placeholder="Paste your Gemini API Key here..." style="border-color:var(--border); color:var(--text); background:var(--card);">
-                            <button onclick="toggleKeyVisibility()" class="absolute right-2 text-slate-400 hover:text-slate-655 dark:hover:text-slate-200 cursor-pointer">
-                                <span id="eye-icon">👁️</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                        <div class="space-y-1">
-                            <label class="text-[10px] font-bold text-slate-500 uppercase block">AI Model</label>
-                            <select id="gemini-model-select" onchange="saveGeminiSettings()" class="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
-                                <option value="gemini-1.5-flash" selected>Gemini 1.5 Flash (Fast & Free)</option>
-                                <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep Agricultural Analysis)</option>
-                                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (Next-Gen Preview)</option>
-                            </select>
-                        </div>
-                        <div class="space-y-1">
-                            <label class="text-[10px] font-bold text-slate-500 uppercase block">Generation Temperature</label>
-                            <select id="gemini-temp-select" onchange="saveGeminiSettings()" class="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
-                                <option value="0.3">0.3 (Strict & Fact-Driven)</option>
-                                <option value="0.7" selected>0.7 (Balanced & Creative)</option>
-                                <option value="1.0">1.0 (Highly Diverse Questions)</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="flex gap-2 pt-1.5">
-                        <button onclick="validateAndSaveApiKey()" id="btn-save-key" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
-                            <span id="key-spinner" class="hidden animate-spin">⏳</span> Verify & Save
-                        </button>
-                        <button onclick="clearApiKey()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg font-bold text-xs cursor-pointer transition">Clear</button>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Cloud Sync & Account Card -->
-            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">☁️ Cloud Sync & Account</h3>
-                        <p class="text-[9px] text-slate-500">Authenticate to sync stats, streaks, bookmarks, and questions in real-time.</p>
-                    </div>
-                    <span id="sync-status-badge" class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Not logged in ⚪</span>
-                </div>
-
-                <!-- Account Information / Connection status -->
-                <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border text-[10px] font-bold text-center" style="border-color:var(--border); color:var(--text-secondary);" id="auth-user-email-display">
-                    No active cloud session
-                </div>
-
-                <!-- Custom Cloud Database Configuration -->
-                <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border flex justify-between items-center" style="border-color:var(--border);">
-                    <div>
-                        <span class="text-[10px] font-black block" style="color:var(--text);">🔑 Firebase API Config</span>
-                        <p class="text-[8px] text-slate-400 dark:text-slate-500">Provide personal Firebase JSON credentials.</p>
-                    </div>
-                    <button onclick="openCloudConfigModal()" class="px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[9px] font-black cursor-pointer transition">Configure</button>
-                </div>
-
-                <!-- Auth Credentials Inputs & Buttons Form (Hidden when logged in) -->
-                <div id="auth-login-form" class="space-y-2 text-xs">
-                    <div class="space-y-1">
-                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Email Address</label>
-                        <input id="firebase-auth-email" type="email" class="w-full p-2 border rounded-lg text-xs" placeholder="student@krishi.com" style="border-color:var(--border); color:var(--text); background:var(--card);">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Password</label>
-                        <input id="firebase-auth-password" type="password" class="w-full p-2 border rounded-lg text-xs" placeholder="••••••••" style="border-color:var(--border); color:var(--text); background:var(--card);">
-                    </div>
-                    <div class="grid grid-cols-2 gap-2 pt-1">
-                        <button onclick="handleFirebaseLogin(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Sign In 🔐</button>
-                        <button onclick="handleFirebaseSignup(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Sign Up 🚀</button>
-                    </div>
-                </div>
-
-                <!-- Logged In Controls & Existing Sync Panels (Visible when logged in) -->
-                <div id="auth-loggedin-controls" class="hidden space-y-3.5">
-                    <!-- Setup Panel -->
-                    <div id="sync-setup-panel" class="space-y-2 text-xs border-t border-dashed pt-3" style="border-color:var(--border);">
-                        <p class="text-[10px] text-slate-500">To link devices, enter a shared Cloud Sync Key, or generate a new one.</p>
-                        <div class="flex gap-2">
-                            <input id="cloud-sync-key-input" type="text" class="flex-1 p-2 border rounded-lg text-xs font-mono" placeholder="Enter Sync Key (e.g. KRISHI-ABCD-1234)..." style="border-color:var(--border); color:var(--text); background:var(--card);">
-                            <button onclick="generateNewSyncKey()" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg font-bold text-xs cursor-pointer transition">Generate</button>
-                        </div>
-                        <button onclick="enableCloudSync()" class="w-full bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Enable Auto-Sync</button>
-                    </div>
-                    
-                    <!-- Active Panel -->
-                    <div id="sync-active-panel" class="hidden space-y-2 text-xs border-t border-dashed pt-3" style="border-color:var(--border);">
-                        <div class="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border flex flex-col gap-1.5" style="border-color:var(--border);">
-                            <div class="flex justify-between items-center text-[10px]">
-                                <span class="text-slate-400 font-bold uppercase">Active Sync Key:</span>
-                                <button onclick="copyActiveSyncKey()" class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer">Copy Key 📋</button>
+                <!-- ACCORDION 1: GEMINI AI INTEGRATION -->
+                <div class="rounded-2xl border bg-white dark:bg-slate-800 overflow-hidden transition-all duration-300 shadow-sm hover:shadow-md" style="border-color:var(--border);">
+                    <!-- Accordion Trigger Header -->
+                    <button onclick="toggleSettingsAccordion('gemini'); playSound('click');" class="w-full p-4 flex justify-between items-center text-left bg-slate-50/50 dark:bg-slate-900/50 cursor-pointer border-none outline-none select-none">
+                        <div class="flex items-center gap-3">
+                            <span class="text-xl p-2 bg-indigo-500/10 rounded-xl text-indigo-500 flex items-center justify-center">🤖</span>
+                            <div>
+                                <h3 class="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">Gemini AI Integration</h3>
+                                <p class="text-[8px] text-slate-400 mt-0.5">Automated agricultural MCQ generator configurations</p>
                             </div>
-                            <span id="active-sync-key-display" class="font-mono text-xs font-bold text-center py-1 tracking-wider bg-white dark:bg-slate-800 rounded border" style="border-color:var(--border); color:var(--text);">KRISHI-ABCD-1234</span>
                         </div>
-                        <div class="flex gap-2">
-                            <button onclick="syncCloudNow()" id="btn-sync-now" class="flex-1 bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
-                                <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
-                            </button>
-                            <button onclick="disableCloudSync()" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition">Disable Sync</button>
+                        <div class="flex items-center gap-2">
+                            <span id="gemini-status-badge" class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Empty ⚪</span>
+                            <span id="accordion-chevron-gemini" class="text-[9px] text-slate-400 transition-transform duration-350 select-none">▼</span>
                         </div>
-                        <p id="sync-time-txt" class="text-[9px] text-center text-slate-400">Last Synced: Never</p>
-                    </div>
+                    </button>
+                    
+                    <!-- Accordion Body Content -->
+                    <div id="accordion-body-gemini" class="hidden p-4 border-t space-y-3.5" style="border-color:var(--border);">
+                        <div class="space-y-1">
+                            <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Gemini API Key</label>
+                            <div class="relative flex items-center">
+                                <input id="gemini-api-key" type="password" class="w-full p-2.5 pr-10 border rounded-xl text-xs font-mono" placeholder="Paste your Gemini API Key here..." style="border-color:var(--border); color:var(--text); background:var(--card);">
+                                <button onclick="toggleKeyVisibility()" class="absolute right-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer">
+                                    <span id="eye-icon">👁️</span>
+                                </button>
+                            </div>
+                        </div>
 
-                    <button onclick="handleFirebaseLogout(); playSound('click');" class="w-full border hover:bg-slate-50 dark:hover:bg-slate-900 py-2 rounded-lg font-bold text-xs cursor-pointer transition text-rose-500" style="border-color:var(--border);">Sign Out & Disconnect 🚪</button>
-                </div>
-            </div>
-            
-            <!-- Sound settings block -->
-            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">🔔 Premium Practice Sounds</h3>
-                        <p class="text-[9px] text-slate-500">Enable synthesized feedback as you practice.</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div class="space-y-1">
+                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">AI Model</label>
+                                <select id="gemini-model-select" onchange="saveGeminiSettings()" class="w-full p-2 border rounded-xl text-xs bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
+                                    <option value="gemini-1.5-flash" selected>Gemini 1.5 Flash (Fast & Free)</option>
+                                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep Analysis)</option>
+                                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (Next-Gen)</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Generation Temperature</label>
+                                <select id="gemini-temp-select" onchange="saveGeminiSettings()" class="w-full p-2 border rounded-xl text-xs bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
+                                    <option value="0.3">0.3 (Strict & Fact-Driven)</option>
+                                    <option value="0.7" selected>0.7 (Balanced & Creative)</option>
+                                    <option value="1.0">1.0 (Highly Diverse Questions)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Segmented Pill Button controls -->
+                        <div class="flex gap-2 pt-1">
+                            <button onclick="validateAndSaveApiKey()" id="btn-save-key" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95">
+                                <span id="key-spinner" class="hidden animate-spin">⏳</span> Verify & Save
+                            </button>
+                            <button onclick="clearApiKey()" class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-955 px-4 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95" style="border: 1px solid var(--border); color:var(--text);">Clear</button>
+                        </div>
                     </div>
-                    <label class="relative inline-flex items-center cursor-pointer select-none">
-                        <input id="sound-enabled" type="checkbox" checked onchange="toggleSoundEnabledSetting()" class="sr-only peer">
-                        <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                    </label>
                 </div>
                 
-                <div class="space-y-1.5" id="sound-controls-details">
-                    <div class="flex justify-between items-center text-[10px] text-slate-500 font-bold">
-                        <span>Volume: <span id="sound-vol-txt">50%</span></span>
-                        <button onclick="testAppSynthSound()" class="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-[9px] cursor-pointer">Test Synth 🔊</button>
-                    </div>
-                    <input type="range" id="sound-volume" min="0" max="1" step="0.1" value="0.5" oninput="changeSoundVolumeSetting(this.value)" class="w-full accent-emerald-600 h-1 bg-slate-100 rounded-lg appearance-none cursor-pointer">
-                    
-                    <label class="flex items-center gap-1.5 text-[10px] font-bold text-slate-605 dark:text-slate-400 cursor-pointer">
-                        <input type="checkbox" id="sound-mute" onchange="toggleSoundMutedSetting()"> Mute all effects immediately
-                    </label>
-                </div>
-            </div>
-
-            <!-- Performance settings panel (smoothness / battery / 120Hz) -->
-            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">⚡ Performance Settings</h3>
-                        <p class="text-[9px] text-slate-500">Tune animations, battery use, and smoothness.</p>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block">Animation intensity</label>
-                        <select id="perf-anim-intensity" class="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
-                            <option value="off">Off</option>
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                        </select>
-                    </div>
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block">Performance mode</label>
-                        <select id="perf-mode" class="w-full p-2 border rounded-lg bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
-                            <option value="battery">Battery Saver</option>
-                            <option value="balanced">Balanced</option>
-                            <option value="smooth120">Smooth 120Hz</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <label class="flex items-center justify-between gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border" style="border-color:var(--border);">
-                        <span class="font-bold text-[11px]" style="color:var(--text);">Reduce motion</span>
-                        <input id="perf-reduce-motion" type="checkbox" class="accent-emerald-600">
-                    </label>
-                    <label class="flex items-center justify-between gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border" style="border-color:var(--border);">
-                        <span class="font-bold text-[11px]" style="color:var(--text);">Sound effects</span>
-                        <input id="perf-sound-effects" type="checkbox" class="accent-emerald-600">
-                    </label>
-                </div>
-                <div class="grid grid-cols-1 gap-3 text-xs pt-2">
-                    <label class="flex items-center justify-between gap-3 p-3 rounded-xl bg-emerald-55/10 dark:bg-emerald-950/10 border border-emerald-500/20">
-                        <div>
-                            <span class="font-black text-[11px] text-emerald-600 dark:text-emerald-400 block">✨ Premium Hybrid Native Layout</span>
-                            <span class="text-[9px] text-slate-400 dark:text-slate-500">Enable bottom sheets, Duolingo progress headers, and native mobile gestures.</span>
+                <!-- ACCORDION 2: CLOUD SYNC & LINKED PRESENCE -->
+                <div class="rounded-2xl border bg-white dark:bg-slate-800 overflow-hidden transition-all duration-300 shadow-sm hover:shadow-md" style="border-color:var(--border);">
+                    <!-- Accordion Trigger Header -->
+                    <button onclick="toggleSettingsAccordion('sync'); playSound('click');" class="w-full p-4 flex justify-between items-center text-left bg-slate-50/50 dark:bg-slate-900/50 cursor-pointer border-none outline-none select-none">
+                        <div class="flex items-center gap-3">
+                            <span class="text-xl p-2 bg-indigo-500/10 rounded-xl text-indigo-500 flex items-center justify-center">☁️</span>
+                            <div>
+                                <h3 class="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">Cloud Sync & Device Link</h3>
+                                <p class="text-[8px] text-slate-400 mt-0.5">Sync study database and link multiple devices</p>
+                            </div>
                         </div>
-                        <input id="perf-premium-hybrid" type="checkbox" onchange="togglePremiumHybridLayout(this.checked)" class="accent-emerald-600 w-4 h-4 cursor-pointer">
-                    </label>
-                </div>
-            </div>
+                        <div class="flex items-center gap-2">
+                            <span id="sync-status-badge" class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Not logged in ⚪</span>
+                            <span id="accordion-chevron-sync" class="text-[9px] text-slate-400 transition-transform duration-350 select-none">▼</span>
+                        </div>
+                    </button>
+                    
+                    <!-- Accordion Body Content -->
+                    <div id="accordion-body-sync" class="hidden p-4 border-t space-y-3.5" style="border-color:var(--border);">
+                        <!-- Connection Summary bar -->
+                        <div class="p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border text-[10px] font-bold text-center flex justify-between items-center" style="border-color:var(--border);">
+                            <span class="text-slate-400 block uppercase tracking-wider text-[8px] text-left">Active Session Status</span>
+                            <span id="auth-user-email-display" class="font-bold text-[10px]" style="color:var(--text);">No active session</span>
+                        </div>
 
-            <!-- Local Backup & Offline Progress Diagnostics -->
-            <div class="p-4 rounded-xl border space-y-3.5 bg-white dark:bg-slate-800 mt-4" style="border-color:var(--border);">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-black uppercase text-slate-400">💾 Offline Progress Backup & Diagnostics</h3>
-                        <p class="text-[9px] text-slate-500">Backup your streak, stats, SM-2 cards locally, or monitor rendering diagnostics.</p>
+                        <!-- Firebase Credentials setup toggle link -->
+                        <div class="p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border flex justify-between items-center" style="border-color:var(--border);">
+                            <div>
+                                <span class="text-[10px] font-black block" style="color:var(--text);">🔑 Firebase API Config</span>
+                                <p class="text-[8px] text-slate-400 dark:text-slate-500">Input custom database config keys</p>
+                            </div>
+                            <button onclick="openCloudConfigModal()" class="px-3 py-1 bg-indigo-500 hover:bg-indigo-650 text-white rounded-lg text-[9px] font-black cursor-pointer transition active:scale-95">Configure</button>
+                        </div>
+
+                        <!-- Authentication Form (Shown when logged out) -->
+                        <div id="auth-login-form" class="space-y-2.5 text-xs">
+                            <div class="space-y-1">
+                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Email Address</label>
+                                <input id="firebase-auth-email" type="email" class="w-full p-2 border rounded-xl text-xs" placeholder="student@krishi.com" style="border-color:var(--border); color:var(--text); background:var(--card);">
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Password</label>
+                                <input id="firebase-auth-password" type="password" class="w-full p-2 border rounded-xl text-xs" placeholder="••••••••" style="border-color:var(--border); color:var(--text); background:var(--card);">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2.5 pt-1">
+                                <button onclick="handleFirebaseLogin(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Sign In 🔐</button>
+                                <button onclick="handleFirebaseSignup(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Sign Up 🚀</button>
+                            </div>
+                            <div class="flex flex-col items-center gap-2 mt-2 pt-2 border-t border-dashed" style="border-color:var(--border);">
+                                <button id="google-login-btn" onclick="handleGoogleLogin(); playSound('click');" class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-white text-slate-800 font-bold border border-slate-200 shadow-sm hover:bg-slate-50 active:scale-95 transition duration-150 cursor-pointer">
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24">
+                                        <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.6 15.02 1 12 1 7.24 1 3.23 3.73 1.3 7.72l3.96 3.07C6.18 7.37 8.84 5.04 12 5.04z"/>
+                                        <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.12 2.73-2.38 3.58l3.69 2.87c2.16-1.99 3.74-4.91 3.74-8.55z"/>
+                                        <path fill="#FBBC05" d="M5.26 14.79c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29L1.3 7.14C.47 8.81 0 10.7 0 12.7s.47 3.89 1.3 5.56l3.96-3.47z"/>
+                                        <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.69-2.87c-1.02.68-2.33 1.1-4.27 1.1-3.16 0-5.82-2.33-6.78-5.46l-3.96 3.07C3.23 20.27 7.24 23 12 23z"/>
+                                    </svg>
+                                    <span class="text-[10px]">Continue with Google</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Logged In Content Group (Shown when logged in) -->
+                        <div id="auth-loggedin-controls" class="hidden space-y-3.5">
+                            <!-- Selective Sync Options -->
+                            <div class="p-3 rounded-xl border bg-slate-50/50 dark:bg-slate-900/50 space-y-2 text-[10px]" style="border-color:var(--border);">
+                                <span class="text-slate-400 font-bold uppercase tracking-wider block text-[8px]">⚙️ Selective Sync Settings</span>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                                        <input type="checkbox" id="sync-sel-bookmarks" checked class="rounded accent-emerald-600" onchange="window.toggleSelectiveSyncSetting('bookmarks')">
+                                        <span class="text-slate-700 dark:text-slate-300 font-medium">Bookmarks 🔖</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                                        <input type="checkbox" id="sync-sel-errors" checked class="rounded accent-emerald-600" onchange="window.toggleSelectiveSyncSetting('errors')">
+                                        <span class="text-slate-700 dark:text-slate-300 font-medium">Practice Errors 🔴</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                                        <input type="checkbox" id="sync-sel-custom" checked class="rounded accent-emerald-600" onchange="window.toggleSelectiveSyncSetting('custom')">
+                                        <span class="text-slate-700 dark:text-slate-300 font-medium">Custom MCQs 📝</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                                        <input type="checkbox" id="sync-sel-logs" checked class="rounded accent-emerald-600" onchange="window.toggleSelectiveSyncSetting('logs')">
+                                        <span class="text-slate-700 dark:text-slate-300 font-medium">Study Logs & Streaks 📅</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Setup Link Panel (Sync inactive) -->
+                            <div id="sync-setup-panel" class="space-y-3 border-t border-dashed pt-3" style="border-color:var(--border);">
+                                <p class="text-[9px] text-slate-400 leading-normal">Enter a shared cloud key, scan one, or generate a new one to pair devices.</p>
+                                <div class="flex gap-2">
+                                    <input id="cloud-sync-key-input" type="text" class="flex-1 p-2 border rounded-xl text-xs font-mono" placeholder="Enter Sync Key (KRISHI-SYNC-...)" style="border-color:var(--border); color:var(--text); background:var(--card);">
+                                    <button onclick="openQRScanner(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-xl font-bold text-xs cursor-pointer transition flex items-center gap-1 active:scale-95">📷 Scan</button>
+                                    <button onclick="generateNewSyncKey()" class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-950 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl border font-bold text-xs cursor-pointer transition active:scale-95" style="border-color:var(--border);">Generate</button>
+                                </div>
+                                <div class="flex gap-2">
+                                    <input id="cloud-sync-pin-input" type="number" class="w-1/2 p-2 border rounded-xl text-xs font-mono tracking-widest text-center" placeholder="6-Digit PIN" style="border-color:var(--border); color:var(--text); background:var(--card);">
+                                    <button onclick="pairWithPin(document.getElementById('cloud-sync-pin-input').value)" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 rounded-xl cursor-pointer transition active:scale-95">🔑 Link PIN</button>
+                                    <button onclick="generatePairingPin()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3 py-2 rounded-xl cursor-pointer transition active:scale-95">Get PIN</button>
+                                </div>
+                                <button onclick="enableCloudSync()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">
+                                    <span>Enable Auto-Sync</span>
+                                </button>
+                            </div>
+                            
+                            <!-- Active Connected Sync Panel (Sync active) -->
+                            <div id="sync-active-panel" class="hidden space-y-3.5 border-t border-dashed pt-3 text-xs" style="border-color:var(--border);">
+                                
+                                <!-- Premium 2x2 Stats Grid Card Dashboard (Upgrade 2) -->
+                                <div class="space-y-2">
+                                    <div class="flex justify-between items-center text-[10px]">
+                                        <span class="text-slate-400 font-bold uppercase tracking-wider">📊 Sync Statistics</span>
+                                        <span id="sync-badge-status" class="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-500/10 text-emerald-500">Synced</span>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2 text-xs">
+                                        <!-- Bookmarks card -->
+                                        <div class="p-3 rounded-xl border flex flex-col justify-between bg-indigo-500/5 hover:bg-indigo-500/10 transition duration-150" style="border-color:var(--border);">
+                                            <div class="flex justify-between items-center text-[8px] font-bold text-indigo-500 uppercase tracking-wider">
+                                                <span>Bookmarks</span>
+                                                <span>🔖</span>
+                                            </div>
+                                            <span id="sync-stat-bookmarks" class="text-sm font-black text-slate-800 dark:text-slate-100 mt-1">0</span>
+                                        </div>
+                                        <!-- Errors card -->
+                                        <div class="p-3 rounded-xl border flex flex-col justify-between bg-rose-500/5 hover:bg-rose-500/10 transition duration-150" style="border-color:var(--border);">
+                                            <div class="flex justify-between items-center text-[8px] font-bold text-rose-500 uppercase tracking-wider">
+                                                <span>Errors</span>
+                                                <span>🔴</span>
+                                            </div>
+                                            <span id="sync-stat-mistakes" class="text-sm font-black text-slate-800 dark:text-slate-100 mt-1">0</span>
+                                        </div>
+                                        <!-- Streak card -->
+                                        <div class="p-3 rounded-xl border flex flex-col justify-between bg-amber-500/5 hover:bg-amber-500/10 transition duration-150" style="border-color:var(--border);">
+                                            <div class="flex justify-between items-center text-[8px] font-bold text-amber-500 uppercase tracking-wider">
+                                                <span>Streak</span>
+                                                <span>🔥</span>
+                                            </div>
+                                            <span id="sync-stat-streak" class="text-sm font-black text-slate-800 dark:text-slate-100 mt-1">0 days</span>
+                                        </div>
+                                        <!-- Logs card -->
+                                        <div class="p-3 rounded-xl border flex flex-col justify-between bg-emerald-500/5 hover:bg-emerald-500/10 transition duration-150" style="border-color:var(--border);">
+                                            <div class="flex justify-between items-center text-[8px] font-bold text-emerald-500 uppercase tracking-wider">
+                                                <span>Study Logs</span>
+                                                <span>📅</span>
+                                            </div>
+                                            <span id="sync-stat-logs" class="text-sm font-black text-slate-800 dark:text-slate-100 mt-1">0 entries</span>
+                                        </div>
+                                        <!-- Custom MCQs card -->
+                                        <div class="col-span-2 p-3 rounded-xl border flex flex-col justify-between bg-violet-500/5 hover:bg-violet-500/10 transition duration-150" style="border-color:var(--border);">
+                                            <div class="flex justify-between items-center text-[8px] font-bold text-violet-500 uppercase tracking-wider">
+                                                <span>Custom MCQs</span>
+                                                <span>📝</span>
+                                            </div>
+                                            <span id="sync-stat-custom" class="text-sm font-black text-slate-800 dark:text-slate-100 mt-1">0</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Credentials key sharing Card -->
+                                <div class="p-3 rounded-xl bg-white dark:bg-slate-800 border flex flex-col items-center gap-3 text-center" style="border-color:var(--border);">
+                                    <div id="sync-key-lock-overlay" class="w-full py-4 flex flex-col items-center justify-center gap-2">
+                                        <span class="text-2xl animate-bounce">🔒</span>
+                                        <p class="text-[9px] text-slate-400">Exposing Sync credentials requires authentication</p>
+                                        <button onclick="authenticateForSyncCredentials()" class="mt-1 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">🔓 Authorize Credentials</button>
+                                    </div>
+                                    
+                                    <div id="sync-key-credentials-card" class="hidden w-full flex flex-col items-center gap-3">
+                                        <div class="w-full flex justify-between items-center text-[9px]">
+                                            <span class="text-slate-400 font-bold uppercase text-left">Scan to Link Device</span>
+                                            <button onclick="copyActiveSyncKey()" class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer">Copy Key 📋</button>
+                                        </div>
+                                        <div class="p-2.5 bg-white rounded-xl border flex items-center justify-center">
+                                            <div id="sync-qrcode-container" class="flex justify-center items-center w-[120px] h-[120px]"></div>
+                                        </div>
+                                        <span id="active-sync-key-display" class="font-mono text-xs font-bold tracking-wider py-1.5 px-4 bg-slate-50 dark:bg-slate-900 rounded-xl border w-full text-center" style="border-color:var(--border); color:var(--text);">KRISHI-ABCD-1234</span>
+                                    </div>
+                                </div>
+
+                                <!-- Linked devices presence list (Upgrade 5: Pulse glows) -->
+                                <div class="p-3 rounded-xl bg-slate-50/80 dark:bg-slate-900/70 border space-y-2.5" style="border-color:var(--border);">
+                                    <div class="flex justify-between items-center text-[9px]">
+                                        <span class="text-slate-400 font-bold uppercase tracking-wider">📱 Connected Devices Presence</span>
+                                        <span class="flex h-2.5 w-2.5 relative">
+                                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                        </span>
+                                    </div>
+                                    <div id="sync-connected-devices-list" class="space-y-1.5 max-h-[100px] overflow-y-auto pr-1 text-[9px] text-slate-500 dark:text-slate-400">
+                                        <div class="text-center py-2 text-slate-400">Loading active sync peers...</div>
+                                    </div>
+                                </div>
+
+                                <!-- Operations pill group -->
+                                <div class="flex gap-2">
+                                    <button onclick="syncCloudNow()" id="btn-sync-now" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95 shadow-sm">
+                                        <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
+                                    </button>
+                                    <button onclick="disableCloudSync()" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95 shadow-sm">Disable Sync</button>
+                                </div>
+                                <p id="sync-time-txt" class="text-[8px] text-center text-slate-400">Last Synced: Never</p>
+                            </div>
+
+                            <button onclick="handleFirebaseLogout(); playSound('click');" class="w-full border hover:bg-slate-50 dark:hover:bg-slate-900 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition text-rose-500 active:scale-95" style="border-color:var(--border);">Sign Out & Disconnect 🚪</button>
+                        </div>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-2 pt-1 text-xs">
-                    <button onclick="exportLocalProgress(); playSound('click');" class="bg-indigo-650 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition flex justify-center items-center gap-1.5 shadow-sm">
-                        📥 Export Backup
+                <!-- ACCORDION 3: OFFLINE BACKUP & PERFORMANCE DIAGNOSTICS -->
+                <div class="rounded-2xl border bg-white dark:bg-slate-800 overflow-hidden transition-all duration-300 shadow-sm hover:shadow-md" style="border-color:var(--border);">
+                    <!-- Accordion Trigger Header -->
+                    <button onclick="toggleSettingsAccordion('backup'); playSound('click');" class="w-full p-4 flex justify-between items-center text-left bg-slate-50/50 dark:bg-slate-900/50 cursor-pointer border-none outline-none select-none">
+                        <div class="flex items-center gap-3">
+                            <span class="text-xl p-2 bg-indigo-500/10 rounded-xl text-indigo-500 flex items-center justify-center">💾</span>
+                            <div>
+                                <h3 class="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">Backup & Performance</h3>
+                                <p class="text-[8px] text-slate-400 mt-0.5">Export backup progress and toggle diagnostic performance gauges</p>
+                            </div>
+                        </div>
+                        <span id="accordion-chevron-backup" class="text-[9px] text-slate-400 transition-transform duration-350 select-none">▼</span>
                     </button>
-                    <button onclick="document.getElementById('import-progress-file-input').click(); playSound('click');" class="bg-emerald-650 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer transition flex justify-center items-center gap-1.5 shadow-sm">
-                        📤 Import Backup
-                    </button>
-                    <input id="import-progress-file-input" type="file" accept=".json" class="hidden" onchange="importLocalProgress(this)">
+                    
+                    <!-- Accordion Body Content -->
+                    <div id="accordion-body-backup" class="hidden p-4 border-t space-y-3.5" style="border-color:var(--border);">
+                        <!-- Export/Import backup pill button group -->
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <button onclick="exportLocalProgress(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition flex justify-center items-center gap-1.5 shadow-sm active:scale-95">
+                                📥 Export Progress
+                            </button>
+                            <button onclick="document.getElementById('import-progress-file-input').click(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition flex justify-center items-center gap-1.5 shadow-sm active:scale-95">
+                                📤 Import Progress
+                            </button>
+                            <input id="import-progress-file-input" type="file" accept=".json" class="hidden" onchange="importLocalProgress(this)">
+                        </div>
+
+                        <!-- FPS overlay switch (Upgrade 3: iOS custom toggle switch) -->
+                        <div class="flex items-center justify-between p-3 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border text-xs" style="border-color:var(--border);">
+                            <div class="flex flex-col gap-0.5">
+                                <span class="font-bold text-[10px]" style="color:var(--text);">Rendering Diagnostics Overlay</span>
+                                <span class="text-[8px] text-slate-400 leading-tight">Display real-time frames per second (FPS) performance monitor.</span>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer select-none">
+                                <input id="toggle-fps-monitor" type="checkbox" onchange="toggleFPSMonitorOverlay(this.checked)" class="sr-only peer">
+                                <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Diagnostics Dashboard Toggle -->
-                <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border text-xs" style="border-color:var(--border);">
-                    <div class="flex flex-col gap-0.5">
-                        <span class="font-bold text-[11px]" style="color:var(--text);">Rendering Diagnostics Overlay</span>
-                        <span class="text-[9px] text-slate-400">Real-time frames per second (FPS) performance monitor.</span>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer select-none">
-                        <input id="toggle-fps-monitor" type="checkbox" onchange="toggleFPSMonitorOverlay(this.checked)" class="accent-emerald-600 w-4 h-4 cursor-pointer">
-                    </label>
-                </div>
-            </div>
             </div><!-- Close settings-group-general -->
             
             <!-- ==================== SOUND / AMBIENT SETTINGS GROUP ==================== -->
@@ -2007,13 +2136,39 @@
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer select-none">
                                 <input id="toggle-fps-throttle" type="checkbox" onchange="handleAnimConfigChange(this, 'fpsAutoThrottle')" class="sr-only peer">
-                                <div class="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-600"></div>
+                                <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
                             </label>
                         </div>
 
                         <!-- FPS Low-Throttled Warning Alert -->
                         <div id="fps-throttle-alert" class="hidden flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 text-[9px] text-amber-600 dark:text-amber-400 font-medium">
                             <span>⚠️ Performance Budget triggered: animations throttled to save power!</span>
+                        </div>
+
+                        <!-- Auto-Advance Questions -->
+                        <div class="flex justify-between items-center py-0.5 border-t border-slate-100 dark:border-slate-700/50 pt-3">
+                            <div>
+                                <span class="text-[10px] font-bold text-slate-400 uppercase block">🚀 AUTO-ADVANCE QUESTIONS</span>
+                                <span class="text-[8px] text-slate-500 block leading-tight">Automatically load next question 1.5s after submit.</span>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer select-none">
+                                <input id="toggle-auto-advance" type="checkbox" onchange="handleAutoAdvanceToggle(this)" class="sr-only peer">
+                                <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                            </label>
+                        </div>
+
+                        <!-- Page Transition Style -->
+                        <div class="flex justify-between items-center py-0.5 border-t border-slate-100 dark:border-slate-700/50 pt-3">
+                            <div>
+                                <span class="text-[10px] font-bold text-slate-400 uppercase block">🎬 Page Transition Style</span>
+                                <span class="text-[8px] text-slate-500 block leading-tight">Customize sliding and page change animations.</span>
+                            </div>
+                            <select id="select-page-transition" onchange="handleAnimConfigChange(this, 'pageTransitionStyle'); playSound('click');" class="text-[10px] font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md px-1.5 py-1 text-slate-600 dark:text-slate-300 cursor-pointer">
+                                <option value="slide">Slide Transitions (Bi-directional) ➡️</option>
+                                <option value="fade">Smooth Fade-in 👁️</option>
+                                <option value="zoom">Scale/Zoom Organic 🔍</option>
+                                <option value="none">No Animation (Instant) ⚡</option>
+                            </select>
                         </div>
 
                         <!-- Reset Button -->
@@ -2062,10 +2217,13 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v23</span>
+                    <span class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v63-78f8781 (202608070932)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
+                    <button onclick="openSyncHistoryModal(); playSound('click');" class="w-full bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
+                        View Sync History 📝
+                    </button>
                     <button onclick="manualCheckForUpdates(); playSound('click');" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition">
                         Check for Updates 🔄
                     </button>
@@ -2183,273 +2341,484 @@
         </div>
 
         <!-- PLANNER PAGE -->
-        <div id="page-study-planner" class="page p-4 space-y-4">
+        <div id="page-study-planner" class="page p-3 space-y-3">
             
-
-            <!-- WELCOME HEADER & Countdown -->
-            <div class="flex justify-between items-center bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-100 dark:border-slate-700 shadow-sm animate-slide-up">
-                <div>
-                    <h2 class="text-base font-black text-slate-800 dark:text-slate-150">📅 Study Planner Pro</h2>
-                    <p id="planner-exam-countdown" class="text-[10px] text-emerald-600 font-bold mt-0.5">Countdown: Calculating...</p>
-                </div>
-                <div class="flex items-center gap-2">
-                    <button onclick="togglePlannerSettings()" id="btn-toggle-planner-settings" class="p-2 rounded-lg bg-slate-50 hover:bg-slate-100 dark:bg-slate-700/50 dark:hover:bg-slate-700 transition-colors text-xs font-bold flex items-center gap-1.5 border border-slate-200 dark:border-slate-600 cursor-pointer">
-                        ⚙️ settings
-                    </button>
-                </div>
-            </div>
-
-            <!-- TOAST MESSAGE / EMPTY STATE ALERTS -->
-            <div id="planner-empty-state-banner" class="hidden p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-2 animate-slide-up">
-                <div class="flex items-start gap-2.5">
-                    <span class="text-sm">💡</span>
-                    <div>
-                        <span class="text-xs font-black text-amber-700 dark:text-amber-400">Limited MCQ Practice History</span>
-                        <p class="text-[10px] text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">Solve at least 20 MCQs to unlock powerful planner recommendations based on your real performance. You can use Demo Mode below to explore what full stats look like!</p>
+            <!-- HERO BANNER: Premium gradient (Change 1) -->
+            <div id="planner-hero-card" class="relative overflow-hidden rounded-2xl animate-slide-up" style="background: linear-gradient(135deg, #059669 0%, #0d9488 40%, #4f46e5 100%); padding: 1px;">
+                <div class="relative rounded-2xl p-4" style="background: linear-gradient(135deg, rgba(5,150,105,0.92) 0%, rgba(13,148,136,0.88) 40%, rgba(79,70,229,0.92) 100%); backdrop-filter: blur(12px);">
+                    <!-- Top row: title + settings -->
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h2 class="text-sm font-black text-white uppercase tracking-widest flex items-center gap-1.5">🌱 Study Planner Pro</h2>
+                            <p class="text-[10px] text-emerald-200 font-semibold mt-0.5 opacity-80">Krishi Exam Preparation</p>
+                        </div>
+                        <button onclick="togglePlannerSettings(); playSound('click');" id="btn-toggle-planner-settings" class="p-2 rounded-xl cursor-pointer transition active:scale-95 border-none outline-none flex items-center gap-1" style="background:rgba(255,255,255,0.15); color:white; font-size:10px; font-weight:900;">
+                            ⚙️
+                        </button>
                     </div>
-                </div>
-                <button onclick="togglePlannerDemoMode()" id="btn-planner-demo-mode" class="px-3 py-1 bg-amber-600 text-white rounded-lg text-[10px] font-bold cursor-pointer hover:bg-amber-700 transition">
-                    Activate Interactive Demo Data
-                </button>
-            </div>
-
-            <div id="planner-demo-active-banner" class="hidden px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex justify-between items-center animate-slide-up">
-                <span class="text-[10px] text-indigo-700 dark:text-indigo-400 font-black">🌟 Active: Developer Demo Data Mode</span>
-                <button onclick="togglePlannerDemoMode()" class="text-[9px] text-indigo-600 underline font-bold">Use Real Practice History</button>
-            </div>
-
-            <!-- SMART DAILY PLAN ENGINE CARD -->
-            <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-4 hover-scale animate-slide-up" style="animation-delay: 0.1s;">
-                <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-2">
-                    <span class="text-xs font-black text-slate-800 dark:text-slate-200">✨ Today's Smart Daily Plan</span>
-                    <div class="flex gap-1" id="plan-mode-tabs">
-                        <button onclick="setPlanMode('quick')" id="pm-tab-quick" class="px-2 py-1 text-[9px] font-bold rounded-lg bg-indigo-500 text-white cursor-pointer select-none transition-all">Quick (30m)</button>
-                        <button onclick="setPlanMode('normal')" id="pm-tab-normal" class="px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all">Normal (1h)</button>
-                        <button onclick="setPlanMode('deep')" id="pm-tab-deep" class="px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all">Deep (2h)</button>
-                        <button onclick="setPlanMode('full')" id="pm-tab-full" class="px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all">Full (4h+)</button>
-                    </div>
-                </div>
-
-                <div id="smart-plan-details" class="space-y-3">
-                    <!-- Dynamic details generated in javascript -->
-                    <p class="text-[11px] text-slate-400">Generating optimum route configs...</p>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2 pt-1">
-                    <button onclick="generateTodaySmartPlan()" class="w-full py-2 bg-slate-50 select-none hover:bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 transition cursor-pointer flex justify-center items-center gap-1.5">
-                        🔄 Refresh Today's Plan
-                    </button>
-                    <button onclick="startSmartStudyPlanSession()" class="w-full py-2 bg-emerald-600 select-none hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer flex justify-center items-center gap-1.5">
-                        ⚡ Start Daily Plan Practice
-                    </button>
-                </div>
-            </div>
-
-            <!-- EXAM COUNTDOWN & DAILY TARGET SPLIT -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 animate-slide-up" style="animation-delay: 0.15s;">
-                <!-- Daily Target Tracker Card -->
-                <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 hover-scale">
-                    <div class="flex justify-between items-center">
-                        <span class="text-xs font-black text-slate-800 dark:text-slate-200">🎯 Daily MCQ Targets</span>
-                        <span id="planner-target-fraction" class="text-xs font-black text-emerald-600">0 / 50 Completed</span>
-                    </div>
-                    <div class="w-full bg-slate-100 dark:bg-slate-750 h-3.5 rounded-full overflow-hidden relative border border-slate-200/45">
-                        <div id="planner-target-progress-bar" class="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-700 rounded-full" style="width: 0%;"></div>
-                    </div>
-                    <div class="flex justify-between items-center text-[10px] text-slate-500">
-                        <span>Weekly Streak Reward Bonus:</span>
-                        <span id="planner-streak-count" class="font-black text-amber-500 flex items-center gap-1">
-                            <span class="animate-fire text-xs">🔥</span> 0 Days Active
+                    <!-- Countdown + Streak row -->
+                    <div class="flex items-end justify-between">
+                        <div>
+                            <p class="text-[9px] text-emerald-200 font-bold uppercase tracking-wider mb-0.5">Exam Countdown</p>
+                            <p id="planner-exam-countdown" class="text-lg font-black text-white leading-tight">Calculating...</p>
+                        </div>
+                        <span id="planner-streak-count" class="font-black text-[11px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl" style="background:rgba(251,191,36,0.2); border:1px solid rgba(251,191,36,0.4); color:#fde68a;">
+                            <span class="animate-bounce">🔥</span> 0 Days Active
                         </span>
                     </div>
-                </div>
-
-                <!-- Spaced review engine metrics -->
-                <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 hover-scale">
-                    <span class="text-xs font-black text-slate-800 dark:text-slate-200 block mb-1">🔁 Active Review Planner (SM-2 Spaced)</span>
-                    <div class="grid grid-cols-4 gap-1.5 text-center">
-                        <div class="bg-red-500/5 dark:bg-red-950/10 p-2 rounded-lg border border-red-500/10">
-                            <span id="lbl-review-due" class="text-xs font-black text-red-600">0</span>
-                            <span class="text-[8px] text-slate-400 block font-bold">DUE</span>
+                    <!-- Empty state / Demo banners sit INSIDE hero (Change 2) -->
+                    <div id="planner-empty-state-banner" class="hidden mt-3 pt-3 border-t" style="border-color:rgba(255,255,255,0.2);">
+                        <div class="flex items-start gap-2">
+                            <span class="text-sm">💡</span>
+                            <div class="flex-1">
+                                <span class="text-[10px] font-black text-amber-200 uppercase tracking-wide block">Limited MCQ Practice History</span>
+                                <p class="text-[9px] text-white/70 mt-0.5 leading-relaxed">Solve at least 20 MCQs to unlock planner recommendations based on your real performance.</p>
+                            </div>
                         </div>
-                        <div class="bg-rose-500/5 dark:bg-rose-950/10 p-2 rounded-lg border border-rose-500/10">
-                            <span id="lbl-review-overdue" class="text-xs font-black text-rose-600">0</span>
-                            <span class="text-[8px] text-slate-400 block font-bold">OVERDUE</span>
-                        </div>
-                        <div class="bg-indigo-500/5 dark:bg-indigo-950/10 p-2 rounded-lg border border-indigo-500/10">
-                            <span id="lbl-review-upcoming" class="text-xs font-black text-indigo-500">0</span>
-                            <span class="text-[8px] text-slate-400 block font-bold">UPCOMING</span>
-                        </div>
-                        <div class="bg-emerald-500/5 dark:bg-emerald-950/10 p-2 rounded-lg border border-emerald-500/10">
-                            <span id="lbl-review-mastered" class="text-xs font-black text-emerald-600">0</span>
-                            <span class="text-[8px] text-slate-400 block font-bold">MASTERED</span>
-                        </div>
+                        <button onclick="togglePlannerDemoMode(); playSound('click');" id="btn-planner-demo-mode" class="mt-2 w-full py-1.5 rounded-xl text-[10px] font-black uppercase cursor-pointer transition active:scale-95 border-none" style="background:rgba(251,191,36,0.3); color:#fef3c7;">
+                            ✨ Activate Demo Data
+                        </button>
                     </div>
-                    <div class="pt-1 select-none flex gap-2">
-                        <button onclick="startAdaptiveReview()" class="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-black cursor-pointer transition">
-                            Start Spaced Review
-                        </button>
-                        <button onclick="startWrongQuestionCorrection()" class="flex-1 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-black cursor-pointer transition">
-                            Practice Wrong Items
-                        </button>
+                    <div id="planner-demo-active-banner" class="hidden mt-3 pt-3 border-t flex justify-between items-center" style="border-color:rgba(255,255,255,0.2);">
+                        <span class="text-[10px] text-indigo-200 font-black">🌟 Demo Mode Active</span>
+                        <button onclick="togglePlannerDemoMode(); playSound('click');" class="text-[9px] text-white underline font-bold cursor-pointer">Use Real Data</button>
                     </div>
                 </div>
             </div>
 
-            <!-- THE ADVANCED SYLLABUS PROGRESS CARD -->
-            <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-4 hover-scale animate-slide-up" style="animation-delay: 0.2s;">
-                <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-2">
-                    <span class="text-xs font-black text-slate-800 dark:text-slate-200">📚 Advanced Syllabus Tracker</span>
-                    <button onclick="toggleAddSubjectView()" class="px-2 py-0.5 bg-emerald-600 text-white text-[9px] font-bold rounded hover:bg-emerald-700 cursor-pointer transition">
-                        ➕ Custom Subject
+            <!-- QUICK STATS ROW: 3-pill compact row (Change 3) -->
+            <div class="grid grid-cols-3 gap-2 animate-slide-up" style="animation-delay:0.05s;">
+                <div class="flex flex-col items-center p-2.5 rounded-xl border" style="background:var(--surface); border-color:var(--border);">
+                    <span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">Today</span>
+                    <span id="planner-quick-today" class="text-sm font-black text-emerald-600 mt-0.5">0/50</span>
+                    <span class="text-[8px] text-slate-400">MCQs</span>
+                </div>
+                <div class="flex flex-col items-center p-2.5 rounded-xl border" style="background:var(--surface); border-color:var(--border);">
+                    <span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">To Exam</span>
+                    <span id="planner-quick-days" class="text-sm font-black text-indigo-500 mt-0.5">--</span>
+                    <span class="text-[8px] text-slate-400">Days Left</span>
+                </div>
+                <div class="flex flex-col items-center p-2.5 rounded-xl border" style="background:var(--surface); border-color:var(--border);">
+                    <span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">Streak</span>
+                    <span id="planner-quick-streak" class="text-sm font-black text-amber-500 mt-0.5">0</span>
+                    <span class="text-[8px] text-slate-400">🔥 Days</span>
+                </div>
+            </div>
+
+            <!-- SMART DAILY PLAN: activity timeline (Change 4 + 5) -->
+            <div class="rounded-2xl border shadow-sm animate-slide-up overflow-hidden" style="background:var(--surface); border-color:var(--border); animation-delay:0.1s;">
+                <!-- Header + Icon Tabs (Change 4: icons added) -->
+                <div class="px-4 pt-4 pb-3 border-b" style="border-color:var(--border);">
+                    <span class="text-xs font-black uppercase tracking-wide" style="color:var(--text);">✨ Today's Smart Plan</span>
+                    <div class="flex gap-1 mt-2.5 p-1 rounded-xl" style="background:var(--bg);" id="plan-mode-tabs">
+                        <button onclick="setPlanMode('quick'); playSound('click');" id="pm-tab-quick" class="flex-1 py-1.5 text-[9px] font-black rounded-lg text-white cursor-pointer select-none transition-all active:scale-95 border-none outline-none" style="background:#4f46e5;">⚡ Quick</button>
+                        <button onclick="setPlanMode('normal'); playSound('click');" id="pm-tab-normal" class="flex-1 py-1.5 text-[9px] font-black rounded-lg cursor-pointer select-none transition-all active:scale-95 border-none outline-none" style="color:var(--text-secondary); background:transparent;">📘 Normal</button>
+                        <button onclick="setPlanMode('deep'); playSound('click');" id="pm-tab-deep" class="flex-1 py-1.5 text-[9px] font-black rounded-lg cursor-pointer select-none transition-all active:scale-95 border-none outline-none" style="color:var(--text-secondary); background:transparent;">🧠 Deep</button>
+                        <button onclick="setPlanMode('full'); playSound('click');" id="pm-tab-full" class="flex-1 py-1.5 text-[9px] font-black rounded-lg cursor-pointer select-none transition-all active:scale-95 border-none outline-none" style="color:var(--text-secondary); background:transparent;">🎓 Full</button>
+                    </div>
+                </div>
+                <!-- Step cards container (Change 5) -->
+                <div id="smart-plan-details" class="px-4 py-3 space-y-2 max-h-[180px] overflow-y-auto" style="scrollbar-width: thin;">
+                    <p class="text-[10px]" style="color:var(--text-secondary);">Generating optimum route configs...</p>
+                </div>
+                <!-- Action buttons -->
+                <div class="grid grid-cols-2 gap-2 px-4 pb-4">
+                    <button onclick="generateTodaySmartPlan(); playSound('click');" class="w-full py-2.5 rounded-xl text-xs font-black transition active:scale-95 cursor-pointer flex justify-center items-center gap-1.5 select-none border" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                        🔄 Refresh Plan
+                    </button>
+                    <button onclick="startSmartStudyPlanSession(); playSound('click');" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-sm cursor-pointer flex justify-center items-center gap-1.5 select-none border-none">
+                        ⚡ Start Practice
                     </button>
                 </div>
+            </div>
 
-                <!-- Add Subject Form Row -->
-                <div id="add-subject-form" class="hidden p-3 bg-slate-50 dark:bg-slate-900 border rounded-lg space-y-2">
-                    <span class="text-[10px] font-bold text-slate-500 uppercase block">Propose Custom Subject</span>
-                    <div class="grid grid-cols-2 gap-2 text-xs">
-                        <input id="new-syllabus-subject" placeholder="Subject Name..." class="p-2 border rounded bg-white dark:bg-slate-800">
-                        <input id="new-syllabus-weight" type="number" placeholder="Weight %" class="p-2 border rounded bg-white dark:bg-slate-800">
+            <!-- METRICS ROW: Daily Target + SM-2 side-by-side (Change 6) -->
+            <div class="grid grid-cols-2 gap-2.5 animate-slide-up" style="animation-delay:0.15s;">
+                <!-- Daily Target Card -->
+                <div class="rounded-2xl border p-3 space-y-2.5" style="background:var(--surface); border-color:var(--border);">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] font-black uppercase tracking-wide" style="color:var(--text);">🎯 Daily Target</span>
                     </div>
-                    <div class="flex justify-end gap-1.5">
-                        <button onclick="toggleAddSubjectView()" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded text-[10px] cursor-pointer">Close</button>
-                        <button onclick="submitCustomSyllabusSubject()" class="px-2.5 py-1 bg-emerald-600 text-white rounded text-[10px] font-bold cursor-pointer">Save Subject</button>
+                    <span id="planner-target-fraction" class="text-xs font-black text-emerald-600 block">0 / 50</span>
+                    <div class="w-full h-2 rounded-full overflow-hidden" style="background:var(--bg);">
+                        <div id="planner-target-progress-bar" class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-700 rounded-full" style="width:0%;"></div>
                     </div>
+                    <p class="text-[8px] leading-normal" style="color:var(--text-secondary);">Practice daily to maintain streak boosts.</p>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-                    <!-- Circular progress ring -->
-                    <div class="flex flex-col items-center justify-center p-3 border border-dashed border-slate-150 dark:border-slate-700 rounded-xl">
-                        <div class="relative w-28 h-28 flex items-center justify-center">
-                            <svg class="w-full h-full transform -rotate-90">
-                                <circle cx="56" cy="56" r="45" stroke="var(--border)" stroke-width="8" fill="transparent" class="text-slate-100 dark:text-slate-750" />
-                                <circle id="syllabus-circle-stroke" cx="56" cy="56" r="45" stroke="#10b981" stroke-width="8" fill="transparent" 
-                                        stroke-dasharray="283" stroke-dashoffset="283" class="transition-all duration-700" />
-                            </svg>
-                            <div class="absolute flex flex-col items-center">
-                                <span id="lbl-syllabus-completion-percent" class="text-lg font-black text-slate-800 dark:text-slate-100">0%</span>
-                                <span class="text-[8px] text-slate-400 font-bold tracking-tight uppercase">Syllabus Complete</span>
+                <!-- SM-2 Spaced Review Card -->
+                <div class="rounded-2xl border p-3 space-y-2" style="background:var(--surface); border-color:var(--border);">
+                    <span class="text-[9px] font-black uppercase tracking-wide block" style="color:var(--text);">🔁 SM-2 Review</span>
+                    <div class="grid grid-cols-2 gap-1 text-center">
+                        <div class="p-1.5 rounded-lg" style="background:rgba(239,68,68,0.07);">
+                            <p class="text-[7px] font-bold text-red-500 uppercase">Due</p>
+                            <span id="lbl-review-due" class="text-sm font-black text-red-600">0</span>
+                        </div>
+                        <div class="p-1.5 rounded-lg" style="background:rgba(244,63,94,0.07);">
+                            <p class="text-[7px] font-bold text-rose-500 uppercase">Over</p>
+                            <span id="lbl-review-overdue" class="text-sm font-black text-rose-600">0</span>
+                        </div>
+                        <div class="p-1.5 rounded-lg" style="background:rgba(99,102,241,0.07);">
+                            <p class="text-[7px] font-bold text-indigo-500 uppercase">Soon</p>
+                            <span id="lbl-review-upcoming" class="text-sm font-black text-indigo-500">0</span>
+                        </div>
+                        <div class="p-1.5 rounded-lg" style="background:rgba(16,185,129,0.07);">
+                            <p class="text-[7px] font-bold text-emerald-500 uppercase">Done</p>
+                            <span id="lbl-review-mastered" class="text-sm font-black text-emerald-600">0</span>
+                        </div>
+                    </div>
+                    <div class="flex gap-1.5">
+                        <button onclick="startAdaptiveReview(); playSound('click');" class="flex-1 py-1.5 text-white rounded-lg text-[8px] font-black uppercase cursor-pointer transition active:scale-95 border-none" style="background:#4f46e5;">Review</button>
+                        <button onclick="startWrongQuestionCorrection(); playSound('click');" class="flex-1 py-1.5 text-white rounded-lg text-[8px] font-black uppercase cursor-pointer transition active:scale-95 border-none" style="background:#e11d48;">Fix</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYLLABUS TRACKER: Collapsible default collapsed (Change 7) -->
+            <div class="rounded-2xl border shadow-sm animate-slide-up overflow-hidden" style="background:var(--surface); border-color:var(--border); animation-delay:0.2s;">
+                <!-- Collapsed header row — always visible -->
+                <button onclick="(function(){let b=document.getElementById('syllabus-body');let i=document.getElementById('syllabus-chevron');b.classList.toggle('hidden');i.style.transform=b.classList.contains('hidden')?'rotate(0deg)':'rotate(180deg)';})(); playSound('click');" class="w-full flex justify-between items-center px-4 py-3 cursor-pointer border-none outline-none" style="background:transparent;">
+                    <div class="flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-xl flex items-center justify-center" style="background:rgba(16,185,129,0.1);">
+                            <span class="text-sm">📚</span>
+                        </div>
+                        <div class="text-left">
+                            <span class="text-xs font-black uppercase tracking-wide block" style="color:var(--text);">Syllabus Tracker</span>
+                            <span class="text-[9px]" style="color:var(--text-secondary);">Tap to expand chapters</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span id="lbl-syllabus-completion-percent" class="text-sm font-black text-emerald-600">0%</span>
+                        <span id="syllabus-chevron" class="text-slate-400 text-sm transition-transform duration-300" style="transform:rotate(0deg);">⌄</span>
+                    </div>
+                </button>
+
+                <!-- Expandable body — default hidden -->
+                <div id="syllabus-body" class="hidden border-t" style="border-color:var(--border);">
+                    <!-- Circular ring + checklist -->
+                    <div class="p-4 space-y-3">
+                        <div class="flex items-center gap-4">
+                            <!-- Compact circular ring -->
+                            <div class="relative w-20 h-20 flex-shrink-0 flex items-center justify-center">
+                                <svg class="w-full h-full transform -rotate-90">
+                                    <circle cx="40" cy="40" r="32" stroke="var(--border)" stroke-width="6" fill="transparent" />
+                                    <circle id="syllabus-circle-stroke" cx="40" cy="40" r="32" stroke="#10b981" stroke-width="6" fill="transparent"
+                                            stroke-dasharray="201" stroke-dashoffset="201" class="transition-all duration-700" style="filter:drop-shadow(0 0 3px rgba(16,185,129,0.3));" />
+                                </svg>
+                                <div class="absolute flex flex-col items-center">
+                                    <span class="text-sm font-black" style="color:var(--text);">0%</span>
+                                </div>
+                            </div>
+                            <!-- High priority checklist -->
+                            <div class="flex-1 space-y-1.5">
+                                <span class="text-[9px] font-black text-rose-500 uppercase block tracking-wider">🚀 High-Priority Pending</span>
+                                <div id="high-priority-checklist" class="space-y-1">
+                                    <p class="text-[10px] italic" style="color:var(--text-secondary);">No pending items found.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Add Subject Form -->
+                        <div class="flex justify-between items-center pt-1">
+                            <span class="text-[9px] font-black uppercase tracking-wider" style="color:var(--text-secondary);">Subjects</span>
+                            <button onclick="toggleAddSubjectView(); playSound('click');" class="px-2.5 py-1 text-white text-[9px] font-black uppercase rounded-lg cursor-pointer transition active:scale-95 border-none" style="background:#059669;">➕ Add Subject</button>
+                        </div>
+                        <div id="add-subject-form" class="hidden p-3 rounded-xl border space-y-2" style="background:var(--bg); border-color:var(--border);">
+                            <span class="text-[9px] font-black uppercase tracking-wider block" style="color:var(--text-secondary);">New Custom Subject</span>
+                            <div class="grid grid-cols-2 gap-2 text-xs">
+                                <input id="new-syllabus-subject" placeholder="Subject Name..." class="p-2 border rounded-xl" style="background:var(--surface); border-color:var(--border); color:var(--text);">
+                                <input id="new-syllabus-weight" type="number" placeholder="Weight %" class="p-2 border rounded-xl" style="background:var(--surface); border-color:var(--border); color:var(--text);">
+                            </div>
+                            <div class="flex justify-end gap-1.5">
+                                <button onclick="toggleAddSubjectView(); playSound('click');" class="px-3 py-1 rounded-lg text-[9px] font-black uppercase cursor-pointer border" style="background:var(--bg); border-color:var(--border); color:var(--text);">Close</button>
+                                <button onclick="submitCustomSyllabusSubject(); playSound('click');" class="px-3 py-1 bg-emerald-600 text-white rounded-lg text-[9px] font-black uppercase cursor-pointer border-none">Save</button>
+                            </div>
+                        </div>
+
+                        <!-- Accordion -->
+                        <div id="syllabus-accordion-container" class="space-y-2 max-h-[260px] overflow-y-auto pr-1" style="scrollbar-width:thin;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUBJECT PROFICIENCY MATRIX -->
+            <div class="p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 animate-slide-up" style="animation-delay: 0.25s;">
+                <span class="text-xs font-black text-slate-800 dark:text-slate-200 block border-b border-slate-100 dark:border-slate-700 pb-2 uppercase tracking-wide">🎯 Subject Proficiency Matrix</span>
+                <div id="planner-proficiency-list" class="space-y-2">
+                    <!-- Dynamic subject rows generated in JS -->
+                </div>
+                <div class="pt-2 flex justify-between gap-2 w-full">
+                    <button onclick="startPracticeWeakestSubject(); playSound('click');" class="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black uppercase rounded-xl cursor-pointer transition active:scale-95 border-none outline-none">
+                        Practice Weakest
+                    </button>
+                    <button onclick="startMaintainStrongSubjectPractice(); playSound('click');" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase rounded-xl cursor-pointer transition active:scale-95 border-none outline-none">
+                        Maintain Mastery
+                    </button>
+                </div>
+            </div>
+
+            <!-- HEATMAP: With month + day labels (Change 8) -->
+            <div class="rounded-2xl border shadow-sm animate-slide-up overflow-hidden" style="background:var(--surface); border-color:var(--border); animation-delay:0.3s;">
+                <div class="flex justify-between items-center px-4 pt-4 pb-2 border-b" style="border-color:var(--border);">
+                    <span class="text-xs font-black uppercase tracking-wide" style="color:var(--text);">📅 Activity Heatmap</span>
+                    <span class="text-[9px] font-black uppercase" id="lbl-heatmap-weekly-avg" style="color:var(--text-secondary);">Avg: calculating...</span>
+                </div>
+                <div class="px-4 py-3">
+                    <!-- Month labels row -->
+                    <div class="overflow-x-auto" style="scrollbar-width:none;">
+                        <div class="min-w-[420px]">
+                            <div class="flex mb-1" style="padding-left:18px;">
+                                <span class="text-[7px] font-black uppercase tracking-wider flex-1 text-center" style="color:var(--text-secondary);">Jun</span>
+                                <span class="text-[7px] font-black uppercase tracking-wider flex-1 text-center" style="color:var(--text-secondary);">Jul</span>
+                                <span class="text-[7px] font-black uppercase tracking-wider flex-1 text-center" style="color:var(--text-secondary);">Aug</span>
+                                <span class="text-[7px] font-black uppercase tracking-wider flex-1 text-center" style="color:var(--text-secondary);">Sep</span>
+                                <span class="text-[7px] font-black uppercase tracking-wider flex-1 text-center" style="color:var(--text-secondary);">Oct</span>
+                            </div>
+                            <!-- Day labels + Grid -->
+                            <div class="flex gap-1">
+                                <!-- Day labels column -->
+                                <div class="flex flex-col gap-1 justify-around" style="width:16px; flex-shrink:0;">
+                                    <span class="text-[6px] font-black uppercase" style="color:var(--text-secondary);">M</span>
+                                    <span class="text-[6px] font-black uppercase" style="color:var(--text-secondary);">W</span>
+                                    <span class="text-[6px] font-black uppercase" style="color:var(--text-secondary);">F</span>
+                                </div>
+                                <!-- Heatmap grid -->
+                                <div class="overflow-x-auto touch-pan-x flex-1" style="scrollbar-width:none; -webkit-overflow-scrolling:touch;">
+                                    <div id="planner-heatmap-calendar-container" class="gap-1 min-w-[400px]" style="display:grid; grid-template-columns:repeat(15, minmax(0, 1fr));">
+                                        <!-- 15 weeks * 7 days populated dynamically -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Legend -->
+                    <div class="flex items-center justify-between mt-2 text-[7px] font-black uppercase tracking-wider" style="color:var(--text-secondary);">
+                        <span>Less</span>
+                        <div class="flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-sm" style="background:var(--border);"></span>
+                            <span class="w-2 h-2 rounded-sm bg-emerald-200"></span>
+                            <span class="w-2 h-2 rounded-sm bg-emerald-400"></span>
+                            <span class="w-2 h-2 rounded-sm bg-emerald-600"></span>
+                            <span class="w-2 h-2 rounded-sm bg-emerald-800"></span>
+                        </div>
+                        <span>More Solved</span>
+                    </div>
+                    <!-- Weekly bar indicators -->
+                    <div class="pt-2 border-t mt-2" style="border-color:var(--border);">
+                        <span class="text-[8px] font-black uppercase block mb-1.5 tracking-wider" style="color:var(--text-secondary);">Weekly Targets:</span>
+                        <div id="planner-weekly-bar-indicators" class="flex gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SETTINGS PANEL: Advanced Top-Sheet (v29) -->
+            <div id="planner-settings-overlay" class="hidden fixed inset-0 z-40" style="background:rgba(0,0,0,0.5); backdrop-filter:blur(3px);" onclick="togglePlannerSettings(); playSound('click');"></div>
+            <div id="planner-settings-panel" class="hidden fixed top-0 left-0 right-0 z-50 rounded-b-2xl shadow-2xl border-b" style="background:var(--surface); border-color:var(--border); max-height:90vh; overflow-y:auto;">
+                <div class="px-4 pt-4 space-y-5">
+                    <!-- Header -->
+                    <div class="flex justify-between items-center pb-3 border-b" style="border-color:var(--border);">
+                        <div>
+                            <span class="text-sm font-black uppercase tracking-wide" style="color:var(--text);">⚙️ Planner Settings</span>
+                            <p class="text-[9px] mt-0.5" style="color:var(--text-secondary);">Customize your study experience</p>
+                        </div>
+                        <button onclick="togglePlannerSettings(); playSound('click');" class="w-8 h-8 rounded-full flex items-center justify-center font-black cursor-pointer border-none" style="background:var(--bg); color:var(--text); font-size:14px;">✕</button>
+                    </div>
+
+                    <!-- SECTION 1: STUDY GOALS -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(16,185,129,0.15);">🎯</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600">Study Goals</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2.5">
+                            <div>
+                                <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">Daily MCQ Target</label>
+                                <input id="planner-config-daily-target" type="number" min="5" max="300" class="w-full p-2.5 border rounded-xl text-xs" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                            </div>
+                            <div>
+                                <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">Weekly MCQ Target</label>
+                                <input id="planner-config-weekly-target" type="number" min="20" max="2100" class="w-full p-2.5 border rounded-xl text-xs" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                            </div>
+                            <div>
+                                <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">Exam Date</label>
+                                <input id="planner-config-exam-date" type="date" class="w-full p-2.5 border rounded-xl text-xs" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                            </div>
+                            <div>
+                                <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">Weak Threshold %</label>
+                                <input id="planner-config-weak-threshold" type="number" min="10" max="95" class="w-full p-2.5 border rounded-xl text-xs" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                            </div>
+                        </div>
+                        <!-- Study Intensity Mode -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1.5" style="color:var(--text-secondary);">🔥 Study Intensity Mode</label>
+                            <div class="grid grid-cols-4 gap-1.5">
+                                <button onclick="setIntensityMode('relaxed'); playSound('click');" id="intensity-relaxed" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">🐢<br><span class="text-[8px]">Relaxed</span></button>
+                                <button onclick="setIntensityMode('normal'); playSound('click');" id="intensity-normal" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:rgba(99,102,241,0.15); color:#6366f1;">📘<br><span class="text-[8px]">Normal</span></button>
+                                <button onclick="setIntensityMode('intense'); playSound('click');" id="intensity-intense" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">🔥<br><span class="text-[8px]">Intense</span></button>
+                                <button onclick="setIntensityMode('crunch'); playSound('click');" id="intensity-crunch" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">💀<br><span class="text-[8px]">Crunch</span></button>
+                            </div>
+                            <p id="intensity-hint" class="text-[8px] mt-1" style="color:var(--text-secondary);">Auto-adjusts daily target and plan mode.</p>
+                        </div>
+                    </div>
+
+                    <div class="h-px" style="background:var(--border);"></div>
+
+                    <!-- SECTION 2: REST & SCHEDULE -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(99,102,241,0.15);">😴</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-indigo-500">Rest &amp; Schedule</span>
+                        </div>
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1.5" style="color:var(--text-secondary);">Practice Time Slots</label>
+                            <div class="flex gap-2 flex-wrap">
+                                <label class="flex items-center gap-1.5 px-3 py-2 rounded-xl border cursor-pointer select-none text-xs font-bold" style="background:var(--bg); border-color:var(--border); color:var(--text);"><input type="checkbox" id="planner-slot-morning" checked> 🌅 Morning</label>
+                                <label class="flex items-center gap-1.5 px-3 py-2 rounded-xl border cursor-pointer select-none text-xs font-bold" style="background:var(--bg); border-color:var(--border); color:var(--text);"><input type="checkbox" id="planner-slot-afternoon" checked> ☀️ Afternoon</label>
+                                <label class="flex items-center gap-1.5 px-3 py-2 rounded-xl border cursor-pointer select-none text-xs font-bold" style="background:var(--bg); border-color:var(--border); color:var(--text);"><input type="checkbox" id="planner-slot-evening" checked> 🌙 Evening</label>
+                            </div>
+                        </div>
+                        <!-- Rest Days -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1.5" style="color:var(--text-secondary);">😴 Weekly Rest Days (streak safe)</label>
+                            <div id="rest-day-buttons" class="flex gap-1"></div>
+                        </div>
+                        <!-- Study Hours -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">⏱️ Daily Study Hours Goal</label>
+                            <div class="flex items-center gap-2">
+                                <input id="planner-config-study-hours" type="range" min="0.5" max="10" step="0.5" value="2" class="flex-1 cursor-pointer" oninput="document.getElementById('study-hours-lbl').textContent=this.value+' hrs';">
+                                <span id="study-hours-lbl" class="text-xs font-black text-indigo-500 w-14 text-right">2 hrs</span>
                             </div>
                         </div>
                     </div>
 
-                    <!-- High priority pending items checklist -->
-                    <div class="md:col-span-2 space-y-2">
-                        <span class="text-[10px] font-bold text-rose-500 uppercase block">🚀 High-Priority Pending Chapters:</span>
-                        <div id="high-priority-checklist" class="space-y-1.5">
-                            <!-- Populated dynamically -->
-                            <p class="text-[10px] text-slate-400 italic">No pending items found.</p>
+                    <div class="h-px" style="background:var(--border);"></div>
+
+                    <!-- SECTION 3: SMART ALGORITHM -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(245,158,11,0.15);">🧠</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-amber-500">Smart Algorithm</span>
+                        </div>
+                        <!-- New vs Review Ratio -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">⚖️ New MCQs vs Review Ratio</label>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[8px] font-black text-emerald-600">New</span>
+                                <input id="planner-config-new-ratio" type="range" min="20" max="80" step="10" value="50" class="flex-1 cursor-pointer" oninput="document.getElementById('ratio-new-lbl').textContent=this.value+'% New'; document.getElementById('ratio-rev-lbl').textContent=(100-parseInt(this.value))+'% Review';">
+                                <span class="text-[8px] font-black text-indigo-500">Review</span>
+                            </div>
+                            <div class="flex justify-between text-[8px] font-black mt-0.5">
+                                <span id="ratio-new-lbl" class="text-emerald-600">50% New</span>
+                                <span id="ratio-rev-lbl" class="text-indigo-500">50% Review</span>
+                            </div>
+                        </div>
+                        <!-- Difficulty Bias -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1.5" style="color:var(--text-secondary);">🧠 Question Difficulty Bias</label>
+                            <div class="grid grid-cols-3 gap-1.5">
+                                <button onclick="setDifficultyBias('easy'); playSound('click');" id="diff-easy" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">🟢 Easy</button>
+                                <button onclick="setDifficultyBias('balanced'); playSound('click');" id="diff-balanced" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:rgba(245,158,11,0.15); color:#f59e0b;">⚖️ Balanced</button>
+                                <button onclick="setDifficultyBias('hard'); playSound('click');" id="diff-hard" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">🔴 Hard</button>
+                            </div>
+                        </div>
+                        <!-- Retry Delay -->
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1.5" style="color:var(--text-secondary);">🔁 Wrong Answer Retry Delay</label>
+                            <div class="grid grid-cols-3 gap-1.5">
+                                <button onclick="setRetryDelay(1); playSound('click');" id="retry-1" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">⚡ 1 Day</button>
+                                <button onclick="setRetryDelay(3); playSound('click');" id="retry-3" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:rgba(99,102,241,0.15); color:#6366f1;">📘 3 Days</button>
+                                <button onclick="setRetryDelay(7); playSound('click');" id="retry-7" class="py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95" style="background:var(--bg); color:var(--text-secondary);">🧘 7 Days</button>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Syllabus breakdown subjects accordion grid -->
-                <div id="syllabus-accordion-container" class="space-y-2 max-h-[350px] overflow-y-auto pr-1">
-                    <!-- Populated dynamically -->
-                </div>
-            </div>
+                    <div class="h-px" style="background:var(--border);"></div>
 
-            <!-- SUBJECT PROFICIENCY TRACKER -->
-            <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 hover-scale animate-slide-up" style="animation-delay: 0.25s;">
-                <span class="text-xs font-black text-slate-800 dark:text-slate-200 block border-b border-slate-100 dark:border-slate-700 pb-2">🎯 Subject Proficiency Matrix</span>
-                <div id="planner-proficiency-list" class="space-y-2">
-                    <!-- Dynamic subject rows generated in JS -->
-                </div>
-                <div class="pt-2 flex justify-between gap-2">
-                    <button onclick="startPracticeWeakestSubject()" class="flex-1 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] rounded-lg font-black cursor-pointer transition">
-                        Practice Weakest Subject
-                    </button>
-                    <button onclick="startMaintainStrongSubjectPractice()" class="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] rounded-lg font-black cursor-pointer transition">
-                        Maintain Elite Topic Mastery
-                    </button>
-                </div>
-            </div>
-
-            <!-- CALENDAR HEATMAP & TIMELINE -->
-            <div class="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 hover-scale pr-3 animate-slide-up" style="animation-delay: 0.3s;">
-                <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-2">
-                    <span class="text-xs font-black text-slate-800 dark:text-slate-200">📅 Heatmap Tracker & Streaks</span>
-                    <span class="text-[9px] text-slate-400 font-bold" id="lbl-heatmap-weekly-avg">Daily solve avg: calculating...</span>
-                </div>
-
-                <!-- Heatmap grid wrapper -->
-                <div class="overflow-x-auto pb-1.5">
-                    <div id="planner-heatmap-calendar-container" class="flex flex-wrap gap-1 min-w-[320px] max-w-[550px]" style="display: grid; grid-template-columns: repeat(15, minmax(0, 1fr));">
-                        <!-- 15 weeks * 7 days populated dynamically -->
+                    <!-- SECTION 4: FOCUS LOCK -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(239,68,68,0.15);">🎯</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-rose-500">Weekly Focus Lock</span>
+                        </div>
+                        <div>
+                            <label class="text-[9px] font-black uppercase tracking-wider block mb-1" style="color:var(--text-secondary);">🎯 Focus Subject This Week</label>
+                            <select id="planner-config-focus-subject" class="w-full p-2.5 border rounded-xl text-xs font-bold cursor-pointer" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                                <option value="all">📚 All Subjects (Default)</option>
+                                <option value="Agronomy">🌾 Agronomy</option>
+                                <option value="Horticulture">🍎 Horticulture</option>
+                                <option value="Plant Pathology">🍄 Plant Pathology</option>
+                                <option value="Entomology">🐛 Entomology</option>
+                                <option value="Soil Science">🪨 Soil Science</option>
+                                <option value="Agricultural Economics">💰 Agricultural Economics</option>
+                                <option value="Animal Science">🐄 Animal Science</option>
+                                <option value="Agricultural Engineering">⚙️ Agricultural Engineering</option>
+                            </select>
+                            <p class="text-[8px] mt-1" style="color:var(--text-secondary);">Planner prioritizes this subject in daily recommendations.</p>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Legend of heatmap values -->
-                <div class="flex justify-between items-center text-[8px] text-slate-400 mt-1 uppercase font-bold">
-                    <span>Missed Day</span>
-                    <div class="flex items-center gap-1">
-                        <span>Less</span>
-                        <span class="w-1.5 h-1.5 rounded-sm bg-slate-100 dark:bg-slate-700"></span>
-                        <span class="w-1.5 h-1.5 rounded-sm bg-emerald-250"></span>
-                        <span class="w-1.5 h-1.5 rounded-sm bg-emerald-450"></span>
-                        <span class="w-1.5 h-1.5 rounded-sm bg-emerald-650"></span>
-                        <span class="w-1.5 h-1.5 rounded-sm bg-emerald-850"></span>
-                        <span>More Solved</span>
-                    </div>
-                    <span>Daily Target Met</span>
-                </div>
+                    <div class="h-px" style="background:var(--border);"></div>
 
-                <!-- Animated Weekly mini chart indicators -->
-                <div class="pt-2 border-t border-slate-100 dark:border-slate-700">
-                    <span class="text-[10px] font-black text-slate-500 uppercase block mb-1">Weekly target completed flags:</span>
-                    <div id="planner-weekly-bar-indicators" class="flex gap-2.5">
-                        <!-- Populated dynamically -->
+                    <!-- SECTION 5: DATA & REPORTS -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(16,185,129,0.15);">📤</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600">Data &amp; Reports</span>
+                        </div>
+                        <button onclick="exportStudyReport(); playSound('click');" class="w-full py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer border transition active:scale-95" style="background:rgba(16,185,129,0.08); border-color:rgba(16,185,129,0.3); color:#059669;">📊 Export Full Study Report (JSON)</button>
+                        <div class="flex gap-2 items-center">
+                            <select id="reset-subject-select" class="flex-1 p-2.5 border rounded-xl text-xs" style="background:var(--bg); border-color:var(--border); color:var(--text);">
+                                <option value="">Select subject to reset stats...</option>
+                                <option value="Agronomy">Agronomy</option>
+                                <option value="Horticulture">Horticulture</option>
+                                <option value="Plant Pathology">Plant Pathology</option>
+                                <option value="Entomology">Entomology</option>
+                                <option value="Soil Science">Soil Science</option>
+                                <option value="Agricultural Economics">Agricultural Economics</option>
+                                <option value="Animal Science">Animal Science</option>
+                            </select>
+                            <button onclick="resetSubjectData(); playSound('click');" class="px-3 py-2.5 rounded-xl text-[10px] font-black cursor-pointer border-none transition active:scale-95 whitespace-nowrap" style="background:rgba(239,68,68,0.1); color:#ef4444;">🔄 Reset</button>
+                        </div>
                     </div>
-                </div>
-            </div>
 
-            <!-- COLLAPSIBLE PLANNER SETTINGS PANEL -->
-            <div id="planner-settings-panel" class="hidden p-4 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 rounded-xl shadow-sm space-y-3 animate-slide-up">
-                <span class="text-xs font-black text-slate-800 dark:text-slate-200 block border-b border-slate-100 dark:border-slate-700 pb-1.5">⚙️ Advanced Planner Setting Configurations</span>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
-                    <div>
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block mb-1">Daily MCQ Target Solves</label>
-                        <input id="planner-config-daily-target" type="number" min="5" max="300" class="w-full p-2 border rounded bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block mb-1">Weekly MCQ Target Solves</label>
-                        <input id="planner-config-weekly-target" type="number" min="20" max="2100" class="w-full p-2 border rounded bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block mb-1">Syllabus Exam Date</label>
-                        <input id="planner-config-exam-date" type="date" class="w-full p-2 border rounded bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-bold text-slate-500 uppercase block mb-1">Weak Accuracy Threshold %</label>
-                        <input id="planner-config-weak-threshold" type="number" min="10" max="95" class="w-full p-2 border rounded bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs">
-                    </div>
-                </div>
+                    <div class="h-px" style="background:var(--border);"></div>
 
-                <!-- Custom time slot checklist configuration -->
-                <div class="text-xs space-y-1.5">
-                    <span class="text-[10px] font-black text-slate-500 uppercase block">Active Practice Time Slots</span>
-                    <div class="flex gap-4 flex-wrap text-slate-700 dark:text-slate-300">
-                        <label class="flex items-center gap-1 bg-slate-50 dark:bg-slate-900 px-2.5 py-1 rounded">
-                            <input type="checkbox" id="planner-slot-morning" checked> Morning
-                        </label>
-                        <label class="flex items-center gap-1 bg-slate-50 dark:bg-slate-900 px-2.5 py-1 rounded">
-                            <input type="checkbox" id="planner-slot-afternoon" checked> Afternoon
-                        </label>
-                        <label class="flex items-center gap-1 bg-slate-50 dark:bg-slate-900 px-2.5 py-1 rounded">
-                            <input type="checkbox" id="planner-slot-evening" checked> Evening
-                        </label>
+                    <!-- SECTION 6: PERSONALIZATION -->
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-lg flex items-center justify-center text-xs" style="background:rgba(139,92,246,0.15);">🎨</span>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-violet-500">Personalization</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-center p-3 rounded-xl" style="background:var(--bg);">
+                                <div><span class="text-xs font-black" style="color:var(--text);">🔊 Sound Effects</span><p class="text-[8px]" style="color:var(--text-secondary);">Click and feedback sounds</p></div>
+                                <label class="cursor-pointer flex items-center" style="position:relative; width:44px; height:24px;">
+                                    <input type="checkbox" id="planner-config-sound" checked style="opacity:0; width:0; height:0; position:absolute;" onchange="applyPlannerPersonalization();">
+                                    <span id="sound-track" style="position:absolute; inset:0; background:#10b981; border-radius:9999px; transition:background 0.2s;"></span>
+                                    <span id="sound-thumb" style="position:absolute; left:2px; top:2px; width:20px; height:20px; background:white; border-radius:50%; transition:transform 0.2s; transform:translateX(20px);"></span>
+                                </label>
+                            </div>
+                            <div class="flex justify-between items-center p-3 rounded-xl" style="background:var(--bg);">
+                                <div><span class="text-xs font-black" style="color:var(--text);">📦 Compact Card Mode</span><p class="text-[8px]" style="color:var(--text-secondary);">Smaller cards, more content visible</p></div>
+                                <label class="cursor-pointer flex items-center" style="position:relative; width:44px; height:24px;">
+                                    <input type="checkbox" id="planner-config-compact" style="opacity:0; width:0; height:0; position:absolute;" onchange="applyPlannerPersonalization();">
+                                    <span id="compact-track" style="position:absolute; inset:0; background:var(--border); border-radius:9999px; transition:background 0.2s;"></span>
+                                    <span id="compact-thumb" style="position:absolute; left:2px; top:2px; width:20px; height:20px; background:white; border-radius:50%; transition:transform 0.2s;"></span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
-                </div>
 
-                <div class="pt-2 flex justify-between gap-2">
-                    <button onclick="resetPlannerSettingsToDefaults()" class="py-2 px-4 bg-rose-100 hover:bg-red-200 text-rose-700 dark:bg-red-950/40 dark:text-red-400 rounded-lg text-xs font-bold transition cursor-pointer">
-                        🔄 Reset Settings
-                    </button>
-                    <button onclick="savePlannerSettingsNew()" class="py-2 px-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer ml-auto">
-                        Save Configurations
-                    </button>
+                    <!-- Footer Buttons -->
+                    <div class="flex gap-2 pt-1">
+                        <button onclick="resetPlannerSettingsToDefaults(); playSound('click');" class="py-3 px-4 rounded-xl text-xs font-black uppercase transition cursor-pointer border-none active:scale-95" style="background:rgba(239,68,68,0.1); color:#ef4444;">Reset All</button>
+                        <button onclick="savePlannerSettingsNew(); playSound('click');" class="flex-1 py-3 text-white rounded-xl text-xs font-black uppercase transition shadow-sm cursor-pointer border-none active:scale-95" style="background:#059669;">💾 Save Settings</button>
+                    </div>
+                    <!-- Bottom drag handle -->
+                    <div class="flex justify-center pb-3 pt-2">
+                        <div class="w-12 h-1.5 rounded-full" style="background:var(--border);"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2804,82 +3173,235 @@
                 </div>
             </div>
         </div>
+
+        <!-- LIVE QR CODE CAMERA SCANNER MODAL -->
+        <div id="qr-scanner-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div class="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border);">
+                <!-- Native drag handle for mobile sheet view -->
+                <div class="w-12 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto my-2.5 lg:hidden"></div>
+                
+                <!-- Header -->
+                <div class="p-4 border-b flex justify-between items-center sticky top-0 bg-white dark:bg-slate-800 z-10" style="border-color:var(--border);">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">📷</span>
+                        <div>
+                            <h3 class="font-extrabold text-sm text-slate-900 dark:text-white">Scan Sync QR Code</h3>
+                            <p class="text-[9px] text-slate-400">Align camera with sync QR code.</p>
+                        </div>
+                    </div>
+                    <button onclick="closeQRScanner()" class="text-xl font-bold hover:text-rose-500 dark:text-slate-400 dark:hover:text-rose-400 cursor-pointer">✕</button>
+                </div>
+                
+                <!-- Body -->
+                <div class="p-4 flex flex-col items-center justify-center min-h-[300px] bg-slate-50 dark:bg-slate-900">
+                    <div id="qr-reader-container" class="w-full overflow-hidden rounded-xl border bg-black shadow-inner" style="max-width: 260px; height: 260px; border-color:var(--border);"></div>
+                    <p class="text-[9px] text-slate-400 mt-4 text-center leading-relaxed">Point your camera at the sync QR code shown on your secondary device to pair instantly.</p>
+                </div>
+                
+                <!-- Footer -->
+                <div class="p-4 border-t bg-white dark:bg-slate-800 flex justify-end" style="border-color:var(--border);">
+                    <button onclick="closeQRScanner()" class="border px-4 py-2 rounded-lg font-medium text-xs cursor-pointer transition text-center" style="border-color:var(--border); color:var(--text);">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECURE PIN AUTHORIZATION MODAL -->
+        <div id="sync-auth-modal" class="hidden fixed inset-0 z-[25000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div class="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border);">
+                <!-- Native drag handle for mobile sheet view -->
+                <div class="w-12 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto my-2.5 lg:hidden"></div>
+
+                <!-- Header -->
+                <div class="p-4 border-b flex flex-col items-center justify-center text-center relative" style="border-color:var(--border);">
+                    <span class="text-3xl mb-1">🔐</span>
+                    <h3 class="font-extrabold text-sm text-slate-900 dark:text-white">Security Verification</h3>
+                    <p class="text-[9px] text-slate-400 mt-0.5">Enter 4-digit PIN to access sync credentials.</p>
+                </div>
+                
+                <!-- Body (PIN Indicators) -->
+                <div class="p-4 flex flex-col items-center bg-slate-50 dark:bg-slate-900 gap-4">
+                    <div class="flex gap-3 justify-center py-2" id="sync-pin-dots">
+                        <div class="w-3.5 h-3.5 rounded-full border border-slate-350 dark:border-slate-600 transition-all duration-150" style="background:transparent;"></div>
+                        <div class="w-3.5 h-3.5 rounded-full border border-slate-350 dark:border-slate-600 transition-all duration-150" style="background:transparent;"></div>
+                        <div class="w-3.5 h-3.5 rounded-full border border-slate-350 dark:border-slate-600 transition-all duration-150" style="background:transparent;"></div>
+                        <div class="w-3.5 h-3.5 rounded-full border border-slate-350 dark:border-slate-600 transition-all duration-150" style="background:transparent;"></div>
+                    </div>
+                    
+                    <span id="sync-pin-feedback" class="text-[9px] text-rose-500 font-bold h-3"></span>
+
+                    <!-- Custom Keypad Grid (Enlarged and optimized for mobile fingers) -->
+                    <div class="grid grid-cols-3 gap-3 w-full max-w-[240px] pb-3">
+                        <button onclick="pressSyncPIN(1)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">1</button>
+                        <button onclick="pressSyncPIN(2)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">2</button>
+                        <button onclick="pressSyncPIN(3)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">3</button>
+                        
+                        <button onclick="pressSyncPIN(4)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">4</button>
+                        <button onclick="pressSyncPIN(5)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">5</button>
+                        <button onclick="pressSyncPIN(6)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">6</button>
+                        
+                        <button onclick="pressSyncPIN(7)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">7</button>
+                        <button onclick="pressSyncPIN(8)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">8</button>
+                        <button onclick="pressSyncPIN(9)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">9</button>
+                        
+                        <button onclick="pressSyncPIN('cancel')" class="w-14 h-14 rounded-full flex items-center justify-center font-bold text-sm text-rose-500 hover:bg-rose-500/10 active:scale-90 transition cursor-pointer">✕</button>
+                        <button onclick="pressSyncPIN(0)" class="w-14 h-14 rounded-full bg-white dark:bg-slate-800 border flex items-center justify-center font-bold text-base text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-90 transition shadow-sm cursor-pointer" style="border-color:var(--border);">0</button>
+                        <button onclick="pressSyncPIN('backspace')" class="w-14 h-14 rounded-full flex items-center justify-center font-bold text-sm text-slate-500 hover:bg-slate-500/10 active:scale-90 transition cursor-pointer">⌫</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SYNC HISTORY LOG MODAL -->
+        <div id="sync-history-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div class="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border); max-height: 80vh;">
+                <!-- Header -->
+                <div class="p-4 border-b flex justify-between items-center sticky top-0 bg-white dark:bg-slate-800 z-10" style="border-color:var(--border);">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">📝</span>
+                        <div>
+                            <h3 class="font-extrabold text-sm text-slate-900 dark:text-white">Sync Activity Log</h3>
+                            <p class="text-[9px] text-slate-400">Recent synchronization events.</p>
+                        </div>
+                    </div>
+                    <button onclick="closeSyncHistoryModal()" class="text-xl font-bold hover:text-rose-500 dark:text-slate-400 dark:hover:text-rose-400 cursor-pointer">✕</button>
+                </div>
+                
+                <!-- Body -->
+                <div class="p-4 overflow-y-auto space-y-3" id="sync-history-content">
+                    <p class="text-center text-xs text-slate-500 italic py-4">No recent sync activity.</p>
+                </div>
+                
+                <!-- Footer -->
+                <div class="p-4 border-t bg-slate-50 dark:bg-slate-900 flex justify-end gap-2" style="border-color:var(--border);">
+                    <button onclick="closeSyncHistoryModal()" class="border px-4 py-2 rounded-lg font-medium text-xs cursor-pointer transition text-center" style="border-color:var(--border); color:var(--text);">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- INTERACTIVE VISUAL CONFLICT RESOLVER MODAL -->
+        <div id="sync-conflict-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div class="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border);">
+                <!-- Native drag handle for mobile sheet view -->
+                <div class="w-12 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto my-2.5 lg:hidden"></div>
+
+                <!-- Header -->
+                <div class="p-4 border-b flex justify-between items-center sticky top-0 bg-white dark:bg-slate-800 z-10" style="border-color:var(--border);">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">🧬</span>
+                        <div>
+                            <h3 class="font-extrabold text-sm text-slate-900 dark:text-white">Sync Conflict Detected</h3>
+                            <p class="text-[9px] text-slate-400">Differences found between local and cloud databases.</p>
+                        </div>
+                    </div>
+                    <button onclick="closeSyncConflictModal()" class="text-xl font-bold hover:text-rose-500 dark:text-slate-400 dark:hover:text-rose-400 cursor-pointer">✕</button>
+                </div>
+                
+                <!-- Body -->
+                <div class="p-4 bg-slate-50 dark:bg-slate-900 flex flex-col gap-4">
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed text-center">
+                        Your device has offline updates that differ from the cloud database. Select how you would like to resolve this conflict.
+                    </p>
+                    
+                    <!-- Side by Side Comparative Statistics Grid -->
+                    <div class="grid grid-cols-3 gap-2.5 text-center text-xs">
+                        <div class="col-span-1"></div>
+                        <div class="bg-indigo-50 dark:bg-indigo-950/30 p-2 rounded-xl border" style="border-color:var(--border);">
+                            <span class="text-[9px] font-bold text-indigo-500 block uppercase">💻 Local</span>
+                        </div>
+                        <div class="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl border" style="border-color:var(--border);">
+                            <span class="text-[9px] font-bold text-emerald-500 block uppercase">☁️ Cloud</span>
+                        </div>
+                        
+                        <!-- Bookmarks Row -->
+                        <div class="text-left font-semibold text-slate-400 text-[10px] flex items-center">Bookmarks</div>
+                        <div id="conflict-local-bookmarks" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                        <div id="conflict-cloud-bookmarks" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                        
+                        <!-- Mistakes Row -->
+                        <div class="text-left font-semibold text-slate-400 text-[10px] flex items-center">Mistakes</div>
+                        <div id="conflict-local-mistakes" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                        <div id="conflict-cloud-mistakes" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                        
+                        <!-- Streak Row -->
+                        <div class="text-left font-semibold text-slate-400 text-[10px] flex items-center">Daily Streak</div>
+                        <div id="conflict-local-streak" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0 days</div>
+                        <div id="conflict-cloud-streak" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0 days</div>
+
+                        <!-- Study Logs Row -->
+                        <div class="text-left font-semibold text-slate-400 text-[10px] flex items-center">Study Logs</div>
+                        <div id="conflict-local-logs" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                        <div id="conflict-cloud-logs" class="font-bold text-slate-700 dark:text-slate-200 py-1.5 bg-white dark:bg-slate-800 rounded-lg border" style="border-color:var(--border);">0</div>
+                    </div>
+                    
+                    <!-- Conflict Resolution Strategy Selectors -->
+                    <div class="space-y-2 mt-2">
+                        <!-- Option 1: Intelligent Merge -->
+                        <button onclick="resolveConflict('merge')" class="w-full text-left p-3 rounded-xl border hover:border-indigo-500 bg-white dark:bg-slate-800 cursor-pointer transition flex items-start gap-3 active:scale-98" style="border-color:var(--border);">
+                            <span class="text-xl p-1 bg-indigo-500/10 rounded-lg text-indigo-500">🧬</span>
+                            <div>
+                                <h4 class="font-bold text-xs text-slate-800 dark:text-slate-250">Intelligent Merge (Recommended)</h4>
+                                <p class="text-[9px] text-slate-400 leading-normal">Combines unique items from both databases. No data is lost.</p>
+                            </div>
+                        </button>
+                        
+                        <!-- Option 2: Overwrite Cloud with Local -->
+                        <button onclick="resolveConflict('local')" class="w-full text-left p-3 rounded-xl border hover:border-emerald-500 bg-white dark:bg-slate-800 cursor-pointer transition flex items-start gap-3 active:scale-98" style="border-color:var(--border);">
+                            <span class="text-xl p-1 bg-emerald-500/10 rounded-lg text-emerald-500">💻</span>
+                            <div>
+                                <h4 class="font-bold text-xs text-slate-800 dark:text-slate-250">Keep Local Version</h4>
+                                <p class="text-[9px] text-slate-400 leading-normal">Replaces the cloud database completely with this device's data.</p>
+                            </div>
+                        </button>
+                        
+                        <!-- Option 3: Keep Cloud Version -->
+                        <button onclick="resolveConflict('cloud')" class="w-full text-left p-3 rounded-xl border hover:border-amber-500 bg-white dark:bg-slate-800 cursor-pointer transition flex items-start gap-3 active:scale-98" style="border-color:var(--border);">
+                            <span class="text-xl p-1 bg-amber-500/10 rounded-lg text-amber-500">☁️</span>
+                            <div>
+                                <h4 class="font-bold text-xs text-slate-800 dark:text-slate-250">Keep Cloud Version</h4>
+                                <p class="text-[9px] text-slate-400 leading-normal">Replaces this device's databases completely with the cloud database.</p>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Footer -->
+                <div class="p-4 border-t bg-white dark:bg-slate-800 flex justify-end" style="border-color:var(--border);">
+                    <button onclick="closeSyncConflictModal()" class="border px-4 py-2 rounded-lg font-medium text-xs cursor-pointer transition text-center" style="border-color:var(--border); color:var(--text);">Cancel Sync</button>
+                </div>
+            </div>
+        </div>
     </main>
     </div> <!-- End of Right Workspace Column -->
     </div> <!-- End of Outer Responsive Layout Container -->
 
-    <!-- Bottom Nav -->
-    <nav id="mobile-bottom-nav" class="fixed bottom-0 left-0 right-0 py-2 border-t z-50 flex justify-around shadow-md lg:hidden glass-nav nav-transition safe-pb" style="border-color:var(--border);" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
-        <button onclick="navigate('page-home')" id="nav-btn-0" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="गृहपृष्ठ (Home Screen)">
-            <span class="text-base" aria-hidden="true">🏠</span><span class="text-[9px] font-semibold">Home</span>
+    <nav id="mobile-bottom-nav" class="fixed z-50 lg:hidden nav-transition" style="left: 50% !important; right: auto !important; transform: translateX(-50%) translateY(0); bottom: calc(12px + env(safe-area-inset-bottom, 12px)) !important; width: auto !important; max-width: 90vw; padding: 6px 14px !important; border-radius: 9999px !important; border: 1px solid var(--border) !important; background: rgba(255,255,255,0.7) !important; backdrop-filter: blur(25px) saturate(180%) !important; -webkit-backdrop-filter: blur(25px) saturate(180%) !important; gap: 10px !important; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important; height: 52px !important; overflow: visible !important; transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), background 0.3s ease, border-color 0.3s ease;" aria-label="मुख्य नेभिगेसन बार (Primary Navigation)">
+        <button onclick="navigateTab('page-home')" id="nav-btn-0" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="गृहपृष्ठ (Home Screen)">
+            <span class="text-base" aria-hidden="true" style="font-size: 20px;">🏠</span>
+            <span class="dock-text">Home</span>
+            <span class="dock-tooltip">Home Hub</span>
         </button>
-        <button onclick="navigate('page-practice')" id="nav-btn-1" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="अभ्यास खण्ड (Practice Suite)">
-            <span class="text-base" aria-hidden="true">📚</span><span class="text-[9px] font-semibold">Practice</span>
+        <button onclick="navigateTab('page-practice')" id="nav-btn-1" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="अभ्यास खण्ड (Practice Suite)">
+            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📚</span>
+            <span class="dock-text">Practice</span>
+            <span class="dock-tooltip">Practice Suite</span>
         </button>
-        <button onclick="navigate('page-mcq-creator')" id="nav-btn-2" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
-            <span class="text-base" aria-hidden="true">✍️</span><span class="text-[9px] font-semibold">Create</span>
+        <button onclick="navigateTab('page-study-planner')" id="nav-btn-planner" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="अध्ययन योजनाकार (Study Planner)">
+            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📅</span>
+            <span class="dock-text">Planner</span>
+            <span class="dock-tooltip">Study Planner</span>
         </button>
-        <button onclick="navigate('page-analytics')" id="nav-btn-3" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
-            <span class="text-base" aria-hidden="true">📊</span><span class="text-[9px] font-semibold">Analytics</span>
+        <button onclick="navigateTab('page-mcq-creator')" id="nav-btn-2" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="प्रश्न सिर्जना गर्नुहोस् (MCQ Creator)">
+            <span class="text-base" aria-hidden="true" style="font-size: 20px;">✍️</span>
+            <span class="dock-text">Create</span>
+            <span class="dock-tooltip">MCQ Creator</span>
         </button>
-        <!-- More button — opens bottom sheet (Layout 5) -->
-        <button id="nav-btn-more" onclick="toggleNavSheet()" class="nav-item flex flex-col items-center gap-1.5 px-3 py-1" style="color:var(--text-secondary);" aria-label="थप मेनु (More Navigation)">
-            <span class="more-dot-active"></span>
-            <span class="text-base nav-more-icon" aria-hidden="true">⋯</span>
-            <span class="text-[9px] font-semibold">More</span>
+        <button onclick="navigateTab('page-analytics')" id="nav-btn-3" class="nav-item dock-item" style="display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 0, 0, 0.04); border: none; transition: transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s ease, width 0.15s, height 0.15s; cursor: pointer; overflow: visible; padding: 0 !important; min-height: auto !important;" aria-label="विश्लेषण रिपोर्ट (Performance Analytics)">
+            <span class="text-base" aria-hidden="true" style="font-size: 20px;">📊</span>
+            <span class="dock-text">Stats</span>
+            <span class="dock-tooltip">Analytics Hub</span>
         </button>
     </nav>
-
-    <!-- ── BOTTOM SHEET BACKDROP (Layout 5) ── -->
-    <div id="nav-sheet-backdrop" onclick="closeNavSheet()"></div>
-
-    <!-- ── BOTTOM SHEET PANEL (Layout 5) ── -->
-    <div id="nav-bottom-sheet" role="dialog" aria-modal="true" aria-label="More Navigation">
-        <div class="sheet-handle" onclick="closeNavSheet()"></div>
-
-        <div class="sheet-header">
-            <span class="sheet-header-title">📂 More Options</span>
-            <button class="sheet-close-btn" onclick="closeNavSheet()" aria-label="Close">✕</button>
-        </div>
-
-        <!-- User Band -->
-        <div class="sheet-user-band" style="margin-top:12px;">
-            <div class="sheet-user-avatar">🌾</div>
-            <div class="sheet-user-info">
-                <p class="sheet-user-name" id="sheet-user-name">नमस्ते! 👋</p>
-                <p class="sheet-user-sub" id="sheet-user-sub">आजको तयारी जारी राखौँ</p>
-            </div>
-            <button onclick="navigate('page-settings'); closeNavSheet();" style="font-size:0.65rem; font-weight:800; padding:6px 10px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text-secondary); cursor:pointer;">⚙️ Settings</button>
-        </div>
-
-        <!-- Nav Grid -->
-        <div class="sheet-nav-grid">
-            <button class="sheet-nav-item" id="sheet-nav-planner" onclick="navigate('page-study-planner'); closeNavSheet();">
-                <span class="sheet-icon">📅</span>
-                <span class="sheet-label">Study Planner</span>
-            </button>
-            <button class="sheet-nav-item" id="sheet-nav-settings" onclick="navigate('page-settings'); closeNavSheet();">
-                <span class="sheet-icon">⚙️</span>
-                <span class="sheet-label">Settings</span>
-            </button>
-            <button class="sheet-nav-item" id="sheet-nav-wrong" onclick="navigate('page-wrong-questions'); closeNavSheet();">
-                <span class="sheet-icon">❌</span>
-                <span class="sheet-label">Wrong Questions</span>
-            </button>
-            <button class="sheet-nav-item" id="sheet-nav-tinder" onclick="navigate('page-tinder-swiper'); closeNavSheet();">
-                <span class="sheet-icon">🃏</span>
-                <span class="sheet-label">Flashcards</span>
-            </button>
-            <button class="sheet-nav-item" id="sheet-nav-sound" onclick="navigate('page-settings'); setTimeout(()=>switchSettingsTab('sound'),200); closeNavSheet();">
-                <span class="sheet-icon">🎧</span>
-                <span class="sheet-label">Study Sounds</span>
-            </button>
-            <button class="sheet-nav-item" id="sheet-nav-admin" onclick="navigate('page-admin'); closeNavSheet();">
-                <span class="sheet-icon">🔐</span>
-                <span class="sheet-label">Admin Panel</span>
-            </button>
-        </div>
-    </div>
+    <div id="krishi-offline-queue-badge" class="hidden" style="display:none !important;"></div>
 
     <!-- Capacitor Core Engine Bridge (Loaded dynamically only on native Android/iOS WebViews to prevent PWA 404 spam) -->
     <script>
@@ -2895,12 +3417,14 @@
     </script>
 
     <!-- Premium Modular Script Files linked in sequential dependent order to preserve lexical scope -->
-    <script src="./js/elite_animations_controller.js" defer></script>
-    <script src="./js/elite_3d_engine.js" defer></script>
-    <script src="./js/canvas_charts.js" defer></script>
-    <script src="./js/spaced_rep.js" defer></script>
-    <script src="./js/pwa_helpers.js" defer></script>
-    <script src="./js/app.js" defer></script>
+    <script src="./js/elite_animations_controller.js?v=z2wpz2l" defer></script>
+    <script src="./js/elite_3d_engine.js?v=z2wpz2l" defer></script>
+    <script src="./js/canvas_charts.js?v=z2wpz2l" defer></script>
+    <script src="./js/spaced_rep.js?v=z2wpz2l" defer></script>
+    <script src="./js/pwa_helpers.js?v=z2wpz2l" defer></script>
+    <script src="./js/sqlite_db.js?v=z2wpz2l" defer></script>
+    <script src="./js/krishi_idb.js?v=z2wpz2l"></script>
+    <script src="./js/app.js?v=z2wpz2l" defer></script>
 
 
     <!--
@@ -2913,7 +3437,22 @@
     - Improved analytics rendering: skip when hidden, and added bounded DPR scaling for crisp charts without heavy redraw.
     -->
 
+    <!-- Pairing PIN Modal -->
+    <div id="modal-pairing-pin" class="hidden fixed inset-0 z-[99999] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-800 text-center space-y-4 shadow-2xl">
+            <span class="text-4xl">🔑</span>
+            <h3 class="font-black text-lg text-slate-800 dark:text-slate-100">Instant Device Link PIN</h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Enter this 6-digit code on your other device to link instantly without typing long keys:</p>
+            <div class="bg-slate-100 dark:bg-slate-950 p-4 rounded-2xl border border-indigo-500/30">
+                <span id="krishi-pairing-pin-display" class="font-mono text-3xl font-black text-indigo-600 dark:text-indigo-400 tracking-widest">--- ---</span>
+            </div>
+            <p class="text-[10px] text-amber-500 font-bold">⏱ Valid for 5 minutes</p>
+            <button onclick="document.getElementById('modal-pairing-pin').classList.add('hidden')" class="w-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs py-2.5 rounded-xl cursor-pointer">Close</button>
+        </div>
+    </div>
+
     <script src="./js/ambient_player.js" defer></script>
+    <script src="./js/voice_assistant.js?v=z2wpz2l" defer></script>
 </body>
 </html>
 

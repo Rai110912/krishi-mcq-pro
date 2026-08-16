@@ -8,7 +8,10 @@ const FILES_TO_COPY = [
     'sw.js',
     'icon.svg',
     'questions.json',
-    'ip.json'
+    'ip.json',
+    'version.json',
+    'delta_questions.json',
+    'login-helper.html'
 ];
 
 const DIRS_TO_COPY = [

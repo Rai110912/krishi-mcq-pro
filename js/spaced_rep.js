@@ -67,7 +67,10 @@ function getAdaptiveDueQuestions() {
         let today = getLocalDateString();
         let due = [];
         for(let id in sm2Data){
-            if(sm2Data[id].nextReviewDate <= today) due.push(parseInt(id));
+            if(sm2Data[id].nextReviewDate <= today) {
+                let numericId = Number(id);
+                due.push(isNaN(numericId) ? id : numericId);
+            }
         }
         return due;
     }

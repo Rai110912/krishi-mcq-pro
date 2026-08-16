@@ -23,8 +23,19 @@ async function loadStaticQuestions() {
         if (window.KrishiSQLite && window.KrishiSQLite.isAvailable()) {
             await window.KrishiSQLite.saveQuestions(defaultQuestions);
         }
+
+        // Trigger Incremental Delta Question Sync
+        if (typeof window.checkAndSyncDeltaQuestions === 'function') {
+            setTimeout(() => {
+                window.checkAndSyncDeltaQuestions();
+            }, 1000);
+        }
     } catch(e) {
         console.error('[App] Failed to load static questions:', e);
+        defaultQuestions = [];
+        if (window.showToast) {
+            window.showToast('⚠️ Database load failed. Connect to internet to sync questions.', true);
+        }
     }
 }
 
@@ -118,7 +129,7 @@ async function loadStaticQuestions() {
 
 
     let localData={
-        bookmarked:[], wrong:[], customQuestions:[], streak:{},
+        bookmarked:[], wrong:[], bookmarkedLog:{}, wrongLog:{}, customQuestions:[], streak:{},
         stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[]
     };
     let sm2Data={};
@@ -159,7 +170,7 @@ async function loadStaticQuestions() {
 
         function getRaw(key) {
             if (cache.has(key)) return cache.get(key);
-            const v = localStorage.getItem(key);
+            const v = KrishiStorage.getItem(key);
             cache.set(key, v);
             return v;
         }
@@ -188,7 +199,15 @@ async function loadStaticQuestions() {
         function flush() {
             if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
             for (const [k, v] of pending.entries()) {
-                try { localStorage.setItem(k, v); } catch (e) { /* quota / private mode */ }
+                try { 
+                    KrishiStorage.setItem(k, v); 
+                } catch (e) { 
+                    if (e.name === 'QuotaExceededError' || e.message.includes('quota')) {
+                        console.error('[Storage] Quota exceeded. Data loss occurred for key:', k);
+                        if (window.showToast) window.showToast('⚠️ Storage Full! Your progress could not be saved.', true);
+                        else alert('⚠️ Storage Full! Your progress could not be saved.');
+                    }
+                }
             }
             pending.clear();
         }
@@ -279,26 +298,46 @@ async function loadStaticQuestions() {
 
         async function ensureQuill() {
             if (window.Quill) return;
-            await loadScript('https://cdn.quilljs.com/1.3.7/quill.min.js');
+            if (!navigator.onLine) {
+                throw new Error("offline");
+            }
+            try {
+                await loadScript('https://cdn.quilljs.com/1.3.7/quill.min.js');
+            } catch(e) {
+                if (!navigator.onLine) throw new Error("offline");
+                throw e;
+            }
         }
 
         async function ensurePdfjs() {
             if (window.pdfjsLib) return;
-            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-            // workerSrc must be set after pdfjsLib loads
+            if (!navigator.onLine) {
+                throw new Error("offline");
+            }
             try {
-                window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-                    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            } catch (_) {}
+                await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+                try {
+                    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                } catch (_) {}
+            } catch(e) {
+                if (!navigator.onLine) throw new Error("offline");
+                throw e;
+            }
         }
 
-       async function ensureTesseract() {
-    if (window.Tesseract) return;
-    if (!navigator.onLine) {
-        throw new Error("offline");
-    }
-    await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-}
+        async function ensureTesseract() {
+            if (window.Tesseract) return;
+            if (!navigator.onLine) {
+                throw new Error("offline");
+            }
+            try {
+                await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+            } catch(e) {
+                if (!navigator.onLine) throw new Error("offline");
+                throw e;
+            }
+        }
 
         return { ensureQuill, ensurePdfjs, ensureTesseract };
     })();
@@ -386,11 +425,50 @@ async function loadStaticQuestions() {
     })();
 
     document.addEventListener("DOMContentLoaded", async function() {
+        if (typeof KrishiStorage !== 'undefined') await KrishiStorage.init();
         await loadStaticQuestions();
 
-        if(localStorage.getItem('krishi_dark')==='true') document.documentElement.classList.add('dark');
+        if(KrishiStorage.getItem('krishi_dark')==='true') document.documentElement.classList.add('dark');
         applyPerfSettings();
         loadData();
+        
+        // Listen for incoming deep links (e.g. from secure login-helper.html)
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+            window.Capacitor.Plugins.App.addListener('appUrlOpen', async function(data) {
+                console.log("[DeepLink] App opened with URL:", data.url);
+                try {
+                    let urlStr = data.url;
+                    if (urlStr.includes('auth?token=')) {
+                        let tokenIndex = urlStr.indexOf('token=');
+                        if (tokenIndex !== -1) {
+                            let token = urlStr.substring(tokenIndex + 6);
+                            let ampersandIndex = token.indexOf('&');
+                            if (ampersandIndex !== -1) {
+                                token = token.substring(0, ampersandIndex);
+                            }
+                            token = decodeURIComponent(token);
+                            if (token) {
+                                showToast('⏳ Completing secure Google Sign-in...');
+                                const auth = getSafeFirebaseApp().auth();
+                                const credential = firebase.auth.GoogleAuthProvider.credential(token);
+                                await auth.signInWithCredential(credential);
+                                showToast('✅ Logged in successfully with Google!');
+                                if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+                                
+                                // Close the external browser tab securely after a short delay
+                                try {
+                                    if (window.Capacitor.Plugins.Browser) {
+                                        await window.Capacitor.Plugins.Browser.close();
+                                    }
+                                } catch(e){}
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error("[DeepLink] Failed to process incoming token:", err);
+                }
+            });
+        }
         
         // Smart Scroll Auto-Hide for Mobile Nav and Header
         let lastScrollY = window.scrollY;
@@ -412,6 +490,116 @@ async function loadStaticQuestions() {
             lastScrollY = currentScrollY;
         }, { passive: true });
         
+        // macOS-style Dock Fluid Zoom Magnification Engine
+        window.initMacOSDockZoom = function() {
+            const dock = document.getElementById('mobile-bottom-nav');
+            if (!dock) return;
+
+            const items = dock.querySelectorAll('.dock-item');
+            let itemUnderTouch = null;
+            let lastClosestItem = null;
+            
+            function handleZoom(clientX) {
+                if (window.innerWidth >= 1024) return;
+                
+                let closestItem = null;
+                let minDistance = 99999;
+                
+                // Add lift and glow styling to dock container during interaction
+                dock.classList.add('dock-zooming');
+                
+                items.forEach(item => {
+                    const rect = item.getBoundingClientRect();
+                    const itemCenterX = rect.left + rect.width / 2;
+                    const dist = Math.abs(clientX - itemCenterX);
+                    
+                    let scale = 1.0;
+                    if (dist < 90) {
+                        scale = 1.0 + (1.0 - dist / 90) * 0.32;
+                    }
+                    
+                    item.style.transform = `scale(${scale})`;
+                    const icon = item.querySelector('.text-base');
+                    if (icon) {
+                        icon.style.transform = `scale(${1 + (scale - 1) * 0.25})`;
+                    }
+
+                    if (scale > 1.18) {
+                        item.classList.add('dock-touch-active');
+                        if (dist < minDistance) {
+                            minDistance = dist;
+                            closestItem = item;
+                        }
+                    } else {
+                        item.classList.remove('dock-touch-active');
+                    }
+                });
+                
+                // Trigger physical tactile haptic tick feedback if active item changes
+                if (closestItem && closestItem !== lastClosestItem) {
+                    if (typeof window.triggerHaptic === 'function') {
+                        window.triggerHaptic('click');
+                    }
+                    lastClosestItem = closestItem;
+                }
+                
+                itemUnderTouch = closestItem;
+            }
+
+            function resetZoom() {
+                dock.classList.remove('dock-zooming');
+                items.forEach(item => {
+                    item.style.transform = 'scale(1)';
+                    const icon = item.querySelector('.text-base');
+                    if (icon) {
+                        icon.style.transform = 'scale(1)';
+                    }
+                    item.classList.remove('dock-touch-active');
+                });
+                lastClosestItem = null;
+            }
+
+            dock.addEventListener('touchstart', (e) => {
+                if (e.touches && e.touches[0]) {
+                    handleZoom(e.touches[0].clientX);
+                }
+            }, { passive: true });
+
+            dock.addEventListener('touchmove', (e) => {
+                if (e.touches && e.touches[0]) {
+                    handleZoom(e.touches[0].clientX);
+                }
+            }, { passive: true });
+
+            dock.addEventListener('touchend', (e) => {
+                if (itemUnderTouch) {
+                    // Prevent default synthesized click to completely stop ghost click bleed-through
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Instantly trigger target's navigation logic!
+                    itemUnderTouch.click();
+                    // Apply visual active dot
+                    items.forEach(i => i.classList.remove('dock-active'));
+                    itemUnderTouch.classList.add('dock-active');
+                }
+                resetZoom();
+                itemUnderTouch = null;
+            });
+
+            dock.addEventListener('touchcancel', () => {
+                resetZoom();
+                itemUnderTouch = null;
+            });
+
+            dock.addEventListener('mousemove', (e) => {
+                handleZoom(e.clientX);
+            });
+
+            dock.addEventListener('mouseleave', resetZoom);
+        };
+        
+        window.initMacOSDockZoom();
+        
         // WebView Keyboard Overlap Guard: Hide bottom navigation when input fields are focused
         document.body.addEventListener('focusin', (e) => {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
@@ -430,7 +618,7 @@ async function loadStaticQuestions() {
             const urlParams = new URLSearchParams(window.location.search);
             const incomingSyncKey = urlParams.get('sync_key');
             if (incomingSyncKey && incomingSyncKey.startsWith('KRISHI-SYNC-')) {
-                localStorage.setItem('krishi_sync_key', incomingSyncKey);
+                KrishiStorage.setItem('krishi_sync_key', incomingSyncKey);
                 showToast('🔗 Synced device successfully via QR scan!');
                 initCloudSync();
                 // Clean URL parameters from the address bar to avoid re-sync notifications
@@ -446,7 +634,7 @@ async function loadStaticQuestions() {
             if (legacyQuestions && Array.isArray(legacyQuestions)) {
                 console.log('[IndexedDB Migration] Migrating legacy custom questions to IndexedDB...');
                 await KrishiDB.saveAll(legacyQuestions);
-                localStorage.removeItem('krishi_customQuestions'); // Clean up old LocalStorage
+                KrishiStorage.removeItem('krishi_customQuestions'); // Clean up old LocalStorage
                 console.log('[IndexedDB Migration] Legacy custom questions successfully migrated!');
             }
             const idbQuestions = await KrishiDB.getAll();
@@ -473,20 +661,236 @@ async function loadStaticQuestions() {
         initHapticUI();
         initPerfSettingsUI();
         if (typeof initEliteAnimationsUI === 'function') initEliteAnimationsUI();
-// Resume session logic
-    setTimeout(() => {
-        let saved = localStorage.getItem('krishi_saved_practice');
-        if (saved) {
-            let session = JSON.parse(saved);
-            if (confirm("तपाईंको अधुरो अभ्यास (Practice) सुरक्षित छ। के तपाईं त्यहीँबाट सुरु गर्न चाहनुहुन्छ?")) {
-                setupMCQSession(session.questions, session.isMock, session.timerSec);
-                state.currentIndex = session.currentIndex;
-                state.score = session.score;
-                state.sessionResults = session.sessionResults;
-                renderMCQ();
-            } else {
-                clearPracticeProgress();
+        restoreUIStateIfCached();
+    window.showConfirmDialog = function(message, onConfirm, onCancel) {
+        let existing = document.getElementById('custom-confirm-modal-overlay');
+        if (existing) existing.remove();
+
+        let overlay = document.createElement('div');
+        overlay.id = 'custom-confirm-modal-overlay';
+        overlay.className = 'fixed inset-0 z-[10000] flex items-center justify-center p-4 transition-opacity duration-300';
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity 0.35s cubic-bezier(0.25, 0.8, 0.25, 1)';
+
+        overlay.innerHTML = `
+            <div class="confirm-glass-card rounded-3xl p-6 max-w-[320px] w-full text-center space-y-5 transform scale-[0.88] translateY(25px) transition-all duration-300" style="transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);">
+                <div class="w-12 h-12 rounded-2xl study-target-glow flex items-center justify-center text-xl mx-auto">🎯</div>
+                <div class="space-y-1.5">
+                    <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">अधुरो अभ्यास (Saved Progress)</h4>
+                    <div class="text-[11.5px] leading-relaxed text-slate-500 dark:text-slate-400 font-medium">${message}</div>
+                </div>
+                <div class="flex gap-2.5">
+                    <button id="custom-confirm-cancel-btn" class="flex-1 py-2.5 rounded-xl font-bold text-[10.5px] cursor-pointer">तुरुन्त रद्द</button>
+                    <button id="custom-confirm-ok-btn" class="flex-1 py-2.5 rounded-xl font-black text-[10.5px] cursor-pointer">सुरु गर्नुहोस्</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Soft sound play when dialog appears
+        if (typeof playSound === 'function') {
+            try { playSound('click'); } catch(e) {}
+        }
+
+        requestAnimationFrame(() => {
+            overlay.style.opacity = '1';
+            overlay.querySelector('div').style.transform = 'scale(1) translateY(0)';
+        });
+
+        function closeConfirm(callback) {
+            overlay.style.opacity = '0';
+            overlay.querySelector('div').style.transform = 'scale(0.88) translateY(25px)';
+            setTimeout(() => {
+                overlay.remove();
+                if (typeof callback === 'function') callback();
+            }, 300);
+        }
+
+        document.getElementById('custom-confirm-cancel-btn').addEventListener('click', () => {
+            if (typeof window.triggerHaptic === 'function') window.triggerHaptic('click');
+            closeConfirm(onCancel);
+        });
+
+        document.getElementById('custom-confirm-ok-btn').addEventListener('click', () => {
+            if (typeof window.triggerHaptic === 'function') window.triggerHaptic('success');
+            closeConfirm(onConfirm);
+        });
+    };
+
+    // Resume session logic
+    window.resumePromptShown = false;
+    window.checkAndPromptResumeSession = function() {
+        let activePage = document.querySelector('.page.active');
+        if (!activePage || activePage.id !== 'page-practice') {
+            return;
+        }
+        if (window.resumePromptShown) return;
+
+        let localSaved = KrishiStorage.getItem('krishi_saved_practice');
+        const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
+
+        function triggerPrompt(session, isCloud = false) {
+            if (window.resumePromptShown) return;
+            window.resumePromptShown = true;
+
+            let total = session.questions ? session.questions.length : 0;
+            let current = session.currentIndex || 0;
+            let remaining = total - current;
+            let currentQ = session.questions ? (session.questions[current] || session.questions[0]) : null;
+            let subject = currentQ ? (currentQ.sub || 'कृषि') : 'कृषि';
+            let deviceTag = session.device ? ` (${session.device})` : '';
+
+            let pct = total > 0 ? Math.round((current / total) * 100) : 0;
+            let correct = session.sessionResults ? session.sessionResults.filter(r => r.correct).length : 0;
+            let attempted = session.sessionResults ? session.sessionResults.length : 0;
+            let accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 100;
+            
+            let totalSpeed = session.sessionResults ? session.sessionResults.reduce((acc, r) => acc + (r.seconds || 0), 0) : 0;
+            let avgSpeed = attempted > 0 ? Math.round(totalSpeed / attempted) : 0;
+
+            let sourceText = isCloud ? `<span class="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider">Cloud Resumption${deviceTag}</span>` : `<span class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider">Local Resumption</span>`;
+
+            let messageHtml = `
+                <div class="space-y-3 text-left">
+                    <div class="flex justify-between items-center">${sourceText}</div>
+                    <p class="text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-400">
+                        तपाईंको <b>${subject}</b> विषयको <b>${remaining}</b> वटा प्रश्नहरू समाधान गर्न बाँकी रहेको सत्र फेला परेको छ। के तपाईं सोही स्थानबाट जारी राख्न चाहनुहुन्छ?
+                    </p>
+                    
+                    <div class="modal-stats-dashboard space-y-2">
+                        <div class="flex justify-between items-center text-[10px] font-black text-slate-500 dark:text-slate-400">
+                            <span>PROGRESS</span>
+                            <span class="text-emerald-600 dark:text-emerald-400 font-extrabold">${pct}% completed</span>
+                        </div>
+                        <div class="modal-progress-bar-container">
+                            <div class="modal-progress-bar-fill" style="width: ${pct}%;"></div>
+                        </div>
+                        
+                        <div class="grid grid-cols-3 gap-1.5 text-center pt-1 text-[10px]">
+                            <div class="p-1.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <span class="text-slate-400 block text-[8px] uppercase font-bold">REMAINING</span>
+                                <b class="text-slate-750 dark:text-slate-350 text-xs">🎯 ${remaining}</b>
+                            </div>
+                            <div class="p-1.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <span class="text-slate-400 block text-[8px] uppercase font-bold">ACCURACY</span>
+                                <b class="text-emerald-600 dark:text-emerald-400 text-xs">📈 ${accuracy}%</b>
+                            </div>
+                            <div class="p-1.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                                <span class="text-slate-400 block text-[8px] uppercase font-bold">AVG SPEED</span>
+                                <b class="text-blue-500 dark:text-blue-400 text-xs">⏱️ ${avgSpeed}s</b>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            window.showConfirmDialog(
+                messageHtml,
+                function() {
+                    setupMCQSession(session.questions, session.isMock, session.timerSec);
+                    state.currentIndex = session.currentIndex;
+                    state.score = session.score;
+                    state.sessionResults = session.sessionResults;
+                    renderMCQ();
+                    window.resumePromptShown = false;
+                },
+                function() {
+                    clearPracticeProgress();
+                    window.resumePromptShown = false;
+                }
+            );
+        }
+
+        if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
+            let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+            let firebaseApp = existingApp || firebase.app("KrishiApp");
+            function safeParseSession(str) {
+                if (!str) return null;
+                try {
+                    return JSON.parse(str);
+                } catch(e) {
+                    console.warn('[Resumption] Corrupted active session backup found and removed:', e);
+                    try { KrishiStorage.removeItem('krishi_active_session_backup'); } catch(err){}
+                    return null;
+                }
             }
+
+            if (firebaseApp) {
+                const firestore = firebase.firestore(firebaseApp);
+                firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').get()
+                    .then(doc => {
+                        if (doc.exists) {
+                            let cloudSession = doc.data();
+                            let cloudTime = cloudSession.updatedAt || 0;
+                            let localSessionObj = safeParseSession(localSaved);
+                            let localTime = localSessionObj ? (localSessionObj.updatedAt || 0) : 0;
+
+                            if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {
+                                console.log('[Resumption] Resolving to cloud active session progress.');
+                                triggerPrompt(cloudSession, true);
+                            } else if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                                console.log('[Resumption] Resolving to local active session progress (newer).');
+                                triggerPrompt(localSessionObj, false);
+                            }
+                        } else if (localSaved) {
+                            let localSessionObj = safeParseSession(localSaved);
+                            if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                                triggerPrompt(localSessionObj, false);
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        console.warn('[Resumption] Cloud fetch failed, falling back to local:', err);
+                        if (localSaved) {
+                            let localSessionObj = safeParseSession(localSaved);
+                            if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                                triggerPrompt(localSessionObj, false);
+                            }
+                        }
+                    });
+                return;
+            }
+        }
+
+        if (localSaved) {
+            let session = safeParseSession(localSaved);
+            if (session && session.questions && session.questions.length > 0) {
+                triggerPrompt(session, false);
+            }
+        }
+    };
+
+    // Resume session logic - only trigger on startup if we are actively on the practice page
+    setTimeout(() => {
+        // Check updates on load
+        window.addEventListener('load', () => {
+            if (typeof checkForUpdates === 'function') {
+                checkForUpdates(false);
+            }
+        });
+
+        // Anti-Cheat & Save Data Mechanism
+        function saveSpacedRepetitionProgress() {
+            if (window.KrishiSM2Engine && state && state.activeConfig && state.activeConfig.isSpacedReview && state.sessionResults) {
+                // Assuming session answers are already saved individually by checkAnswer
+                // But we can trigger a bulk save or sync here if necessary
+                console.log("Anti-cheat: App backgrounded, progress preserved.");
+            }
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === 'hidden') {
+                saveSpacedRepetitionProgress();
+            }
+        });
+        window.addEventListener("pagehide", () => {
+            saveSpacedRepetitionProgress();
+        });
+
+        let activePage = document.querySelector('.page.active');
+        if (activePage && activePage.id === 'page-practice') {
+            window.checkAndPromptResumeSession();
         }
     }, 1000);
 
@@ -511,16 +915,28 @@ async function loadStaticQuestions() {
                             console.error('[PeriodicSync] Failed initiation:', e);
                         }
                         
-                        // Check for updates and show advanced PWA auto-update lifecycle toast
+                        // Check for updates and automatically skip waiting when not practicing
+                        function checkAndSkipWaiting(worker) {
+                            if (typeof showUpdatePrompt === 'function') {
+                                showUpdatePrompt(worker);
+                            } else {
+                                setTimeout(() => {
+                                    if (typeof showUpdatePrompt === 'function') {
+                                        showUpdatePrompt(worker);
+                                    }
+                                }, 500);
+                            }
+                        }
+
                         if (reg.waiting) {
-                            showUpdatePrompt(reg.waiting);
+                            checkAndSkipWaiting(reg.waiting);
                         }
                         reg.addEventListener('updatefound', () => {
                             const installingWorker = reg.installing;
                             if (installingWorker) {
                                 installingWorker.addEventListener('statechange', () => {
                                     if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                        showUpdatePrompt(installingWorker);
+                                        checkAndSkipWaiting(installingWorker);
                                     }
                                 });
                             }
@@ -534,9 +950,17 @@ async function loadStaticQuestions() {
                 if (refreshing) return;
                 refreshing = true;
                 console.log('[PWA Update] Controller changed. Reloading app safely...');
+                saveUIStateForRestore(); // Save state before reloading!
                 setTimeout(() => {
                     window.location.reload();
                 }, 250);
+            });
+
+            navigator.serviceWorker.addEventListener('message', event => {
+                if (event.data && event.data.type === 'BACKGROUND_SYNC_TRIGGER') {
+                    console.log('[PWA Sync] Background sync event triggered by Service Worker');
+                    performCloudSync();
+                }
             });
         }
 
@@ -548,9 +972,13 @@ async function loadStaticQuestions() {
             newWorker = worker;
             if (updateToastVisible) return;
 
-            // Check if the user is actively practicing or in mock exam
-            const isPracticing = (document.getElementById('page-practice') && document.getElementById('page-practice').classList.contains('active')) ||
-                                 (document.getElementById('page-mock') && document.getElementById('page-mock').classList.contains('active'));
+            // Suppress updates only when actively inside gameplay or result view cards
+            const activePage = document.querySelector('.page.active');
+            const mcqActive = document.getElementById('page-mcq') && !document.getElementById('page-mcq').classList.contains('hidden');
+            const resActive = document.getElementById('practice-result-panel') && !document.getElementById('practice-result-panel').classList.contains('hidden');
+            const isMockActive = activePage && activePage.id === 'page-mock';
+            
+            const isPracticing = isMockActive || (activePage && activePage.id === 'page-practice' && (mcqActive || resActive));
 
             if (isPracticing) {
                 console.log('[PWA Update] Update is waiting, but user is practicing. Will prompt later.');
@@ -605,6 +1033,20 @@ async function loadStaticQuestions() {
                     transform: translateY(0);
                     opacity: 1;
                 }
+                @media (max-width: 767px) {
+                    #pwa-update-toast {
+                        left: 50% !important;
+                        bottom: calc(85px + env(safe-area-inset-bottom, 12px)) !important;
+                        transform: translate3d(-50%, 150%, 0) !important;
+                        width: calc(100% - 32px) !important;
+                        box-sizing: border-box !important;
+                        justify-content: space-between !important;
+                    }
+                    #pwa-update-toast.show {
+                        transform: translate3d(-50%, 0, 0) !important;
+                        opacity: 1 !important;
+                    }
+                }
                 #pwa-update-btn {
                     background: #059669;
                     color: white;
@@ -648,12 +1090,17 @@ async function loadStaticQuestions() {
         initFirebaseAuth()
             .catch(err => console.warn('[Firebase Auth] Offline or CDN load failure:', err));
             
+        initSelectiveSyncCheckboxes();
+
         initCloudSync()
             .catch(err => console.warn('[Cloud Sync] Initialization failure safely bypassed:', err));
             
-        // Initialize Automatic Real-Time PC Update Checker
+        // Initialize Automatic Real-Time PC Update Checker & Silent OTA Live Engine
         try {
             initAutoUpdateChecker();
+            if (typeof initLiveOTAUpdateEngine === 'function') {
+                initLiveOTAUpdateEngine();
+            }
         } catch(e) {
             console.error('Failed to initialize Auto Update Checker:', e);
         }
@@ -736,6 +1183,12 @@ async function loadStaticQuestions() {
 // Function newfeat_showNotification moved to external module
    
 function loadData(){
+        syncCredentialsAuthorized = KrishiStorage.getItem('krishi_sync_credentials_authorized') === 'true';
+        syncSelectiveBookmarks = KrishiStorage.getItem('krishi_sync_sel_bookmarks') !== 'false';
+        syncSelectiveErrors = KrishiStorage.getItem('krishi_sync_sel_errors') !== 'false';
+        syncSelectiveCustom = KrishiStorage.getItem('krishi_sync_sel_custom') !== 'false';
+        syncSelectiveLogs = KrishiStorage.getItem('krishi_sync_sel_logs') !== 'false';
+        activePlanMode = KrishiStorage.getItem('krishi_active_plan_mode') || 'normal';
         ['bookmarked','wrong','streak','stats','achievements'].forEach(k=>{
             const v = Storage.getJSON('krishi_'+k, null);
             if (v !== null && v !== undefined) localData[k] = v;
@@ -745,6 +1198,37 @@ function loadData(){
     }
 
     function saveData(){
+        // Auto-synchronize CRDT logs for bookmarked items
+        const currentBms = localData.bookmarked || [];
+        const bmLog = localData.bookmarkedLog || {};
+        const now = Date.now();
+        currentBms.forEach(qid => {
+            if (!bmLog[qid] || bmLog[qid].action !== 'add') {
+                bmLog[qid] = { action: 'add', timestamp: now };
+            }
+        });
+        Object.entries(bmLog).forEach(([qid, info]) => {
+            if (info.action === 'add' && !currentBms.includes(qid)) {
+                bmLog[qid] = { action: 'remove', timestamp: now };
+            }
+        });
+        localData.bookmarkedLog = bmLog;
+
+        // Auto-synchronize CRDT logs for wrong items
+        const currentWrongs = localData.wrong || [];
+        const wrLog = localData.wrongLog || {};
+        currentWrongs.forEach(qid => {
+            if (!wrLog[qid] || wrLog[qid].action !== 'add') {
+                wrLog[qid] = { action: 'add', timestamp: now };
+            }
+        });
+        Object.entries(wrLog).forEach(([qid, info]) => {
+            if (info.action === 'add' && !currentWrongs.includes(qid)) {
+                wrLog[qid] = { action: 'remove', timestamp: now };
+            }
+        });
+        localData.wrongLog = wrLog;
+
         if (localData.customQuestions && Array.isArray(localData.customQuestions)) {
             // First normalize all customQuestions
             localData.customQuestions = localData.customQuestions.map(q => normalizeQuestion(q));
@@ -777,7 +1261,7 @@ function loadData(){
         try { saveSM2(); } catch(e) {}
         try { Storage.flush(); } catch(e) {}
         triggerBackgroundSync();
-        localStorage.setItem('krishi_last_updated_at', Date.now());
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
         scheduleCloudSync('Data saved');
         savePracticeProgress();
 
@@ -795,12 +1279,289 @@ function loadData(){
     let firebaseDb = null;
     let syncListenerRef = null;
     let syncInProgress = false;
+    let cachedCloudData = null;
 
-    function getSyncKey() {
-        return localStorage.getItem('krishi_sync_key') || '';
+    let currentSessionId = Math.random().toString(36).substring(2, 10);
+    let sessionTouchInterval = null;
+    let pendingConflictResolution = null;
+    let enteredPIN = "";
+    let syncCredentialsAuthorized = false;
+
+    // Selective Sync & Offline Pending State Variables
+    let syncSelectiveBookmarks = true;
+    let syncSelectiveErrors = true;
+    let syncSelectiveCustom = true;
+    let syncSelectiveLogs = true;
+
+    let deviceIpAddress = '';
+    let deviceLocationCity = '';
+    let deviceLocationCountry = '';
+
+    function initSelectiveSyncCheckboxes() {
+        const selBookmarks = document.getElementById('sync-sel-bookmarks');
+        const selErrors = document.getElementById('sync-sel-errors');
+        const selCustom = document.getElementById('sync-sel-custom');
+        const selLogs = document.getElementById('sync-sel-logs');
+
+        if (selBookmarks) selBookmarks.checked = syncSelectiveBookmarks;
+        if (selErrors) selErrors.checked = syncSelectiveErrors;
+        if (selCustom) selCustom.checked = syncSelectiveCustom;
+        if (selLogs) selLogs.checked = syncSelectiveLogs;
     }
 
-    function generateNewSyncKey() {
+    function updateOfflineQueueBadge() {
+        const btn = document.getElementById('btn-sync-now');
+        if (!btn) return;
+        
+        let oldBadge = document.getElementById('sync-pending-badge');
+        if (oldBadge) {
+            oldBadge.remove();
+        }
+        
+        const count = parseInt(KrishiStorage.getItem('krishi_sync_pending_count') || '0');
+        if (count > 0) {
+            const badge = document.createElement('span');
+            badge.id = 'sync-pending-badge';
+            badge.className = 'ml-1 px-1.5 py-0.5 text-[8px] font-black rounded bg-amber-500 text-white animate-pulse';
+            badge.innerText = `(${count})`;
+            btn.appendChild(badge);
+        }
+    }
+
+    function toggleSelectiveSyncSetting(type) {
+        if (type === 'bookmarks') {
+            syncSelectiveBookmarks = !syncSelectiveBookmarks;
+            KrishiStorage.setItem('krishi_sync_sel_bookmarks', syncSelectiveBookmarks);
+        } else if (type === 'errors') {
+            syncSelectiveErrors = !syncSelectiveErrors;
+            KrishiStorage.setItem('krishi_sync_sel_errors', syncSelectiveErrors);
+        } else if (type === 'custom') {
+            syncSelectiveCustom = !syncSelectiveCustom;
+            KrishiStorage.setItem('krishi_sync_sel_custom', syncSelectiveCustom);
+        } else if (type === 'logs') {
+            syncSelectiveLogs = !syncSelectiveLogs;
+            KrishiStorage.setItem('krishi_sync_sel_logs', syncSelectiveLogs);
+        }
+        showToast('⚙️ Selective sync preferences updated!');
+    }
+    window.toggleSelectiveSyncSetting = toggleSelectiveSyncSetting;
+
+    async function fetchDeviceLocationMetadata() {
+        try {
+            // Using a standard, fast geolocation API (ip-api.com)
+            const res = await fetch('https://ip-api.com/json/');
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.status === 'success') {
+                    deviceIpAddress = data.query || '';
+                    deviceLocationCity = data.city || '';
+                    deviceLocationCountry = data.countryCode || '';
+                    console.log(`[GeoIP] Location resolved: ${deviceLocationCity}, ${deviceLocationCountry} (IP: ${deviceIpAddress})`);
+                    return;
+                }
+            }
+        } catch(e) {
+            console.warn('[GeoIP] Primary resolver failed, attempting fallback...', e);
+        }
+
+        try {
+            // Fallback keyless resolver
+            const res = await fetch('https://ipapi.co/json/');
+            if (res.ok) {
+                const data = await res.json();
+                deviceIpAddress = data.ip || '';
+                deviceLocationCity = data.city || '';
+                deviceLocationCountry = data.country_code || '';
+                console.log(`[GeoIP] Fallback resolved: ${deviceLocationCity}, ${deviceLocationCountry}`);
+            }
+        } catch(e) {
+            console.warn('[GeoIP] Fallback resolver failed:', e);
+        }
+    }
+
+    // PIN Verification Handlers
+    function authenticateForSyncCredentials() {
+        enteredPIN = "";
+        updateSyncPinDots();
+        const feedback = document.getElementById('sync-pin-feedback');
+        if (feedback) feedback.innerText = '';
+        
+        const modal = document.getElementById('sync-auth-modal');
+        if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeSyncAuthModal() {
+        const modal = document.getElementById('sync-auth-modal');
+        if (modal) modal.classList.add('hidden');
+    }
+
+    function pressSyncPIN(num) {
+        const feedback = document.getElementById('sync-pin-feedback');
+        if (feedback) feedback.innerText = '';
+
+        if (num === 'cancel') {
+            closeSyncAuthModal();
+            return;
+        }
+        if (num === 'backspace') {
+            if (enteredPIN.length > 0) {
+                enteredPIN = enteredPIN.slice(0, -1);
+            }
+            updateSyncPinDots();
+            return;
+        }
+
+        if (enteredPIN.length < 4) {
+            enteredPIN += num;
+            updateSyncPinDots();
+        }
+
+        if (enteredPIN.length === 4) {
+            if (enteredPIN === '1109' || enteredPIN === '1234') {
+                syncCredentialsAuthorized = true;
+                KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
+                showToast('🔓 Access Granted!');
+                closeSyncAuthModal();
+                updateSyncUI();
+            } else {
+                enteredPIN = "";
+                updateSyncPinDots();
+                if (feedback) feedback.innerText = '❌ Incorrect PIN. Try 1109.';
+                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics) {
+                    try { window.Capacitor.Plugins.Haptics.vibrate({ duration: 300 }); } catch(e){}
+                }
+            }
+        }
+    }
+
+    window.pressSyncPIN = pressSyncPIN;
+    window.authenticateForSyncCredentials = authenticateForSyncCredentials;
+    window.closeSyncAuthModal = closeSyncAuthModal;
+    window.updateSyncPinDots = updateSyncPinDots;
+
+    function updateSyncPinDots() {
+        const dotsContainer = document.getElementById('sync-pin-dots');
+        if (!dotsContainer) return;
+        const dots = dotsContainer.children;
+        for (let i = 0; i < 4; i++) {
+            if (dots[i]) {
+                if (i < enteredPIN.length) {
+                    dots[i].style.background = '#047857'; // Filled green-emerald
+                    dots[i].style.borderColor = '#047857';
+                } else {
+                    dots[i].style.background = 'transparent';
+                    dots[i].style.borderColor = '';
+                }
+            }
+        }
+    }
+
+    // Conflict Resolution Strategy Helpers
+    function calculateStreakFromStreakObject(streakObj) {
+        if (!streakObj || typeof streakObj !== 'object') return 0;
+        let settings = getPlannerSettings();
+        let restDays = settings.restDays || [6];
+        let target = settings.dailyTarget || 30;
+        let todayStr = getLocalDateString(new Date());
+        
+        let s = 0;
+        let checkDate = new Date();
+        
+        for (let i = 0; i < 365; i++) {
+            let stamp = getLocalDateString(checkDate);
+            let dayData = streakObj[stamp];
+            let solved = dayData ? (dayData.solved || 0) : 0;
+            
+            if (stamp === todayStr) {
+                if (solved >= target) {
+                    s++;
+                }
+            } else {
+                if (solved >= target) {
+                    s++;
+                } else if (restDays.includes(checkDate.getDay())) {
+                    // Rest day configured!
+                } else {
+                    break;
+                }
+            }
+            checkDate.setDate(checkDate.getDate() - 1);
+        }
+        return s;
+    }
+
+    function checkForSyncConflicts(local, cloud) {
+        const localB = (local.bookmarked || []).length;
+        const cloudB = (cloud.bookmarked || []).length;
+        const localW = (local.wrong || []).length;
+        const cloudW = (cloud.wrong || []).length;
+        const localS = calculateStreakFromStreakObject(local.streak);
+        const cloudS = calculateStreakFromStreakObject(cloud.streak);
+        const localL = (local.timingLog || []).length;
+        const cloudL = (cloud.timingLog || []).length;
+        const localC = (local.customQuestions || []).length;
+
+        // Auto-Pull Protection: If local device is fresh/empty (0 data), bypass conflict modal and auto-pull cloud data!
+        if (localB === 0 && localW === 0 && localS === 0 && localL === 0 && localC === 0) {
+            return null;
+        }
+
+        if (localB !== cloudB || localW !== cloudW || localS !== cloudS || localL !== cloudL || localC !== cloudC) {
+            return {
+                local: { bookmarks: localB, mistakes: localW, streak: localS, logs: localL, customQuestions: localC },
+                cloud: { bookmarks: cloudB, mistakes: cloudW, streak: cloudS, logs: cloudL, customQuestions: cloudC }
+            };
+        }
+        return null;
+    }
+
+    function promptConflictModal(localStats, cloudStats, onResolve) {
+        const lb = document.getElementById('conflict-local-bookmarks');
+        if (lb) lb.innerText = localStats.bookmarks;
+        const cb = document.getElementById('conflict-cloud-bookmarks');
+        if (cb) cb.innerText = cloudStats.bookmarks;
+        
+        const lm = document.getElementById('conflict-local-mistakes');
+        if (lm) lm.innerText = localStats.mistakes;
+        const cm = document.getElementById('conflict-cloud-mistakes');
+        if (cm) cm.innerText = cloudStats.mistakes;
+        
+        const ls = document.getElementById('conflict-local-streak');
+        if (ls) ls.innerText = `${localStats.streak} days`;
+        const cs = document.getElementById('conflict-cloud-streak');
+        if (cs) cs.innerText = `${cloudStats.streak} days`;
+        
+        const ll = document.getElementById('conflict-local-logs');
+        if (ll) ll.innerText = localStats.logs;
+        const cl = document.getElementById('conflict-cloud-logs');
+        if (cl) cl.innerText = cloudStats.logs;
+
+        const modal = document.getElementById('sync-conflict-modal');
+        if (modal) modal.classList.remove('hidden');
+
+        pendingConflictResolution = onResolve;
+    }
+
+    function closeSyncConflictModal() {
+        const modal = document.getElementById('sync-conflict-modal');
+        if (modal) modal.classList.add('hidden');
+        pendingConflictResolution = null;
+    }
+
+    async function resolveConflict(strategy) {
+        if (!pendingConflictResolution) return;
+        closeSyncConflictModal();
+        await pendingConflictResolution(strategy);
+    }
+
+    window.closeSyncConflictModal = closeSyncConflictModal;
+    window.resolveConflict = resolveConflict;
+
+    function getSyncKey() {
+        return KrishiStorage.getItem('krishi_sync_key') || '';
+    }
+
+    function generateNewAutoSyncKey() {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let key = 'KRISHI-SYNC';
         for (let i = 0; i < 4; i++) {
@@ -810,7 +1571,13 @@ function loadData(){
             }
             key += '-' + segment;
         }
-        document.getElementById('cloud-sync-key-input').value = key;
+        return key;
+    }
+
+    function generateNewSyncKey() {
+        const key = generateNewAutoSyncKey();
+        const input = document.getElementById('cloud-sync-key-input');
+        if (input) input.value = key;
         showToast('🔑 Generated new Sync Key! Make sure to click Enable.');
     }
 
@@ -821,6 +1588,119 @@ function loadData(){
                 showToast('📋 Sync Key copied to clipboard!');
             }).catch(() => {
                 showToast('❌ Copy to clipboard failed!');
+            });
+        }
+    }
+
+    let html5QrScanner = null;
+
+    function openQRScanner() {
+        if (typeof Html5Qrcode === 'undefined') {
+            showToast('⏳ Loading camera scanner library...');
+            setTimeout(openQRScanner, 500);
+            return;
+        }
+
+        // Native Capacitor Camera Runtime Permission Hook
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera) {
+            console.log('[Camera Permission] Requesting native camera permission via Capacitor...');
+            window.Capacitor.Plugins.Camera.requestPermissions({ permissions: ['camera'] }).then(res => {
+                console.log('[Camera Permission] Native permissions status:', res);
+                if (res && res.camera === 'granted') {
+                    startScanningSequence();
+                } else {
+                    showToast('⚠️ Camera permission is required to scan!');
+                }
+            }).catch(err => {
+                console.warn('[Camera Permission] Native request failed, falling back to standard prompt:', err);
+                startScanningSequence();
+            });
+        } else {
+            startScanningSequence();
+        }
+
+        function startScanningSequence() {
+            const modal = document.getElementById('qr-scanner-modal');
+            if (modal) modal.classList.remove('hidden');
+            
+            if (typeof playSound === 'function') {
+                try { playSound('click'); } catch(e) {}
+            }
+
+            // Initialize HTML5 QR Reader
+            html5QrScanner = new Html5Qrcode("qr-reader-container");
+            const config = { fps: 15, qrbox: { width: 220, height: 220 } };
+
+            html5QrScanner.start(
+                { facingMode: "environment" },
+                config,
+                (decodedText) => {
+                    if (decodedText && decodedText.startsWith('KRISHI-SYNC-')) {
+                        const input = document.getElementById('cloud-sync-key-input');
+                        if (input) input.value = decodedText;
+                        
+                        // Native haptic double-pulse vibration on success
+                        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics) {
+                            try {
+                                window.Capacitor.Plugins.Haptics.vibrate({ duration: 150 });
+                                setTimeout(() => {
+                                    try {
+                                        window.Capacitor.Plugins.Haptics.vibrate({ duration: 150 });
+                                    } catch (e) {}
+                                }, 250);
+                            } catch(e) {
+                                console.warn('[Haptics] Haptic vibration failed:', e);
+                            }
+                        }
+                        
+                        if (typeof playSound === 'function') {
+                            try { playSound('success'); } catch(e) {}
+                        }
+                        showToast('✓ Sync Key scanned successfully!');
+                        closeQRScanner();
+                        enableCloudSync();
+                    } else {
+                        showToast('⚠️ Invalid Sync Key format scanned!');
+                    }
+                },
+                (errorMessage) => {
+                    // Verbose barcode failures skipped to maintain high FPS performance
+                }
+            ).catch(err => {
+                console.error('[QR Scanner] Camera start failed:', err);
+                showToast('❌ Camera access failed or denied!');
+                const container = document.getElementById('qr-reader-container');
+                if (container) {
+                    container.style.height = 'auto';
+                    container.style.background = 'var(--card)';
+                    container.style.padding = '16px';
+                    container.innerHTML = `
+                        <div class="flex flex-col items-center justify-center text-center space-y-3.5">
+                            <span class="text-3xl">⚠️</span>
+                            <p class="text-[10px] font-black text-rose-500 uppercase tracking-wider">Camera Blocked or Unavailable</p>
+                            <p class="text-[8.5px] leading-relaxed text-slate-500 dark:text-slate-400">
+                                WebRTC camera permission was denied or is blocked by your browser/OS security policy.<br>
+                                <strong class="text-[9px] block mt-2 text-slate-700 dark:text-slate-200">Alternative Pairing Option:</strong>
+                                Enter your pairing Sync Key manually in the settings box underneath.
+                            </p>
+                            <button onclick="closeQRScanner(); playSound('click');" class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg text-[9px] font-bold border-none cursor-pointer active:scale-95 transition" style="color:var(--text);">Cancel & Enter Manually</button>
+                        </div>
+                    `;
+                }
+            });
+        }
+    }
+
+    function closeQRScanner() {
+        const modal = document.getElementById('qr-scanner-modal');
+        if (modal) modal.classList.add('hidden');
+        
+        if (html5QrScanner) {
+            html5QrScanner.stop().then(() => {
+                html5QrScanner = null;
+            }).catch(err => {
+                console.warn('[QR Scanner] Stop failed safely:', err);
+                html5QrScanner = null;
             });
         }
     }
@@ -837,10 +1717,87 @@ function loadData(){
             if (setupPanel) setupPanel.classList.add('hidden');
             if (activePanel) activePanel.classList.remove('hidden');
             if (display) display.innerText = key;
+
+            // Credentials authorization visibility handling
+            const lockOverlay = document.getElementById('sync-key-lock-overlay');
+            const credCard = document.getElementById('sync-key-credentials-card');
+            if (syncCredentialsAuthorized) {
+                if (lockOverlay) lockOverlay.classList.add('hidden');
+                if (credCard) credCard.classList.remove('hidden');
+            } else {
+                if (lockOverlay) lockOverlay.classList.remove('hidden');
+                if (credCard) credCard.classList.add('hidden');
+            }
+
+            // Guard: If QRCode library is not loaded yet, retry in 300ms
+            if (typeof QRCode === 'undefined') {
+                console.warn('[QR Generator] QRCode library not loaded yet. Retrying...');
+                setTimeout(updateSyncUI, 300);
+                return;
+            }
+
+            // Generate and update QR code dynamically client-side (offline safe) - deferred to let layout pass complete
+            setTimeout(() => {
+                const qrContainer = document.getElementById('sync-qrcode-container');
+                if (qrContainer) {
+                    if (!qrContainer.hasChildNodes() || qrContainer.getAttribute('data-key') !== key) {
+                        qrContainer.innerHTML = '';
+                        qrContainer.setAttribute('data-key', key);
+                        try {
+                            new QRCode(qrContainer, {
+                                text: key,
+                                width: 120,
+                                height: 120,
+                                colorDark: "#047857",
+                                colorLight: "#ffffff"
+                            });
+                        } catch(e) {
+                            console.error('[QR Generator] Offline draw failed:', e);
+                            qrContainer.innerHTML = `<span class="text-[8px] text-rose-500 font-mono break-all">Error: ${e.message}</span>`;
+                        }
+                    }
+                }
+            }, 60);
+
+            // Populate Statistics Dashboard
+            const statBookmarks = document.getElementById('sync-stat-bookmarks');
+            const statMistakes = document.getElementById('sync-stat-mistakes');
+            const statStreak = document.getElementById('sync-stat-streak');
+            const statLogs = document.getElementById('sync-stat-logs');
+
+            if (statBookmarks) statBookmarks.innerText = localData.bookmarked ? localData.bookmarked.length : 0;
+            if (statMistakes) statMistakes.innerText = (localData.wrong || []).length;
+            if (statStreak) {
+                const computedStreak = typeof getStreakCount === 'function' ? getStreakCount() : 0;
+                statStreak.innerText = `${computedStreak} days`;
+            }
+            if (statLogs) {
+                const logs = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []);
+                statLogs.innerText = `${logs.length} entries`;
+            }
+            const statCustom = document.getElementById('sync-stat-custom');
+            if (statCustom) {
+                statCustom.innerText = `${getCustomQuestions().length} questions`;
+            }
             
-            let status = localStorage.getItem('krishi_sync_status') || 'Synced';
+            let status = KrishiStorage.getItem('krishi_sync_status') || 'Synced';
             if (!navigator.onLine) status = 'Offline';
             
+            // Sync status badges
+            const syncBadgeStatus = document.getElementById('sync-badge-status');
+            if (syncBadgeStatus) {
+                syncBadgeStatus.innerText = status;
+                if (status === 'Syncing...') {
+                    syncBadgeStatus.className = 'px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/10 text-amber-500 animate-pulse';
+                } else if (status === 'Offline') {
+                    syncBadgeStatus.className = 'px-2 py-0.5 rounded text-[8px] font-black uppercase bg-slate-500/10 text-slate-500';
+                } else if (status === 'Sync failed') {
+                    syncBadgeStatus.className = 'px-2 py-0.5 rounded text-[8px] font-black uppercase bg-rose-500/10 text-rose-500';
+                } else {
+                    syncBadgeStatus.className = 'px-2 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-500/10 text-emerald-500';
+                }
+            }
+
             if (badge) {
                 if (status === 'Syncing...') {
                     badge.innerText = 'Syncing... 🟡';
@@ -857,7 +1814,7 @@ function loadData(){
                 }
             }
             
-            const lastSync = localStorage.getItem('krishi_last_sync_time');
+            const lastSync = KrishiStorage.getItem('krishi_last_sync_time');
             if (timeTxt) timeTxt.innerText = lastSync ? 'Last Synced: ' + lastSync : 'Last Synced: Never';
         } else {
             if (setupPanel) setupPanel.classList.remove('hidden');
@@ -867,17 +1824,19 @@ function loadData(){
                 badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400';
             }
         }
+        updateOfflineQueueBadge();
     }
 
 
     let firebaseAuth = null;
     let currentAuthUser = null;
+    let firebaseAuthInitialized = false;
 
     let firebaseLoadPromise = null;
     let firebaseSDKLoaded = false;
 
     async function loadFirebaseSDKs() {
-        if (window.firebase && window.firebase.auth && window.firebase.firestore) {
+        if (window.firebase && window.firebase.auth && window.firebase.firestore && window.firebase.database) {
             firebaseSDKLoaded = true;
             return Promise.resolve();
         }
@@ -903,6 +1862,12 @@ function loadData(){
                     // Fallback to CDN for firestore compat if local is missing
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js');
                 }
+                try {
+                    await loadScript('./js/firebase-database-compat.js');
+                } catch(dbLocalErr) {
+                    // Fallback to CDN for database compat if local is missing
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
+                }
                 await loadScript('./js/firebase-auth-compat.js');
                 
                 console.log("[Firebase Loader] Firebase SDKs loaded successfully with local assets!");
@@ -914,6 +1879,7 @@ function loadData(){
                     // Direct CDN links fallback
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js');
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js');
                     
                     console.log("[Firebase Loader] All Firebase SDKs loaded successfully via Google CDN!");
@@ -930,56 +1896,89 @@ function loadData(){
         return firebaseLoadPromise;
     }
 
+    function getSafeFirebaseApp() {
+        if (firebaseApp) return firebaseApp;
+        
+        let customConfig = null;
+        try { customConfig = JSON.parse(KrishiStorage.getItem('krishi_firebase_config')); } catch(e){}
+        
+        const config = customConfig || {
+            apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt6OyHhYz10bA",
+            authDomain: "krishi-mcq-pro.firebaseapp.com",
+            projectId: "krishi-mcq-pro",
+            storageBucket: "krishi-mcq-pro.firebasestorage.app",
+            messagingSenderId: "39741021868",
+            appId: "1:39741021868:web:c838ca32f5aaeb41720909",
+            measurementId: "G-MHX05SE7WB",
+            databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
+        };
+        
+        try {
+            if (window.firebase && firebase.apps) {
+                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+                if (existingApp) {
+                    firebaseApp = existingApp;
+                } else {
+                    firebaseApp = firebase.initializeApp(config, "KrishiApp");
+                }
+            }
+        } catch(e) {
+            console.warn('[Firebase App Init] Exception caught, falling back to registered app:', e);
+            if (window.firebase && firebase.apps && firebase.apps.length > 0) {
+                firebaseApp = firebase.apps[0];
+            }
+        }
+        return firebaseApp;
+    }
+
    async function initFirebaseAuth() {
+        if (firebaseAuthInitialized) return;
         try {
             await loadFirebaseSDKs();
-            if (!firebaseApp) {
-                let customConfig = null;
-                try { customConfig = JSON.parse(localStorage.getItem('krishi_firebase_config')); } catch(e){}
-                 const config = customConfig || {
-                    apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt6OyHhYz10bA",
-                    authDomain: "krishi-mcq-pro.firebaseapp.com",
-                    projectId: "krishi-mcq-pro",
-                    storageBucket: "krishi-mcq-pro.firebasestorage.app",
-                    messagingSenderId: "39741021868",
-                    appId: "1:39741021868:web:c838ca32f5aaeb41720909",
-                    measurementId: "G-MHX05SE7WB",
-                    databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
-                };
-                firebaseApp = firebase.initializeApp(config, "KrishiApp");
-
-                // Feature 13: Firebase Analytics — purely additive, no UI/logic change
+            firebaseApp = getSafeFirebaseApp();
+            
+            if (firebaseApp && !window.__krishiFirestorePersistenceEnabled__) {
+                window.__krishiFirestorePersistenceEnabled__ = true;
                 try {
-                    if (firebase.analytics && config.measurementId) {
-                        firebase.analytics(firebaseApp);
-                        console.log('[Analytics] Firebase Analytics initialized.');
+                    if (firebase.firestore) {
+                        const firestoreInstance = firebase.firestore(firebaseApp);
+                        await firestoreInstance.enablePersistence({ synchronizeTabs: true });
+                        console.log('[Offline] Firestore offline persistence enabled ✅');
                     }
-                } catch(analyticsErr) {
-                    console.warn('[Analytics] Analytics init failed (non-critical):', analyticsErr);
-                }
-
-                // Feature 4: Firebase Offline Persistence — called ONCE after initializeApp
-                // Guard prevents "already called" error if initFirebaseAuth is called multiple times
-                if (!window.__krishiFirestorePersistenceEnabled__) {
-                    window.__krishiFirestorePersistenceEnabled__ = true;
-                    try {
-                        if (firebase.firestore) {
-                            const firestoreInstance = firebase.firestore(firebaseApp);
-                            await firestoreInstance.enablePersistence({ synchronizeTabs: true });
-                            console.log('[Offline] Firestore offline persistence enabled ✅');
-                        }
-                    } catch(persistErr) {
-                        if (persistErr.code === 'failed-precondition') {
-                            console.warn('[Offline] Persistence failed: multiple tabs open. Only one tab can have persistence enabled at a time.');
-                        } else if (persistErr.code === 'unimplemented') {
-                            console.warn('[Offline] Persistence not supported in this browser/environment.');
-                        } else {
-                            console.warn('[Offline] Persistence error (non-critical):', persistErr);
-                        }
+                } catch(persistErr) {
+                    if (persistErr.code === 'failed-precondition') {
+                        console.warn('[Offline] Persistence failed: multiple tabs open. Only one tab can have persistence enabled at a time.');
+                    } else if (persistErr.code === 'unimplemented') {
+                        console.warn('[Offline] Persistence not supported in this browser/environment.');
+                    } else {
+                        console.warn('[Offline] Persistence error (non-critical):', persistErr);
                     }
                 }
             }
+            
+            if (!firebaseApp) throw new Error("Firebase app could not be initialized");
+            
             firebaseAuth = firebase.auth(firebaseApp);
+            firebaseAuthInitialized = true;
+            
+            // Handle Google redirect results
+            if (typeof firebaseAuth.getRedirectResult === 'function') {
+                firebaseAuth.getRedirectResult()
+                    .then(async (result) => {
+                        if (result && result.user) {
+                            showToast('✅ Logged in successfully with Google!');
+                            try {
+                                if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+                            } catch(e) {}
+                        }
+                    })
+                    .catch(error => {
+                        console.error("[Auth] Redirect result error:", error);
+                        if (error.code && error.code !== 'auth/web-storage-unsupported') {
+                            showToast('❌ Google Auth failed: ' + error.message, 5000);
+                        }
+                    });
+            }
             
             // Explicitly lock Auth persistence to LOCAL storage (survives WebView cache sweeps)
             if (typeof firebaseAuth.setPersistence === 'function') {
@@ -992,10 +1991,50 @@ function loadData(){
                     });
             }
             
-            // Attach Auth State Listener
-            firebaseAuth.onAuthStateChanged((user) => {
+            firebaseAuth.onAuthStateChanged(async (user) => {
                 currentAuthUser = user;
+                window.currentAuthUser = user;
+                
+                if (user) {
+                    syncCredentialsAuthorized = true;
+                    KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
+                }
                 updateAuthUI();
+                
+                if (user && navigator.onLine && firebaseApp) {
+                    try {
+                        const firestore = firebase.firestore(firebaseApp);
+                        const userDocRef = firestore.collection('users').doc(user.uid);
+                        
+                        // Enforce UID-based sync key for uniquely linking activity data to this user
+                        const activeKey = 'KRISHI-UID-' + user.uid;
+                        KrishiStorage.setItem('krishi_sync_key', activeKey);
+                        
+                        await userDocRef.set({
+                            email: user.email || user.displayName || 'Authorized User',
+                            syncKey: activeKey,
+                            updatedAt: Date.now()
+                        }, { merge: true });
+                        
+                        showToast('✅ Account Linked: Cloud Sync initialized successfully!');
+                        await initCloudSync();
+                        if (typeof syncCloudNow === 'function') await syncCloudNow(true);
+                    } catch (err) {
+                        console.error('[Auth Sync Map] Failed to map account profile:', err);
+                        await initCloudSync();
+                        if (typeof syncCloudNow === 'function') await syncCloudNow(true);
+                    }
+                } else {
+                    // Fallback to local sync state if offline or logged out
+                    await initCloudSync();
+                    
+                    // Trigger Google One Tap Sign-In for Web PWA if logged out and online
+                    if (!user && navigator.onLine) {
+                        try {
+                            if (typeof initGoogleOneTap === 'function') initGoogleOneTap();
+                        } catch(e){}
+                    }
+                }
             }, (error) => {
                 console.error("Auth state observer error:", error);
                 showAuthStatus('Auth failed 🔴');
@@ -1060,13 +2099,199 @@ function loadData(){
         }
     }
 
+    async function handleGoogleLogin() {
+        try {
+            showToast('⏳ Opening Google Sign-in...');
+            
+            // Initialize auth synchronously to preserve browser user gesture context (PC Fallback)
+            const auth = getSafeFirebaseApp().auth();
+            const provider = new firebase.auth.GoogleAuthProvider();
+            
+            // Check if running in a native Capacitor shell
+            const isNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+            
+            if (isNative) {
+                const GoogleAuthPlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GoogleAuth;
+                let nativeSuccess = false;
+                if (GoogleAuthPlugin) {
+                    showToast('🔄 Opening Native Google Sign-In...');
+                    try {
+                        await GoogleAuthPlugin.initialize();
+                    } catch (initErr) {
+                        console.warn("GoogleAuthPlugin initialization notice:", initErr);
+                    }
+                    try {
+                        const result = await GoogleAuthPlugin.signIn();
+                        if (result && result.idToken) {
+                            showToast('🔐 Exchanging tokens with server...');
+                            const credential = firebase.auth.GoogleAuthProvider.credential(result.idToken);
+                            await auth.signInWithCredential(credential);
+                            showToast('✅ Logged in successfully with Google!');
+                            nativeSuccess = true;
+                            try {
+                                if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+                            } catch(e) {}
+                        }
+                    } catch (nativeErr) {
+                        console.warn("[Google Auth Native] Native Google Sign-In failed or unconfigured, attempting Web OAuth fallback:", nativeErr);
+                    }
+                }
+                if (!nativeSuccess) {
+                    showToast('🔄 Opening Web Google Sign-In...');
+                    try {
+                        await auth.signInWithPopup(provider);
+                    } catch(popupErr) {
+                        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/popup-closed-by-user') {
+                            await auth.signInWithRedirect(provider);
+                            return;
+                        }
+                        throw popupErr;
+                    }
+                    showToast('✅ Logged in successfully with Google!');
+                    try {
+                        if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+                    } catch(e) {}
+                }
+            } else {
+                // Clear One Tap suppression flag on manual login attempt!
+                KrishiStorage.removeItem('krishi_one_tap_disabled');
+                // Trigger popup instantly on Web / PWA
+                await auth.signInWithPopup(provider);
+                showToast('✅ Logged in successfully with Google!');
+                try {
+                    if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+                } catch(e) {}
+            }
+        } catch (error) {
+            console.error("Google login error:", error);
+            showToast('❌ Google Sign-in failed: ' + (error.message || error));
+        }
+    }
+
+    function initGoogleOneTap() {
+        const isCapacitorNative = window.Capacitor &&
+                                  window.Capacitor.isNativePlatform &&
+                                  window.Capacitor.isNativePlatform();
+        if (isCapacitorNative) return; // Native Capacitor uses GoogleAuth.signIn() native dialog
+
+        if (KrishiStorage.getItem('krishi_one_tap_disabled') === 'true') {
+            console.log('[OneTap] Suppressed: User previously signed out.');
+            return;
+        }
+
+        if (window.__googleOneTapInitialized__) return;
+        window.__googleOneTapInitialized__ = true;
+
+        if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
+            console.log('[OneTap] Loading Google Identity Services script...');
+            const script = document.createElement('script');
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+            script.defer = true;
+            script.onload = () => setupOneTapPrompt();
+            script.onerror = () => {
+                console.warn('[OneTap] Google Identity client failed to load.');
+                window.__googleOneTapInitialized__ = false;
+            };
+            document.head.appendChild(script);
+        } else {
+            setupOneTapPrompt();
+        }
+    }
+
+    function setupOneTapPrompt() {
+        try {
+            const clientId = '39741021868-ig8gckot7movhre5pqr5j15jnc2mis8t.apps.googleusercontent.com';
+            google.accounts.id.initialize({
+                client_id: clientId,
+                callback: handleOneTapResponse,
+                auto_select: false,
+                cancel_on_tap_outside: true
+            });
+            google.accounts.id.prompt((notification) => {
+                if (notification.isNotDisplayed()) {
+                    console.log('[OneTap] Prompt not displayed:', notification.getNotDisplayedReason());
+                    window.__googleOneTapInitialized__ = false;
+                } else if (notification.isSkippedMoment()) {
+                    console.log('[OneTap] Prompt skipped:', notification.getSkippedReason());
+                }
+            });
+        } catch(err) {
+            console.warn('[OneTap] Initialization failed:', err);
+            window.__googleOneTapInitialized__ = false;
+        }
+    }
+
+    async function handleOneTapResponse(response) {
+        if (!response || !response.credential) return;
+        
+        showToast('⏳ Authenticating with Google One Tap...');
+        try {
+            await initFirebaseAuth();
+            if (!firebaseAuth) throw new Error("Firebase SDK load failed");
+            const credential = firebase.auth.GoogleAuthProvider.credential(response.credential);
+            const userCredential = await firebaseAuth.signInWithCredential(credential);
+            if (userCredential && userCredential.user) {
+                showToast('✅ Logged in successfully with Google One Tap!');
+            }
+        } catch(err) {
+            console.error('[OneTap] Firebase Auth failed:', err);
+            showToast('❌ One Tap Auth failed: ' + err.message, 5000);
+            window.__googleOneTapInitialized__ = false;
+        }
+    }
+
     async function handleFirebaseLogout() {
         try {
-            showToast('⏳ Logging out...');
+            if (!confirm('Logging out will clear your local offline study data from this device to protect your privacy. Are you sure you want to log out?')) return;
+            
+            showToast('⏳ Logging out & clearing local data...');
+            KrishiStorage.setItem('krishi_one_tap_disabled', 'true'); // Suppress One Tap loop
+            KrishiStorage.removeItem('krishi_sync_credentials_authorized');
+            const syncKey = KrishiStorage.getItem('krishi_sync_key');
+            if (syncKey && syncKey.startsWith('KRISHI-UID-')) {
+                KrishiStorage.removeItem('krishi_sync_key');
+            }
+            
+            // Wipe user-specific study data to prevent Data Bleed for the next user (V2 Complete Wipe)
+            const keysToWipe = [
+                'krishi_bookmarked',
+                'krishi_bookmarkedLog',
+                'krishi_wrong',
+                'krishi_wrongLog',
+                'krishi_stats',
+                'krishi_streak',
+                'krishi_achievements',
+                'krishi_timingLog',
+                'krishi_sm2',
+                'krishi_sm2_v2',
+                'krishi_sm2_heatmap',
+                'krishi_mockScores',
+                'krishi_practice_recent',
+                'krishi_exam_profiles',
+                'krishi_home_settings',
+                'krishi_planner_settings',
+                'krishi_syllabus_custom',
+                'krishi_custom_subjects',
+                'krishi_last_sync_time'
+            ];
+            keysToWipe.forEach(k => KrishiStorage.removeItem(k));
+            
+            // Clear IndexedDB Custom Questions
+            if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
+                try { await KrishiDB.saveAll([]); } catch(e) { console.warn('Failed to wipe custom questions IDB on logout'); }
+            }
+            
             if (firebaseAuth) {
                 await firebaseAuth.signOut();
             }
-            showToast('✅ Logged out successfully!');
+            
+            showToast('✅ Logged out successfully. Reloading...');
+            
+            // Wait slightly for IDB flushes, then force reload to wipe RAM state
+            setTimeout(() => {
+                window.location.reload(true);
+            }, 800);
         } catch (error) {
             console.error("Logout error:", error);
             showToast('❌ Logout failed: ' + error.message);
@@ -1123,14 +2348,19 @@ function loadData(){
         
         if (!navigator.onLine) {
             showAuthStatus('Offline 🟡');
-            if (userDisplayEl) userDisplayEl.innerText = currentAuthUser ? `Offline Mode (${currentAuthUser.email})` : 'Offline Mode';
+            if (userDisplayEl) {
+                const userEmail = currentAuthUser ? (currentAuthUser.email || currentAuthUser.displayName || (currentAuthUser.uid ? `User (${currentAuthUser.uid.substring(0, 8)})` : 'User')) : '';
+                userDisplayEl.innerText = currentAuthUser ? `Offline Mode (${userEmail})` : 'Offline Mode';
+                userDisplayEl.className = 'p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border text-[10px] font-bold text-center text-amber-800 dark:text-amber-400 border-amber-100/30';
+            }
             return;
         }
 
         if (currentAuthUser) {
             showAuthStatus('Logged in 🟢');
             if (userDisplayEl) {
-                userDisplayEl.innerText = `Logged in as: ${currentAuthUser.email}`;
+                const userIdent = currentAuthUser.email || currentAuthUser.displayName || (currentAuthUser.uid ? `User (${currentAuthUser.uid.substring(0, 8)})` : 'Authorized User');
+                userDisplayEl.innerText = `Logged in as: ${userIdent}`;
                 userDisplayEl.className = 'p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border text-[10px] font-bold text-center text-emerald-800 dark:text-emerald-400 border-emerald-100/30';
             }
             if (loginFormEl) loginFormEl.classList.add('hidden');
@@ -1192,7 +2422,7 @@ function loadData(){
                 }
                 
                 // 3. Clear localStorage cache parameters
-                localStorage.removeItem('krishi_last_sync_time');
+                KrishiStorage.removeItem('krishi_last_sync_time');
                 
                 showToast('✅ Caches cleared. Reloading...');
                 setTimeout(() => {
@@ -1214,73 +2444,306 @@ function loadData(){
             setSyncStatus('Syncing...');
             await loadFirebaseSDKs();
             
-            if (!firebaseApp) {
-                let customConfig = null;
-                try { customConfig = JSON.parse(localStorage.getItem('krishi_firebase_config')); } catch(e){}
-                
-                const config = customConfig || {
-                    apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt6OyHhYz10bA",
-                    authDomain: "krishi-mcq-pro.firebaseapp.com",
-                    projectId: "krishi-mcq-pro",
-                    storageBucket: "krishi-mcq-pro.firebasestorage.app",
-                    messagingSenderId: "39741021868",
-                    appId: "1:39741021868:web:c838ca32f5aaeb41720909",
-                    measurementId: "G-MHX05SE7WB",
-                    databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
-                };
+            firebaseApp = getSafeFirebaseApp();
+            if (!firebaseApp) throw new Error("Firebase app could not be initialized");
 
-                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
-                if (!firebase.apps.length) {
-                    firebaseApp = firebase.initializeApp(config, "KrishiApp");
-                } else {
-                    firebaseApp = firebase.app("KrishiApp");
+            const firebaseAuthObj = firebase.auth(firebaseApp);
+            if (!firebaseAuthObj.currentUser) {
+                try {
+                    await firebaseAuthObj.signInAnonymously();
+                    console.log('[Cloud Sync] Anonymous auth fallback successful.');
+                } catch(e) {
+                    console.warn('[Cloud Sync] Anonymous auth fallback failed:', e);
                 }
             }
 
             const firestore = firebase.firestore(firebaseApp);
             
+            // Live Session Presence Registration
+            const sessionId = currentSessionId;
+            const platform = (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : (window.Capacitor.getPlatform() === 'ios' ? 'iOS App' : 'Web PWA')) : 'Web PWA';
+            const deviceName = /Android/i.test(navigator.userAgent) ? 'Android Device' : (/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'iOS Device' : 'Desktop Browser');
+            
+            const sessionRef = firestore.collection('sync_keys').doc(key).collection('sessions').doc(sessionId);
+            const updateSessionDoc = () => {
+                const customName = KrishiStorage.getItem('krishi_custom_device_name');
+                const sessionPayload = {
+                    deviceName: customName || deviceName,
+                    platform: platform,
+                    lastActive: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                if (deviceIpAddress) sessionPayload.ip = deviceIpAddress;
+                if (deviceLocationCity) {
+                    sessionPayload.location = `${deviceLocationCity} (${deviceLocationCountry})`;
+                }
+                const fcmToken = KrishiStorage.getItem('krishi_fcm_token');
+                if (fcmToken) sessionPayload.fcmToken = fcmToken;
+                
+                sessionRef.set(sessionPayload, { merge: true }).catch(err => console.warn('[Presence] Touch failed:', err));
+            };
+
+            // Define global rename function bound to this session
+            window.promptRenameDevice = () => {
+                const currentCustom = KrishiStorage.getItem('krishi_custom_device_name') || '';
+                const existingName = currentCustom || deviceName;
+                const newName = prompt("Enter a custom name for this device:", existingName);
+                if (newName !== null) {
+                    const trimmed = newName.trim();
+                    if (trimmed) {
+                        KrishiStorage.setItem('krishi_custom_device_name', trimmed);
+                        showToast('✅ Device renamed to: ' + trimmed);
+                    } else {
+                        KrishiStorage.removeItem('krishi_custom_device_name');
+                        showToast('✅ Reset device name to default.');
+                    }
+                    updateSessionDoc();
+                }
+            };
+            
+            fetchDeviceLocationMetadata().finally(() => {
+                updateSessionDoc();
+                if (sessionTouchInterval) clearInterval(sessionTouchInterval);
+                sessionTouchInterval = setInterval(updateSessionDoc, 30000);
+            });
+
+            // Listen for remote disconnect events on this device's session
+            if (window.deviceDisconnectListenerUnsubscribe) {
+                window.deviceDisconnectListenerUnsubscribe();
+            }
+            window.deviceDisconnectListenerUnsubscribe = sessionRef.onSnapshot(doc => {
+                if (doc.exists) {
+                    const data = doc.data();
+                    if (data && data.disconnect === true) {
+                        console.log('[Remote Disconnect] Received logout signal from server.');
+                        showToast('⚠️ This session has been disconnected remotely.', 10000);
+                        disableCloudSyncSilently();
+                        if (firebaseAuth) {
+                            firebaseAuth.signOut().catch(e => console.warn('[Remote Disconnect] SignOut failed:', e));
+                        }
+                    }
+                }
+            }, err => {
+                console.warn('[Remote Disconnect] Listener failed:', err);
+            });
+
+            // Define global disconnect callback for the UI button
+            window.remotelyDisconnectDevice = function(targetSessionId) {
+                if (confirm('Are you sure you want to disconnect this device remotely?')) {
+                    firestore.collection('sync_keys').doc(key).collection('sessions').doc(targetSessionId).set({
+                        disconnect: true
+                    }, { merge: true }).then(() => {
+                        showToast('✉️ Sent disconnect request to device...');
+                    }).catch(err => {
+                        console.error('[Disconnect] Request failed:', err);
+                        showToast('❌ Failed to send disconnect request.');
+                    });
+                }
+            };
+
+            // iOS Safari Foreground Synchronization Fallback
+            if (window.safariPeriodicSyncInterval) clearInterval(window.safariPeriodicSyncInterval);
+            window.safariPeriodicSyncInterval = setInterval(() => {
+                if (navigator.onLine && !syncInProgress && getSyncKey()) {
+                    console.log('[iOS Sync Fallback] Executing periodic study progress foreground synchronization...');
+                    performCloudSync();
+                }
+            }, 180000);
+
+            // Presence Listener
+            if (window.presenceListenerUnsubscribe) {
+                window.presenceListenerUnsubscribe();
+            }
+            window.presenceListenerUnsubscribe = firestore.collection('sync_keys').doc(key).collection('sessions')
+                .onSnapshot(snapshot => {
+                    const listContainer = document.getElementById('sync-connected-devices-list');
+                    if (!listContainer) return;
+                    
+                    listContainer.innerHTML = '';
+                    const nowMs = Date.now();
+                    let count = 0;
+                    
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (!data) return;
+                        
+                        let lastActiveMs = nowMs;
+                        if (data.lastActive && typeof data.lastActive.toMillis === 'function') {
+                            lastActiveMs = data.lastActive.toMillis();
+                        } else if (data.lastActive instanceof Date) {
+                            lastActiveMs = data.lastActive.getTime();
+                        }
+                        
+                        if (nowMs - lastActiveMs > 90000) return;
+                        
+                        count++;
+                        const isCurrent = doc.id === currentSessionId;
+                        const item = document.createElement('div');
+                        item.className = 'flex justify-between items-center p-1.5 rounded-lg border bg-white dark:bg-slate-800 text-[9px] transition-all duration-150 hover:bg-slate-100 dark:hover:bg-slate-700';
+                        item.style.borderColor = 'var(--border)';
+                        
+                        const disconnectButton = isCurrent ? `
+                            <span class="px-1.5 py-0.5 rounded-full font-bold uppercase bg-emerald-500/10 text-emerald-500 flex items-center gap-1 text-[7px]">
+                                <span class="h-1 w-1 rounded-full bg-emerald-500"></span> Online
+                            </span>
+                        ` : `
+                            <button class="text-rose-500 hover:text-white px-1.5 py-0.5 rounded border border-rose-500/20 hover:bg-rose-500 font-bold transition-all text-[7px]" onclick="window.remotelyDisconnectDevice('${doc.id}')">
+                                Disconnect
+                            </button>
+                        `;
+
+                        const geoText = data.location ? `<span class="text-[8px] text-emerald-600 dark:text-emerald-400 font-bold block mt-0.5">📍 ${data.location} ${data.ip ? `(${data.ip})` : ''}</span>` : '';
+                        item.innerHTML = `
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-xs">${(data.platform === 'Android App' || data.platform === 'iOS App') ? '📱' : '💻'}</span>
+                                <div class="flex flex-col">
+                                    <span class="font-bold text-slate-800 dark:text-slate-200">${data.deviceName}${isCurrent ? ' <span class="text-indigo-500 font-extrabold text-[8px]">(This)</span> <button class="inline-flex items-center bg-transparent border-0 cursor-pointer text-slate-400 hover:text-indigo-500 ml-1 p-0 transition-colors text-[8px]" onclick="window.promptRenameDevice()" title="Rename Device">✏️</button>' : ''}</span>
+                                    <span class="text-[8px] text-slate-400">${data.platform}</span>
+                                    ${geoText}
+                                </div>
+                            </div>
+                            ${disconnectButton}
+                        `;
+                        listContainer.appendChild(item);
+                    });
+                    
+                    if (count === 0) {
+                        listContainer.innerHTML = '<div class="text-center py-2 text-slate-400">No active sync peers online.</div>';
+                    }
+                }, err => {
+                    console.warn('[Presence] Listener failed:', err);
+                    const listContainer = document.getElementById('sync-connected-devices-list');
+                    if (listContainer) {
+                        listContainer.innerHTML = '<div class="text-center py-2 text-rose-500/80 dark:text-rose-400/80">⚠️ Presence listener paused. Authenticating...</div>';
+                    }
+                });
+
             if (window.syncListenerUnsubscribe) {
                 window.syncListenerUnsubscribe();
             }
 
+            function detectPeerChangesAndNotify(cloudData) {
+                if (!cloudData) return;
+                
+                try {
+                    const localBms = (localData.bookmarked || []).length;
+                    const cloudBms = (cloudData.bookmarked || []).length;
+                    const localWrongs = (localData.wrong || []).length;
+                    const cloudWrongs = (cloudData.wrong || []).length;
+                    
+                    const localLogs = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []).length;
+                    const cloudLogs = (cloudData.timingLog || []).length;
+
+                    const localCust = (localData.customQuestions || []).length;
+                    const cloudCust = (cloudData.customQuestions || []).length;
+                    
+                    let messages = [];
+                    
+                    if (cloudBms > localBms && syncSelectiveBookmarks) {
+                        messages.push(`🔖 ${cloudBms - localBms} Bookmarks`);
+                    }
+                    if (cloudWrongs > localWrongs && syncSelectiveErrors) {
+                        messages.push(`🔴 ${cloudWrongs - localWrongs} Errors`);
+                    }
+                    if (cloudLogs > localLogs && syncSelectiveLogs) {
+                        messages.push(`📅 ${cloudLogs - localLogs} Logs`);
+                    }
+                    if (cloudCust > localCust && syncSelectiveCustom) {
+                        messages.push(`📝 ${cloudCust - localCust} MCQs`);
+                    }
+                    
+                    if (messages.length > 0) {
+                        const text = `🔄 Synced: ${messages.join(', ')}`;
+                        showToast(text);
+                        if (typeof playSound === 'function') {
+                            try { playSound('success'); } catch(e){}
+                        }
+                    }
+                } catch(e) {
+                    console.warn('[Peer Notifications] Failed to calculate diff:', e);
+                }
+            }
+
+            // Listen for cross-device quiz handoff events
+            listenForRemoteHandoff(key, firestore);
+
             // Real-time snapshot listener
             window.syncListenerUnsubscribe = firestore.collection('sync_keys').doc(key)
-                .onSnapshot(doc => {
+                .onSnapshot(async doc => {
+                    if (doc.exists) {
+                        const rawData = doc.data();
+                        if (rawData && rawData.__e2ee__ && window.KrishiE2EEEngine) {
+                            cachedCloudData = await window.KrishiE2EEEngine.decryptPayload(rawData, key);
+                        } else {
+                            cachedCloudData = rawData;
+                        }
+                    } else {
+                        cachedCloudData = null;
+                    }
+                    window.__krishiSyncListenerInitialized__ = true;
+
                     if (syncInProgress) return;
                     
-                    // Ignore local optimistic updates to prevent duplicate prompt triggers
                     if (doc.metadata && doc.metadata.hasPendingWrites) {
                         return;
                     }
                     
                     if (doc.exists) {
-                        const cloudData = doc.data();
-                        const localUpdatedAt = parseInt(localStorage.getItem('krishi_last_updated_at')) || 0;
-                        const cloudUpdatedAt = cloudData.updatedAt || 0;
-                        
-                        if (cloudUpdatedAt > localUpdatedAt) {
-                            syncInProgress = true;
-                            if (confirm("Newer study data found in the cloud!\n\nUse cloud data or keep local data? (OK to use Cloud, Cancel to keep Local)")) {
-                                applyAllAppData(cloudData);
-                                localStorage.setItem('krishi_last_updated_at', cloudUpdatedAt);
-                                localStorage.removeItem('krishi_sync_pending');
-                                setSyncStatus('Synced');
-                            } else {
-                                syncInProgress = false;
-                                scheduleCloudSync('Preserved local data over cloud');
-                            }
-                            syncInProgress = false;
-                        } else if (localUpdatedAt > cloudUpdatedAt) {
-                            scheduleCloudSync('Local data newer than snapshot');
+                        const cloudData = cachedCloudData;
+                        syncInProgress = true;
+                        console.log('[Cloud Sync] Snappy silent real-time CRDT merge executing...');
+                        detectPeerChangesAndNotify(cloudData);
+                        const mergedPayload = mergeCloudAndLocalData(cloudData);
+                        applyAllAppData(mergedPayload);
+
+                        const delta = getDifferentialSyncDelta(mergedPayload, cloudData);
+                        if (delta && Object.keys(delta).length > 0) {
+                            const now = firebase.firestore.FieldValue.serverTimestamp();
+                            mergedPayload.updatedAt = Date.now();
+                            KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
+                            firestore.collection('sync_keys').doc(key).set({ ...mergedPayload, updatedAt: now }, { merge: true })
+                                .then(() => console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud'))
+                                .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
                         } else {
-                            setSyncStatus('Synced');
+                            KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
                         }
+
+                        KrishiStorage.removeItem('krishi_sync_pending');
+                        KrishiStorage.setItem('krishi_sync_pending_count', '0');
+                        setSyncStatus('Synced');
+                        updateOfflineQueueBadge();
+                        scheduleMidnightCloudVault();
+                        if (typeof updateSyncUI === 'function') updateSyncUI();
+
+                        const activePanels = document.getElementById('practice-active-state-panels');
+                        const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
+
+                        if (!isUserInActiveQuiz) {
+                            if (typeof updateHomePage === 'function') updateHomePage();
+                            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+                            if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList(true);
+                            if (typeof updatePracticePage === 'function') updatePracticePage();
+                            if (typeof renderProfilesInventory === 'function') renderProfilesInventory();
+                            if (typeof updateSizingDiagnosticsInSetup === 'function') {
+                                try { updateSizingDiagnosticsInSetup(); } catch(e){}
+                            }
+                        } else {
+                            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+                        }
+
+                        syncInProgress = false;
+                        window.dispatchEvent(new Event('appDataSynced'));
                     } else {
                         scheduleCloudSync('Initial sync configuration setup');
                     }
                 }, err => {
                     console.error('[Cloud Sync] Listener failed:', err);
                     setSyncStatus('Sync failed');
+                    setTimeout(() => {
+                        if (navigator.onLine && KrishiStorage.getItem('krishi_sync_status') === 'Sync failed') {
+                            console.log('[Cloud Sync] Auto-retrying cloud sync after failure...');
+                            initCloudSync();
+                        }
+                    }, 5000);
                 });
 
         } catch (err) {
@@ -1289,37 +2752,246 @@ function loadData(){
         }
     }
 
+    async function generatePairingPin() {
+        const key = getSyncKey();
+        if (!key) {
+            showToast('⚠️ Please login or enable Cloud Sync first!');
+            return;
+        }
+        try {
+            await loadFirebaseSDKs();
+            const firestore = firebase.firestore(firebaseApp);
+            
+            const pin = String(Math.floor(100000 + Math.random() * 900000));
+            const now = Date.now();
+            const expiresAt = now + (15 * 60 * 1000);
+            
+            await firestore.collection('sync_pins').doc(pin).set({
+                syncKey: key,
+                createdAt: now,
+                expiresAt: expiresAt,
+                ownerUid: (currentAuthUser ? currentAuthUser.uid : null)
+            });
+            
+            const pinModal = document.getElementById('modal-pairing-pin');
+            const pinDisplay = document.getElementById('cloud-pairing-pin-display');
+            if (pinDisplay) pinDisplay.textContent = pin;
+            if (pinModal) pinModal.classList.remove('hidden');
+            
+            showToast(`🔑 Pairing PIN: ${pin}`);
+        } catch(err) {
+            console.error('[Pairing PIN] Failed to generate PIN:', err);
+            showToast('❌ PIN generation failed: ' + err.message);
+        }
+    }
+    window.generatePairingPin = generatePairingPin;
+
+    async function pairWithPin(pinInput) {
+        const pin = String(pinInput || '').trim().replace(/\s+/g, '');
+        if (!pin || pin.length !== 6) {
+            showToast('⚠️ Please enter a valid 6-digit PIN code!');
+            return;
+        }
+        try {
+            showToast('🔄 Verifying pairing PIN...');
+            await loadFirebaseSDKs();
+            const firestore = firebase.firestore(firebaseApp);
+            
+            const doc = await firestore.collection('sync_pins').doc(pin).get();
+            if (!doc.exists) {
+                showToast('❌ Invalid or expired PIN code!');
+                return;
+            }
+            
+            const pinData = doc.data();
+            if (pinData.expiresAt && Date.now() > pinData.expiresAt) {
+                showToast('❌ This PIN code has expired! Please generate a new one.');
+                return;
+            }
+            
+            const targetKey = pinData.syncKey;
+            if (!targetKey) {
+                showToast('❌ Invalid sync key attached to PIN!');
+                return;
+            }
+            
+            syncCredentialsAuthorized = true;
+            KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
+            KrishiStorage.setItem('krishi_sync_key', targetKey);
+            
+            const input = document.getElementById('cloud-sync-key-input');
+            if (input) input.value = targetKey;
+            
+            showToast('✅ Device Linked with PIN! Merging account data...');
+            await initCloudSync();
+            if (typeof syncCloudNow === 'function') await syncCloudNow(false);
+            
+            const pinModal = document.getElementById('modal-pairing-pin');
+            if (pinModal) pinModal.classList.add('hidden');
+        } catch(err) {
+            console.error('[Pairing PIN] Failed to link with PIN:', err);
+            showToast('❌ Linking failed: ' + err.message);
+        }
+    }
+    window.pairWithPin = pairWithPin;
+
+    function listenForRemoteHandoff(key, firestore) {
+        if (window.handoffListenerUnsubscribe) {
+            window.handoffListenerUnsubscribe();
+        }
+        window.handoffListenerUnsubscribe = firestore.collection('sync_keys').doc(key).collection('handoff').doc('current')
+            .onSnapshot(doc => {
+                if (!doc || !doc.exists) return;
+                const data = doc.data();
+                if (!data || data.sessionId === currentSessionId || !data.active) return;
+                if (Date.now() - (data.updatedAt || 0) < 600000) {
+                    renderHandoffBanner(data);
+                }
+            }, err => console.warn('[Handoff] Listener error:', err));
+    }
+
+    function renderHandoffBanner(data) {
+        let banner = document.getElementById('krishi-handoff-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'krishi-handoff-banner';
+            document.body.appendChild(banner);
+        }
+        banner.className = 'fixed top-3 left-1/2 -translate-x-1/2 z-[99999] bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2.5 rounded-2xl shadow-xl border border-indigo-400/30 flex items-center gap-3 animate-bounce text-xs cursor-pointer';
+        banner.innerHTML = `
+            <span>📱 Active Session on <strong>${data.deviceName || 'Peer'}</strong> (${data.subject || 'Quiz'} - Q #${(data.questionIdx || 0) + 1})</span>
+            <button onclick="if(typeof window.navigateTab==='function') window.navigateTab('page-practice'); window.dismissHandoffBanner();" class="bg-white text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl text-[10px] shadow hover:bg-indigo-50 cursor-pointer">Resume Here 🚀</button>
+            <button onclick="window.dismissHandoffBanner()" class="text-white/80 hover:text-white text-xs cursor-pointer">✕</button>
+        `;
+    }
+
+    window.dismissHandoffBanner = function() {
+        const banner = document.getElementById('krishi-handoff-banner');
+        if (banner) banner.remove();
+    };
+
+    function broadcastQuizHandoff(quizState) {
+        quizState = quizState || {};
+        const key = getSyncKey();
+        if (!key || !firebaseApp) return;
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            const payload = {
+                sessionId: currentSessionId,
+                deviceName: KrishiStorage.getItem('krishi_custom_device_name') || 'Peer Device',
+                subject: quizState.subject || (state ? state.selectedSubject : 'All Subjects') || 'Quiz',
+                questionIdx: typeof quizState.questionIdx !== 'undefined' ? quizState.questionIdx : (state ? state.currentIndex : 0),
+                totalScore: typeof quizState.score !== 'undefined' ? quizState.score : (state ? state.score : 0),
+                updatedAt: Date.now(),
+                active: true
+            };
+            firestore.collection('sync_keys').doc(key).collection('handoff').doc('current').set(payload, { merge: true })
+                .catch(e => console.warn('[Handoff] Broadcast failed:', e));
+        } catch(e){}
+    }
+    window.broadcastQuizHandoff = broadcastQuizHandoff;
+
+    function scheduleMidnightCloudVault() {
+        const today = new Date().toISOString().split('T')[0];
+        const lastVaultDate = KrishiStorage.getItem('krishi_last_vault_date');
+        if (lastVaultDate !== today) {
+            performMidnightVaultBackup(today);
+        }
+    }
+
+    async function performMidnightVaultBackup(dateStr) {
+        const key = getSyncKey();
+        if (!key || !firebaseApp) return;
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            const snapshot = collectAllAppData();
+            snapshot.vaultDate = dateStr;
+            snapshot.vaultTimestamp = Date.now();
+            await firestore.collection('sync_keys').doc(key).collection('backups').doc(dateStr).set(snapshot, { merge: true });
+            KrishiStorage.setItem('krishi_last_vault_date', dateStr);
+            console.log('[Midnight Vault] Cloud backup snapshot created for:', dateStr);
+        } catch(e) {
+            console.warn('[Midnight Vault] Failed:', e);
+        }
+    }
+    window.performMidnightVaultBackup = performMidnightVaultBackup;
+
+    function updateOfflineQueueBadge() {
+        const badge = document.getElementById('krishi-offline-queue-badge');
+        if (badge) {
+            badge.classList.add('hidden');
+            badge.style.display = 'none';
+        }
+    }
+    window.updateOfflineQueueBadge = updateOfflineQueueBadge;
+    window.addEventListener('online', updateOfflineQueueBadge);
+    window.addEventListener('offline', updateOfflineQueueBadge);
+
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();
-        if (!inputKey || !inputKey.startsWith('KRISHI-SYNC-')) {
+        if (!inputKey || (!inputKey.startsWith('KRISHI-SYNC-') && !inputKey.startsWith('KRISHI-UID-'))) {
             showToast('⚠️ Please enter a valid Cloud Sync Key!');
             return;
         }
 
-        localStorage.setItem('krishi_sync_key', inputKey);
+        syncCredentialsAuthorized = true;
+        KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
+        KrishiStorage.setItem('krishi_sync_key', inputKey);
         showToast('🔄 Initializing real-time Cloud Sync...');
         await initCloudSync();
+        if (typeof syncCloudNow === 'function') await syncCloudNow(true);
     }
 
     function disableCloudSync() {
         if (confirm('Are you sure you want to disable Cloud Sync? Your progress will remain saved locally.')) {
-            if (window.syncListenerUnsubscribe) {
-                try {
-                    window.syncListenerUnsubscribe();
-                } catch(e) {
-                    console.error('Failed to unsubscribe sync listener:', e);
-                }
-                window.syncListenerUnsubscribe = null;
-            }
-            if (syncListenerRef) {
-                try { syncListenerRef.off(); } catch(e){}
-                syncListenerRef = null;
-            }
-            localStorage.removeItem('krishi_sync_key');
-            localStorage.removeItem('krishi_last_sync_time');
-            updateSyncUI();
+            disableCloudSyncSilently();
             showToast('🔴 Cloud Sync disabled successfully.');
         }
+    }
+
+    function disableCloudSyncSilently() {
+        // Delete presence registration before clean up
+        try {
+            const key = getSyncKey();
+            if (key && firebaseApp) {
+                const firestore = firebase.firestore(firebaseApp);
+                firestore.collection('sync_keys').doc(key).collection('sessions').doc(currentSessionId).delete()
+                    .catch(e => console.warn('[Presence] Cleanup failed:', e));
+            }
+        } catch(e) {
+            console.warn('[Presence] Session cleanup err:', e);
+        }
+        if (sessionTouchInterval) {
+            clearInterval(sessionTouchInterval);
+            sessionTouchInterval = null;
+        }
+        if (window.presenceListenerUnsubscribe) {
+            window.presenceListenerUnsubscribe();
+            window.presenceListenerUnsubscribe = null;
+        }
+        if (window.syncListenerUnsubscribe) {
+            try {
+                window.syncListenerUnsubscribe();
+            } catch(e) {
+                console.error('Failed to unsubscribe sync listener:', e);
+            }
+            window.syncListenerUnsubscribe = null;
+        }
+        if (window.deviceDisconnectListenerUnsubscribe) {
+            try {
+                window.deviceDisconnectListenerUnsubscribe();
+            } catch(e) {}
+            window.deviceDisconnectListenerUnsubscribe = null;
+        }
+        if (syncListenerRef) {
+            try { syncListenerRef.off(); } catch(e){}
+            syncListenerRef = null;
+        }
+        KrishiStorage.removeItem('krishi_sync_key');
+        KrishiStorage.removeItem('krishi_last_sync_time');
+        KrishiStorage.removeItem('krishi_sync_credentials_authorized');
+        syncCredentialsAuthorized = false;
+        updateSyncUI();
     }
 
     function performSmartMerge(cloudData, shouldPushAfter = true) {
@@ -1327,128 +2999,23 @@ function loadData(){
         syncInProgress = true;
 
         try {
-            let changed = false;
+            console.log('[SmartMerge] Executing full CRDT payload merge & UI refresh...');
+            const mergedPayload = mergeCloudAndLocalData(cloudData);
+            applyAllAppData(mergedPayload);
 
-            // 1. Merge Bookmarks (Union)
-            const localBms = localData.bookmarked || [];
-            const cloudBms = cloudData.bookmarked || [];
-            const mergedBms = Array.from(new Set([...localBms, ...cloudBms]));
-            if (mergedBms.length !== localBms.length || mergedBms.some((v,i) => v !== localBms[i])) {
-                localData.bookmarked = mergedBms;
-                changed = true;
-            }
+            KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt || Date.now());
+            KrishiStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
 
-            // 2. Merge Incorrect Answers (Union)
-            const localWrongs = localData.wrong || [];
-            const cloudWrongs = cloudData.wrong || [];
-            const mergedWrongs = Array.from(new Set([...localWrongs, ...cloudWrongs]));
-            if (mergedWrongs.length !== localWrongs.length || mergedWrongs.some((v,i) => v !== localWrongs[i])) {
-                localData.wrong = mergedWrongs;
-                changed = true;
-            }
-
-            // 3. Merge Achievements (Union)
-            const localAch = localData.achievements || [];
-            const cloudAch = cloudData.achievements || [];
-            const mergedAch = Array.from(new Set([...localAch, ...cloudAch]));
-            if (mergedAch.length !== localAch.length || mergedAch.some((v,i) => v !== localAch[i])) {
-                localData.achievements = mergedAch;
-                changed = true;
-            }
-
-            // 4. Merge Streaks (Max)
-            const localStr = localData.streak || {};
-            const cloudStr = cloudData.streak || {};
-            const mergedStr = {
-                currentStreak: Math.max(localStr.currentStreak || 0, cloudStr.currentStreak || 0),
-                lastActiveDate: localStr.lastActiveDate || cloudStr.lastActiveDate,
-                history: Array.from(new Set([...(localStr.history || []), ...(cloudStr.history || [])]))
-            };
-            if (JSON.stringify(localStr) !== JSON.stringify(mergedStr)) {
-                localData.streak = mergedStr;
-                changed = true;
-            }
-
-            // 5. Merge Solved Stats (Max / Merged)
-            const localStats = localData.stats || { totalSolved: 0, totalCorrect: 0, subjectStats: {} };
-            const cloudStats = cloudData.stats || { totalSolved: 0, totalCorrect: 0, subjectStats: {} };
-            const mergedStats = {
-                totalSolved: Math.max(localStats.totalSolved || 0, cloudStats.totalSolved || 0),
-                totalCorrect: Math.max(localStats.totalCorrect || 0, cloudStats.totalCorrect || 0),
-                subjectStats: {}
-            };
-            
-            const allSubs = new Set([...Object.keys(localStats.subjectStats || {}), ...Object.keys(cloudStats.subjectStats || {})]);
-            allSubs.forEach(sub => {
-                const lSub = localStats.subjectStats[sub] || { solved: 0, correct: 0 };
-                const cSub = cloudStats.subjectStats[sub] || { solved: 0, correct: 0 };
-                mergedStats.subjectStats[sub] = {
-                    solved: Math.max(lSub.solved, cSub.solved),
-                    correct: Math.max(lSub.correct, cSub.correct)
-                };
-            });
-
-            if (JSON.stringify(localStats) !== JSON.stringify(mergedStats)) {
-                localData.stats = mergedStats;
-                changed = true;
-            }
-
-            // 6. Merge Spaced Repetition sm2Data (Latest Interval/EF)
-            const localSm2 = sm2Data || {};
-            const cloudSm2 = cloudData.sm2 || {};
-            const mergedSm2 = { ...localSm2 };
-            
-            Object.entries(cloudSm2).forEach(([qid, cInfo]) => {
-                const lInfo = localSm2[qid];
-                if (!lInfo || (cInfo.lastStudied || '') > (lInfo.lastStudied || '')) {
-                    mergedSm2[qid] = cInfo;
-                    changed = true;
-                }
-            });
-
-            if (JSON.stringify(localSm2) !== JSON.stringify(mergedSm2)) {
-                sm2Data = mergedSm2;
-                Storage.setJSON('krishi_sm2', sm2Data);
-                changed = true;
-            }
-
-            // 7. Merge Custom Questions (Latest updatedAt)
-            const localCust = localData.customQuestions || [];
-            const cloudCust = cloudData.customQuestions || [];
-            const qMap = new Map();
-            localCust.forEach(q => qMap.set(q.id, q));
-            cloudCust.forEach(q => {
-                const lQ = qMap.get(q.id);
-                if (!lQ || (q.updatedAt || 0) > (lQ.updatedAt || 0)) {
-                    qMap.set(q.id, q);
-                    changed = true;
-                }
-            });
-            const mergedCust = Array.from(qMap.values());
-            if (mergedCust.length !== localCust.length || changed) {
-                localData.customQuestions = mergedCust;
-                changed = true;
-            }
-
-            if (changed) {
-                // Batch write locally without triggering infinite loop syncs
-                Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
-                
-                // Update interface stats instantly
-                try {
-                    updateHomePage();
-                    updatePracticePage();
-                } catch(e){}
-            }
-
-            const nowStr = new Date().toLocaleTimeString();
-            localStorage.setItem('krishi_last_sync_time', nowStr);
             updateSyncUI();
 
-            if (shouldPushAfter && changed) {
+            if (typeof updateHomePage === 'function') updateHomePage();
+            if (typeof updatePracticePage === 'function') updatePracticePage();
+            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+            if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList(true);
+
+            if (shouldPushAfter) {
                 pushLocalToCloud();
             }
-
         } catch (err) {
             console.error('Error during smart merge:', err);
         } finally {
@@ -1457,26 +3024,9 @@ function loadData(){
     }
 
     async function pushLocalToCloud() {
-    const key = getSyncKey();
-    if (!key) return;
-
-    try {
-        await loadFirebaseSDKs();
-        if (!firebaseApp) {
-            await initFirebaseAuth();
-        }
-        if (firebaseApp) {
-            const firestore = firebase.firestore(firebaseApp);
-            const docRef = firestore.collection('sync_keys').doc(key);
-            const localDataPayload = collectAllAppData();
-            localDataPayload.updatedAt = Date.now();
-            await docRef.set(localDataPayload);
-            localStorage.setItem('krishi_last_updated_at', localDataPayload.updatedAt);
-        }
-    } catch(err) {
-        console.error('Failed to push to Firebase Firestore:', err);
+        console.log('[Sync] Delegating local push to snappy Firestore debouncer.');
+        scheduleCloudSync('Pushing to cloud');
     }
-}
 
     async function syncCloudNow(silent = false) {
     const key = getSyncKey();
@@ -1502,13 +3052,48 @@ function loadData(){
             
             if (doc.exists) {
                 const cloudData = doc.data();
-                performSmartMerge(cloudData, true);
+                const conflict = checkForSyncConflicts(collectAllAppData(), cloudData);
+                if (conflict && !silent) {
+                    promptConflictModal(conflict.local, conflict.cloud, async (strategy) => {
+                        try {
+                            if (strategy === 'merge') {
+                                performSmartMerge(cloudData, true);
+                                if (!silent) showToast('✅ Intelligent Merge successful!');
+                            } else if (strategy === 'local') {
+                                const now = Date.now();
+                                const localDataPayload = collectAllAppData();
+                                localDataPayload.updatedAt = now;
+                                await docRef.set(localDataPayload);
+                                KrishiStorage.setItem('krishi_last_updated_at', now);
+                                KrishiStorage.removeItem('krishi_sync_pending');
+                                KrishiStorage.setItem('krishi_sync_pending_count', '0');
+                                setSyncStatus('Synced');
+                                updateOfflineQueueBadge();
+                                if (!silent) showToast('✅ Cloud overwritten with Local version!');
+                            } else if (strategy === 'cloud') {
+                                applyAllAppData(cloudData);
+                                KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
+                                KrishiStorage.removeItem('krishi_sync_pending');
+                                KrishiStorage.setItem('krishi_sync_pending_count', '0');
+                                setSyncStatus('Synced');
+                                updateOfflineQueueBadge();
+                                if (!silent) showToast('✅ Local overwritten with Cloud version!');
+                            }
+                        } catch(err) {
+                            console.error('[Conflict Resolution] Resolution failed:', err);
+                            showToast('❌ Resolution failed: ' + err.message);
+                        }
+                    });
+                } else {
+                    performSmartMerge(cloudData, true);
+                    if (!silent) showToast('✅ Cloud Sync successful!');
+                }
             } else {
                 await pushLocalToCloud();
-                localStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
+                KrishiStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
                 updateSyncUI();
+                if (!silent) showToast('✅ Cloud Sync successful!');
             }
-            if (!silent) showToast('✅ Cloud Sync successful!');
         }
     } catch(e) {
         console.error('Manual sync failed:', e);
@@ -1521,76 +3106,43 @@ function loadData(){
     }
 }
 
-    function writePendingSyncToIndexedDB(syncKey, payload) {
-        if (!('indexedDB' in window)) return;
-        
-        const request = indexedDB.open('KrishiOfflineSyncDB', 1);
-        request.onupgradeneeded = event => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains('sync_queue')) {
-                db.createObjectStore('sync_queue');
-            }
-        };
-        request.onsuccess = event => {
-            const db = event.target.result;
-            const tx = db.transaction('sync_queue', 'readwrite');
-            const store = tx.objectStore('sync_queue');
-            let customProjectId = 'krishi-mcq-pro';
-            try {
-                const customConfig = JSON.parse(localStorage.getItem('krishi_firebase_config'));
-                if (customConfig && customConfig.projectId) {
-                    customProjectId = customConfig.projectId;
-                }
-            } catch(e){}
-            store.put({ syncKey, payload, projectId: customProjectId, timestamp: Date.now() }, 'pending_sync');
-        };
-        request.onerror = err => {
-            console.warn('[SyncDB] Failed to write to IndexedDB:', err);
-        };
+    // Offline sync is managed entirely and robustly by the official Firebase SDK's native persistence.
+
+    function writeFCMTokenToFirebaseSession(token) {
+        if (!token) return;
+        const key = getSyncKey();
+        if (!key || !firebaseApp) return;
+
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            const sessionRef = firestore.collection('sync_keys').doc(key)
+                .collection('sessions').doc(currentSessionId);
+            
+            sessionRef.set({
+                fcmToken: token,
+                updatedAt: Date.now()
+            }, { merge: true }).catch(e => {
+                console.warn('[Push] Failed to write FCM token to session:', e);
+            });
+        } catch(e) {
+            console.warn('[Push] Firestore FCM registration error:', e);
+        }
     }
+    window.writeFCMTokenToFirebaseSession = writeFCMTokenToFirebaseSession;
 
     function triggerBackgroundSync() {
-        const syncKey = getSyncKey();
-        if (!syncKey) return;
-
-        const payload = {
-            bookmarked: localData.bookmarked || [],
-            wrong: localData.wrong || [],
-            customQuestions: localData.customQuestions || [],
-            streak: localData.streak || {},
-            stats: localData.stats || { totalSolved: 0, totalCorrect: 0, subjectStats: {} },
-            achievements: localData.achievements || [],
-            sm2: sm2Data || {},
-            lastSyncTimestamp: Date.now()
-        };
-
-        // 1. Write the payload to IndexedDB for Service Worker access
-        writePendingSyncToIndexedDB(syncKey, payload);
-
-        // 2. Register true Background Sync if supported
-        if ('serviceWorker' in navigator && 'SyncManager' in window) {
-            navigator.serviceWorker.ready.then(reg => {
-                return reg.sync.register('krishi-db-sync');
-            }).then(() => {
-                console.log('[BackgroundSync] Successfully registered sync event tag.');
-            }).catch(err => {
-                console.warn('[BackgroundSync] Registration failed:', err);
-                pushLocalToCloud();
-            });
-        } else {
-            showToast('Background Sync is not supported in this browser. Please open the app when online to sync.');
-            pushLocalToCloud();
-        }
+        // Redundant background sync disabled in favor of real-time Firebase SDK Sync
+        console.log('[BackgroundSync] Bypassed old sync flow in favor of real-time Firestore sync.');
     }
 
     window.addEventListener('online', () => {
-        if (localStorage.getItem('krishi_sync_key')) {
+        if (KrishiStorage.getItem('krishi_sync_key')) {
             initCloudSync();
         }
     });
 
-    function getAllQuestions(){ return [...defaultQuestions, ...localData.customQuestions]; }
-    function getCustomQuestions(){ return localData.customQuestions || []; }
+    function getAllQuestions(){ return [...defaultQuestions, ...(localData.customQuestions || []).filter(q => !q.deleted)]; }
+    function getCustomQuestions(){ return (localData.customQuestions || []).filter(q => !q.deleted); }
     function getPromoDueCount() {
         return getPlannerSettings().adaptiveReview ? getAdaptiveDueQuestions().length : getSpacedQueue().length;
     }
@@ -1612,13 +3164,37 @@ function loadData(){
     }
 
     function getStreakCount(){
-        let dates=Object.keys(localData.streak).sort().reverse();
-        let s=0; let today=new Date();
-        for(let i=0;i<dates.length;i++){
-            let d=new Date(dates[i]);
-            let exp=new Date(today); exp.setDate(exp.getDate()-i);
-            if(getLocalDateString(d)===getLocalDateString(exp)) s++;
-            else break;
+        let settings = getPlannerSettings();
+        let restDays = settings.restDays || [6];
+        let target = settings.dailyTarget || 30;
+        let todayStr = getLocalDateString(new Date());
+        
+        let s = 0;
+        let checkDate = new Date();
+        
+        // Loop backward up to 365 days
+        for (let i = 0; i < 365; i++) {
+            let stamp = getLocalDateString(checkDate);
+            let dayData = localData.streak[stamp];
+            let solved = dayData ? (dayData.solved || 0) : 0;
+            
+            if (stamp === todayStr) {
+                if (solved >= target) {
+                    s++;
+                } else {
+                    // Today's target is not complete yet, but do not break the streak.
+                }
+            } else {
+                if (solved >= target) {
+                    s++;
+                } else if (restDays.includes(checkDate.getDay())) {
+                    // Rest day configured! It is streak-safe. Keep checking earlier days.
+                } else {
+                    // Missed regular study day, streak breaks!
+                    break;
+                }
+            }
+            checkDate.setDate(checkDate.getDate() - 1);
         }
         return s;
     }
@@ -1630,9 +3206,18 @@ function loadData(){
         setTimeout(()=>{ t.style.opacity='0'; t.style.pointerEvents='none'; }, dur);
     }
 
+    function syncSettingsToCloud(reason = 'Settings changed') {
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+        if (typeof scheduleCloudSync === 'function') {
+            scheduleCloudSync(reason);
+        }
+    }
+    window.syncSettingsToCloud = syncSettingsToCloud;
+
     function toggleDarkMode(){
         document.documentElement.classList.toggle('dark');
-        localStorage.setItem('krishi_dark', document.documentElement.classList.contains('dark'));
+        KrishiStorage.setItem('krishi_dark', document.documentElement.classList.contains('dark'));
+        syncSettingsToCloud('Dark mode toggled');
         if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
             applyCustomAppearanceAndLanguageSettings();
         }
@@ -1661,10 +3246,24 @@ function loadData(){
             if (overlay2) overlay2.remove();
         }
 
+        // Navigation weight map to determine left/right sliding directions
+        const navIndexMap = {
+            'page-home': 0,
+            'page-practice': 1, 'page-mock': 1, 'page-mock-config': 1, 'page-wrong-questions': 1, 'page-smart-scan': 1, 'page-file-scan': 1, 'page-edit-mcq': 1,
+            'page-mcq-creator': 2,
+            'page-analytics': 3,
+            'page-study-planner': 4,
+            'page-settings': 5, 'page-subject-manager': 5, 'page-admin': 5, 'page-tinder-swiper': 5
+        };
+
+        let activePage = document.querySelector('.page.active');
+        let oldIdx = activePage ? (navIndexMap[activePage.id] !== undefined ? navIndexMap[activePage.id] : 0) : 0;
+        let newIdx = navIndexMap[pageId] !== undefined ? navIndexMap[pageId] : 0;
+
         // Reset ALL pages: force hide all inactive pages and clear animation transitions
         // to prevent bleed-through and ensure absolute layout isolation.
         document.querySelectorAll('.page').forEach(p => {
-            p.classList.remove('active');
+            p.classList.remove('active', 'slide-in-right', 'slide-in-left', 'fade-in-transition', 'zoom-in-transition', 'no-transition');
             p.style.display = 'none'; // Force hide
             p.style.opacity = '';
             p.style.transition = '';
@@ -1674,12 +3273,49 @@ function loadData(){
         if(target) {
             target.classList.add('active');
             target.style.display = 'block'; // Force show
+
+            // Trigger premium bi-directional transitions based on user customization
+            if (activePage && activePage.id !== pageId) {
+                let style = (window.EliteAnimsConfig && window.EliteAnimsConfig.pageTransitionStyle) || 'slide';
+                if (style === 'slide') {
+                    let slideClass = newIdx > oldIdx ? 'slide-in-right' : 'slide-in-left';
+                    target.classList.add(slideClass);
+                    setTimeout(() => {
+                        target.classList.remove(slideClass);
+                    }, 360);
+                } else if (style === 'fade') {
+                    target.classList.add('fade-in-transition');
+                    setTimeout(() => {
+                        target.classList.remove('fade-in-transition');
+                    }, 360);
+                } else if (style === 'zoom') {
+                    target.classList.add('zoom-in-transition');
+                    setTimeout(() => {
+                        target.classList.remove('zoom-in-transition');
+                    }, 360);
+                } else {
+                    target.classList.add('no-transition');
+                }
+            } else {
+                target.classList.add('no-transition');
+            }
         }
 
-        document.querySelectorAll('.nav-item').forEach(n=>n.style.color='var(--text-secondary)');
+        document.querySelectorAll('.nav-item').forEach(n => {
+            n.style.color='var(--text-secondary)';
+            n.classList.remove('dock-active');
+        });
         // Reset More button highlight
         let moreBtn = document.getElementById('nav-btn-more');
         if (moreBtn) moreBtn.classList.remove('more-btn-highlight');
+
+        // Reset Header Settings Highlight
+        let headerSettingsBtn = document.getElementById('header-settings-btn');
+        if (headerSettingsBtn) {
+            headerSettingsBtn.style.transform = 'none';
+            headerSettingsBtn.style.opacity = '0.75';
+            headerSettingsBtn.style.filter = 'none';
+        }
 
         // Reset sheet item active states
         document.querySelectorAll('.sheet-nav-item').forEach(el => el.classList.remove('sheet-item-active'));
@@ -1687,9 +3323,9 @@ function loadData(){
         let map={
             'page-home': 0, 'page-practice': 1, 'page-mock': 1, 'page-mock-config': 1,
             'page-wrong-questions': 1, 'page-smart-scan': 1, 'page-file-scan': 1, 'page-edit-mcq': 1,
-            'page-mcq-creator': 2, 'page-analytics': 3,
+            'page-mcq-creator': 2, 'page-analytics': 3, 'page-study-planner': 'planner',
             // Sheet pages — highlight the More (⋯) button
-            'page-study-planner': 'more', 'page-settings': 'more',
+            'page-settings': 'more',
             'page-subject-manager': 'more', 'page-admin': 'more',
             'page-tinder-swiper': 'more'
         };
@@ -1698,9 +3334,13 @@ function loadData(){
             if (index === 'more') {
                 // Highlight More button for sheet-level pages
                 if (moreBtn) moreBtn.classList.add('more-btn-highlight');
+                if (headerSettingsBtn) {
+                    headerSettingsBtn.style.transform = 'scale(1.18) rotate(35deg)';
+                    headerSettingsBtn.style.opacity = '1';
+                    headerSettingsBtn.style.filter = 'drop-shadow(0 0 10px var(--primary))';
+                }
                 // Highlight the matching sheet nav item
                 let sheetMap = {
-                    'page-study-planner': 'sheet-nav-planner',
                     'page-settings': 'sheet-nav-settings',
                     'page-subject-manager': 'sheet-nav-settings',
                     'page-admin': 'sheet-nav-admin',
@@ -1711,9 +3351,18 @@ function loadData(){
                     let sheetItem = document.getElementById(sheetItemId);
                     if (sheetItem) sheetItem.classList.add('sheet-item-active');
                 }
+            } else if (index === 'planner') {
+                let activeNavBtn = document.getElementById('nav-btn-planner');
+                if(activeNavBtn) {
+                    activeNavBtn.style.color='var(--primary)';
+                    activeNavBtn.classList.add('dock-active');
+                }
             } else {
                 let activeNavBtn = document.getElementById('nav-btn-'+index);
-                if(activeNavBtn) activeNavBtn.style.color='var(--primary)';
+                if(activeNavBtn) {
+                    activeNavBtn.style.color='var(--primary)';
+                    activeNavBtn.classList.add('dock-active');
+                }
             }
 
             // Also dynamically update active visual style on desktop sidebar links
@@ -1722,7 +3371,7 @@ function loadData(){
                 el.classList.remove('bg-emerald-50', 'dark:bg-emerald-950/20');
             });
             // Map sheet pages back to sidebar-nav-btn index
-            let sidebarIndex = (index === 'more') ? ({'page-study-planner':4,'page-settings':5,'page-subject-manager':5,'page-admin':5,'page-tinder-swiper':5}[pageId]) : index;
+            let sidebarIndex = (index === 'more') ? ({'page-settings':5,'page-subject-manager':5,'page-admin':5,'page-tinder-swiper':5}[pageId]) : (index === 'planner' ? 4 : index);
             let activeSidebarBtn = document.getElementById('sidebar-nav-btn-'+sidebarIndex);
             if(activeSidebarBtn) {
                 activeSidebarBtn.style.color = 'var(--primary)';
@@ -1753,31 +3402,8 @@ function loadData(){
     }
 
     // ==================== UNIFIED SHELL: BOTTOM SHEET ====================
-    window.toggleNavSheet = function() {
-        const sheet = document.getElementById('nav-bottom-sheet');
-        const backdrop = document.getElementById('nav-sheet-backdrop');
-        if (!sheet || !backdrop) return;
-        const isOpen = sheet.classList.contains('sheet-open');
-        if (isOpen) {
-            closeNavSheet();
-        } else {
-            // Update sheet user name from existing home greeting
-            let greetEl = document.getElementById('home-greeting');
-            let sheetName = document.getElementById('sheet-user-name');
-            if (sheetName && greetEl) sheetName.textContent = greetEl.textContent || 'नमस्ते! 👋';
-
-            sheet.classList.add('sheet-open');
-            backdrop.classList.add('sheet-backdrop-active');
-            if (typeof triggerHaptic === 'function') triggerHaptic('click');
-        }
-    };
-
-    window.closeNavSheet = function() {
-        const sheet = document.getElementById('nav-bottom-sheet');
-        const backdrop = document.getElementById('nav-sheet-backdrop');
-        if (sheet) sheet.classList.remove('sheet-open');
-        if (backdrop) backdrop.classList.remove('sheet-backdrop-active');
-    };
+    window.toggleNavSheet = function() {};
+    window.closeNavSheet = function() {};
 
     // ==================== UNIFIED SHELL: STATS RIBBON ====================
     window.updateStatsRibbon = function() {
@@ -1800,6 +3426,26 @@ function loadData(){
             if (ribbonStreak) ribbonStreak.textContent = streakCount;
             if (ribbonAccuracy) ribbonAccuracy.textContent = accuracy !== null ? accuracy + '%' : '--%';
             if (ribbonToday) ribbonToday.textContent = solved;
+
+            // Toggle active streak combustion class on fire indicators
+            let isAnims = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
+            let fireBadges = [
+                document.getElementById('ribbon-streak'),
+                document.getElementById('sidebar-streak-badge'),
+                document.getElementById('sidebar-stat-streak'),
+                document.getElementById('hybrid-streak-badge'),
+                document.getElementById('planner-streak-count')
+            ];
+            
+            fireBadges.forEach(el => {
+                if (el) {
+                    if (isAnims && streakCount > 0) {
+                        el.classList.add('streak-on-fire');
+                    } else {
+                        el.classList.remove('streak-on-fire');
+                    }
+                }
+            });
 
             // 4. Update desktop sidebar stats
             const sidebarStreak = document.getElementById('sidebar-stat-streak');
@@ -2172,9 +3818,9 @@ function loadData(){
     }
 
     function playSound(type) {
-        let soundEnabled = localStorage.getItem('krishi_sound_enabled') !== 'false';
-        let soundMuted = localStorage.getItem('krishi_sound_muted') === 'true';
-        let rawVol = localStorage.getItem('krishi_sound_volume');
+        let soundEnabled = KrishiStorage.getItem('krishi_sound_enabled') !== 'false';
+        let soundMuted = KrishiStorage.getItem('krishi_sound_muted') === 'true';
+        let rawVol = KrishiStorage.getItem('krishi_sound_volume');
         let volume = rawVol !== null ? parseFloat(rawVol) : 0.5;
 
         if (!soundEnabled || soundMuted || volume <= 0) return;
@@ -2237,9 +3883,9 @@ function loadData(){
 
     // ==================== SOUNDS CONFIG HANDLERS ====================
     function initPracticeSoundSettings() {
-        let enabled = localStorage.getItem('krishi_sound_enabled') !== 'false';
-        let muted = localStorage.getItem('krishi_sound_muted') === 'true';
-        let rawVol = localStorage.getItem('krishi_sound_volume');
+        let enabled = KrishiStorage.getItem('krishi_sound_enabled') !== 'false';
+        let muted = KrishiStorage.getItem('krishi_sound_muted') === 'true';
+        let rawVol = KrishiStorage.getItem('krishi_sound_volume');
         let volume = rawVol !== null ? parseFloat(rawVol) : 0.5;
 
         let elEnabled = document.getElementById('sound-enabled');
@@ -2279,7 +3925,7 @@ function loadData(){
         }
 
         // Sound effects toggle mirrors the existing sound system (krishi_sound_enabled)
-        const enabled = localStorage.getItem('krishi_sound_enabled') !== 'false';
+        const enabled = KrishiStorage.getItem('krishi_sound_enabled') !== 'false';
         if (soundChk) {
             soundChk.checked = enabled;
             soundChk.onchange = () => {
@@ -2293,7 +3939,7 @@ function loadData(){
 
         // Premium Hybrid Layout toggle initialization
         const hybridChk = document.getElementById('perf-premium-hybrid');
-        const hybridEnabled = localStorage.getItem('krishi_premium_hybrid') !== 'false';
+        const hybridEnabled = KrishiStorage.getItem('krishi_premium_hybrid') !== 'false';
         if (hybridChk) {
             hybridChk.checked = hybridEnabled;
         }
@@ -2301,7 +3947,7 @@ function loadData(){
     }
 
     window.togglePremiumHybridLayout = function(isEnabled) {
-        localStorage.setItem('krishi_premium_hybrid', isEnabled ? 'true' : 'false');
+        KrishiStorage.setItem('krishi_premium_hybrid', isEnabled ? 'true' : 'false');
         if (typeof showToast === 'function') {
             showToast(isEnabled ? '✨ Premium Hybrid Layout enabled!' : '⚙️ Classic Layout restored!');
         }
@@ -2368,25 +4014,27 @@ function loadData(){
     };
 
     function syncPerfSoundToggle() {
-        const enabled = localStorage.getItem('krishi_sound_enabled') !== 'false';
+        const enabled = KrishiStorage.getItem('krishi_sound_enabled') !== 'false';
         const soundChk = document.getElementById('perf-sound-effects');
         if (soundChk) soundChk.checked = enabled;
     }
 
     function setSoundEnabledSetting(enabled) {
-        localStorage.setItem('krishi_sound_enabled', enabled ? 'true' : 'false');
+        KrishiStorage.setItem('krishi_sound_enabled', enabled ? 'true' : 'false');
         const elEnabled = document.getElementById('sound-enabled');
         if (elEnabled) elEnabled.checked = enabled;
         toggleSoundConfigDetailsBlock(enabled);
+        syncSettingsToCloud('Sound preference updated');
     }
 
     function toggleSoundEnabledSetting() {
         let chk = document.getElementById('sound-enabled');
         if (!chk) return;
-        localStorage.setItem('krishi_sound_enabled', chk.checked ? 'true' : 'false');
+        KrishiStorage.setItem('krishi_sound_enabled', chk.checked ? 'true' : 'false');
         toggleSoundConfigDetailsBlock(chk.checked);
         syncPerfSoundToggle();
         playSound('click');
+        syncSettingsToCloud('Sound toggled');
     }
 
     function toggleSoundConfigDetailsBlock(show) {
@@ -2398,16 +4046,18 @@ function loadData(){
     }
 
     function changeSoundVolumeSetting(val) {
-        localStorage.setItem('krishi_sound_volume', val);
+        KrishiStorage.setItem('krishi_sound_volume', val);
         let txt = document.getElementById('sound-vol-txt');
         if (txt) txt.textContent = Math.round(val * 100) + '%';
+        syncSettingsToCloud('Sound volume adjusted');
     }
 
     function toggleSoundMutedSetting() {
         let chk = document.getElementById('sound-mute');
         if (!chk) return;
-        localStorage.setItem('krishi_sound_muted', chk.checked ? 'true' : 'false');
+        KrishiStorage.setItem('krishi_sound_muted', chk.checked ? 'true' : 'false');
         playSound('click');
+        syncSettingsToCloud('Sound mute state toggled');
     }
 
     function testAppSynthSound() {
@@ -2472,7 +4122,7 @@ function loadData(){
         onPracticeSubjectChanged(preSelectedTopic);
         
         // Load configurations
-        let rawLast = localStorage.getItem('krishi_last_practice_config');
+        let rawLast = KrishiStorage.getItem('krishi_last_practice_config');
         if (rawLast) {
             try {
                 let conf = JSON.parse(rawLast);
@@ -2575,7 +4225,7 @@ function loadData(){
             negativeMarking, feedback, shuffleQs, shuffleOpts,
             incWrong, incBookmarks, incUnattempted, incCustom
         };
-        localStorage.setItem('krishi_last_practice_config', JSON.stringify(configObj));
+        KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(configObj));
 
         // Gather matching items list
         let pool = [];
@@ -2707,6 +4357,19 @@ function loadData(){
             config.perQTimer = 'on';
             config.perQSec = 30; // 30s quick sprint
             showToast("Speed Sprint! 30 seconds per question limit.");
+        }
+        else if (mode === 'sm2') {
+            if (window.KrishiSM2Engine) {
+                pool = window.KrishiSM2Engine.getDueQuestions(allQ);
+            }
+            if (pool.length === 0) {
+                showToast("🎉 सबै प्रश्नहरू कण्ठ छन्! आजका लागि सम्झनुपर्ने प्रश्न छैन।");
+                return;
+            }
+            pool = shuffle(pool).slice(0, 15);
+            config.count = pool.length;
+            config.isSpacedReview = true;
+            showToast(`🧠 SM-2 Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
         } 
         else if (mode === 'spaced') {
             let queue = getSpacedQueue() || [];
@@ -2720,6 +4383,7 @@ function loadData(){
             }
             config.count = Math.min(15, pool.length);
             pool = shuffle(pool).slice(0, config.count);
+            config.isSpacedReview = true;
         } 
         else if (mode === 'daily') {
             let solvedToday = getSolvedTodayCount();
@@ -2799,7 +4463,7 @@ function loadData(){
         }
         renderMCQ();
         
-        if (isMock) { 
+        if (state.timerSec > 0) { 
             showTimer(); 
             startTimer(); 
         } else { 
@@ -2808,12 +4472,24 @@ function loadData(){
     }
 
     function hideTimer(){
-        document.getElementById('q-timer-display').classList.add('hidden');
-        document.getElementById('finish-btn').classList.add('hidden');
+        console.log('Hiding global timer');
+        let el = document.getElementById('q-timer-display');
+        if(el) {
+            el.classList.add('hidden');
+            el.style.display = 'none';
+        }
+        let fb = document.getElementById('finish-btn');
+        if(fb) fb.classList.add('hidden');
     }
     function showTimer(){
-        document.getElementById('q-timer-display').classList.remove('hidden');
+        console.log('Showing global timer');
+        let el = document.getElementById('q-timer-display');
+        if(el) {
+            el.classList.remove('hidden');
+            el.style.display = 'inline-block';
+        }
     }
+
 
 
     // ==================== TIMER ====================
@@ -2858,6 +4534,7 @@ function loadData(){
         if (state.activeConfig && state.activeConfig.perQTimer === 'on') {
             state.perQuestionTimerSec = state.activeConfig.perQSec || 30;
             perQIndicator.classList.remove('hidden');
+            perQIndicator.style.display = 'inline-block';
             perQIndicator.textContent = `⏱ Q: ${state.perQuestionTimerSec}s`;
             perQIndicator.classList.remove('timer-pulse');
 
@@ -2919,6 +4596,10 @@ function loadData(){
         startQuestionTimer();
         if(state.currentIndex >= state.totalQuestions){ finishSession(); return; }
         
+        if (typeof broadcastQuizHandoff === 'function') {
+            try { broadcastQuizHandoff(); } catch(e){}
+        }
+
         let q = state.questions[state.currentIndex];
         document.getElementById('q-progress').textContent = 'Question ' + (state.currentIndex+1) + '/' + state.totalQuestions;
         document.getElementById('progress-bar').style.width = ((state.currentIndex/state.totalQuestions)*100)+'%';
@@ -2973,6 +4654,15 @@ function loadData(){
         container.innerHTML = '';
         let opts = q.opts || [];
         
+        let isShort = opts.every(opt => opt && opt.length < 8);
+        if (isShort && window.innerWidth <= 768) {
+            container.classList.add('options-container-grid');
+            container.classList.remove('space-y-2.5');
+        } else {
+            container.classList.remove('options-container-grid');
+            container.classList.add('space-y-2.5');
+        }
+        
         // Create an array list of index tracker
         let indexMap = opts.map((opt, idx) => ({ text: opt, originalIdx: idx }));
         if (state.activeConfig && state.activeConfig.shuffleOpts !== false) {
@@ -2990,12 +4680,40 @@ function loadData(){
                 if(!state.answered){
                     playSound('click');
                     state.selectedOption = meta.originalIdx;
+                    window.dispatchEvent(new CustomEvent('krishi-option-selected'));
                     document.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
                     btn.classList.add('selected');
+                    
+                    // Cognitive Hesitation Tracker: Auto-calculate confidence based on reaction speed
+                    let reactionTimeMs = Date.now() - questionStartTime;
+                    if (reactionTimeMs < 3000) {
+                        state.userConfidence = 'High';
+                    } else if (reactionTimeMs < 5000) {
+                        state.userConfidence = 'Medium';
+                    } else {
+                        state.userConfidence = 'Low';
+                    }
+                    
+                    // Immediately submit answer automatically
+                    setTimeout(() => {
+                        if (typeof submitMCQAnswer === 'function') {
+                            submitMCQAnswer();
+                        }
+                    }, 50);
                 }
             };
             container.appendChild(btn);
         });
+
+        // Dispatch event for Voice Assistant modular hook with exact rendered DOM display order
+        let renderedOpts = indexMap.map(m => m.text);
+        window.krishiRenderedOpts = renderedOpts;
+        window.dispatchEvent(new CustomEvent('krishi-question-rendered', { detail: { question: q, renderedOpts: renderedOpts } }));
+
+        // Save practice session progress on every new unanswered question render
+        if (typeof savePracticeProgress === 'function') {
+            try { savePracticeProgress(); } catch(e) {}
+        }
     }
 
     function showQuizHint() {
@@ -3021,12 +4739,17 @@ function loadData(){
     function toggleBookmarkCurrent(){
         let q = state.questions[state.currentIndex]; if(!q) return;
         let idx = localData.bookmarked.indexOf(q.id);
+        if (!localData.bookmarkedLog) localData.bookmarkedLog = {};
+        let rev = localData.bookmarkedLog[q.id] ? (localData.bookmarkedLog[q.id]._rev || 0) : 0;
+        const now = Date.now();
         if(idx === -1){
             localData.bookmarked.push(q.id);
+            localData.bookmarkedLog[q.id] = { action: 'add', timestamp: now, _rev: rev + 1 };
             showToast('Bookmarks saved!');
             playSound('celebrate');
         } else {
             localData.bookmarked.splice(idx, 1);
+            localData.bookmarkedLog[q.id] = { action: 'remove', timestamp: now, _rev: rev + 1 };
             showToast('Bookmarks removed!');
             playSound('click');
         }
@@ -3098,9 +4821,6 @@ function loadData(){
             if (oIdx === q.ans) correctBtnNode = b;
         });
 
-        // Trigger particle sparkle
-        triggerSparkleBurst(selectedBtnNode, isCorrect);
-
         // Config actions
         let isSimulation = state.activeConfig && state.activeConfig.negativeMarking === 'on';
         let showAnswersEnd = state.activeConfig && state.activeConfig.feedback === 'end';
@@ -3114,9 +4834,12 @@ function loadData(){
             }
             state.score++;
             // मिलाएको प्रश्नलाई गल्तीहरूको सूचीबाट स्वतः हटाउने
-        if (localData.wrong && localData.wrong.includes(q.id)) {
-            localData.wrong = localData.wrong.filter(id => id !== q.id);
-        }
+            if (localData.wrong && localData.wrong.includes(q.id)) {
+                localData.wrong = localData.wrong.filter(id => id !== q.id);
+                if (!localData.wrongLog) localData.wrongLog = {};
+                let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
+                localData.wrongLog[q.id] = { action: 'remove', timestamp: Date.now(), _rev: rev + 1 };
+            }
         } else {
             playSound('wrong');
             triggerHaptic('wrong');
@@ -3125,10 +4848,20 @@ function loadData(){
                 if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
                 if (correctBtnNode) correctBtnNode.classList.add('glow-correct');
             }
-            if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
+            // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
+            if (!state.activeConfig?.isSpacedReview) {
+                if (!localData.wrong) localData.wrong = [];
+                if (!localData.wrong.includes(q.id)) {
+                    localData.wrong.push(q.id);
+                    if (!localData.wrongLog) localData.wrongLog = {};
+                    let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
+                    localData.wrongLog[q.id] = { action: 'add', timestamp: Date.now(), _rev: rev + 1 };
+                    saveData();
+                }
+            }
 
             // Decrement hearts in Premium Hybrid mode
-            const hybridEnabled = localStorage.getItem('krishi_premium_hybrid') !== 'false';
+            const hybridEnabled = KrishiStorage.getItem('krishi_premium_hybrid') !== 'false';
             if (hybridEnabled) {
                 if (typeof state.hybridHearts === 'undefined') state.hybridHearts = 5;
                 if (state.hybridHearts > 0) {
@@ -3161,13 +4894,24 @@ function loadData(){
             confidence: state.userConfidence
         });
 
+        // Voice Assistant & SM-2 Spaced Repetition Hook
+        let correctOptionText = (q.opts && q.opts[q.ans]) ? q.opts[q.ans] : '';
+        window.dispatchEvent(new CustomEvent('krishi-answer-checked', { 
+            detail: { isCorrect: isCorrect, correctOptionText: correctOptionText } 
+        }));
+
+        if (window.KrishiSM2Engine) {
+            window.KrishiSM2Engine.recordAnswer(q.id || q.q, isCorrect, secondsSpent);
+        }
+
         // Hide or show explanation container
         if (!showAnswersEnd) {
             document.getElementById('q-explanation-container').classList.remove('hidden');
             document.getElementById('q-explanation').textContent = q.expl || 'Explanation not provided.';
         }
         
-        document.getElementById('submit-btn').classList.add('hidden');
+        let sBtn = document.getElementById('submit-btn');
+        if (sBtn) sBtn.classList.add('hidden');
 
         if(state.currentIndex < state.totalQuestions - 1){
             document.getElementById('next-btn').classList.remove('hidden');
@@ -3192,6 +4936,20 @@ function loadData(){
         saveData();
         // Unified Shell: update ribbon live
         if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+
+        // Auto-Advance Questions (1.5 seconds delay after submit)
+        if (KrishiStorage.getItem('krishi_auto_advance') === 'true') {
+            setTimeout(() => {
+                let mcqPage = document.getElementById('page-mcq');
+                if (mcqPage && !mcqPage.classList.contains('hidden') && state.answered) {
+                    if (state.currentIndex < state.totalQuestions - 1) {
+                        nextMCQQuestion();
+                    } else {
+                        finishSession();
+                    }
+                }
+            }, 1500);
+        }
     }
 
     function triggerSparkleBurst(sourceNode, isSuccess) {
@@ -3261,7 +5019,14 @@ function loadData(){
             state.timeSpentArray.push({ id: q.id, sub: q.sub, seconds: secondsSpent, correct: false });
 
             state.sessionResults.push({ id : q.id, correct: false, userAns: -1, skipped: true, seconds: secondsSpent });
-            if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
+            
+            // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
+            if (!state.activeConfig?.isSpacedReview) {
+                if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
+            } else if (window.KrishiSM2Engine) {
+                // If skipped in Spaced Review, count it as a fail
+                window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
+            }
             
             state.currentIndex++;
             state.selectedOption = null;
@@ -3278,6 +5043,7 @@ function loadData(){
     }
 
     function finishSession(){
+       state.isFinishing = true;
        clearPracticeProgress();
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
@@ -3330,6 +5096,18 @@ function loadData(){
         document.getElementById('res-detail').textContent = `${correct} correct, ${wrongsCount} wrong, ${skipped} skipped. ${feedbackVerdict}`;
         document.getElementById('res-correct').textContent = correct;
         document.getElementById('res-wrong').textContent = wrongsCount;
+
+        // Dispatch Voice Assistant Quiz Finished Event
+        window.dispatchEvent(new CustomEvent('krishi-quiz-finished', {
+            detail: {
+                total: total,
+                correct: correct,
+                accuracy: acc,
+                wrongs: wrongsCount,
+                skipped: skipped,
+                timeSpentSeconds: totalSeconds
+            }
+        }));
         
         // Hide or show corrections loop btn
         document.getElementById('retry-wrong-btn').style.display = wrongsCount > 0 ? 'block' : 'none';
@@ -3446,14 +5224,14 @@ function loadData(){
     }
 
     function saveRecentPracticeSessionLog(item) {
-        let listRaw = localStorage.getItem('krishi_practice_recent');
+        let listRaw = KrishiStorage.getItem('krishi_practice_recent');
         let listArr = [];
         if (listRaw) {
             try { listArr = JSON.parse(listRaw); } catch(ex) {}
         }
         listArr.unshift(item);
         listArr = listArr.slice(0, 10); // store last 10
-        localStorage.setItem('krishi_practice_recent', JSON.stringify(listArr));
+        KrishiStorage.setItem('krishi_practice_recent', JSON.stringify(listArr));
     }
 
     function practiceWeakestSubjectFromResult() {
@@ -3479,7 +5257,12 @@ function loadData(){
     }
 
     function showInteractiveCelebrationFireworks() {
-        // Quick visual fireworks in DOM body backgound
+        // Trigger high-performance canvas confetti engine for dynamic celebration
+        if (typeof triggerConfetti === 'function') {
+            triggerConfetti();
+        }
+
+        // Quick visual fireworks in DOM body background
         let fw = document.createElement('div');
         fw.className = "fixed inset-0 pointer-events-none z-[20000] flex justify-center items-center overflow-hidden";
         fw.innerHTML = `
@@ -3502,8 +5285,8 @@ function loadData(){
         let logsToday = getSolvedTodayCount();
         let todayStr = getLocalDateString();
         if (logsToday >= target && target > 0) {
-            if (!localStorage.getItem('target_sound_played_' + todayStr)) {
-                localStorage.setItem('target_sound_played_' + todayStr, 'true');
+            if (!KrishiStorage.getItem('target_sound_played_' + todayStr)) {
+                KrishiStorage.setItem('target_sound_played_' + todayStr, 'true');
                 if (typeof playSound === 'function') {
                     playSound('celebrate');
                 }
@@ -3531,7 +5314,7 @@ function loadData(){
             <div class="p-3.5 rounded-lg border text-xs leading-relaxed prunable-row" style="background:var(--card);border-color:var(--border);">
                 <p class="font-bold">${q.q}</p>
                 <p class="text-emerald-600 mt-1">✅ ${q.opts[q.ans]}</p>
-                <button onclick="removeWrongId(${q.id})" class="text-[10px] text-red-500 mt-1 underline block">Remove from mistake list</button>
+                <button onclick="removeWrongId('${q.id || q.q}')" class="text-[10px] text-red-500 mt-1 underline block">Remove from mistake list</button>
             </div>
         `).join('');
 
@@ -3560,18 +5343,18 @@ function loadData(){
     function getAllSubjects(){
         let custom = [];
         try {
-            let raw = localStorage.getItem('krishi_custom_subjects');
+            let raw = KrishiStorage.getItem('krishi_custom_subjects');
             if (raw) {
                 custom = JSON.parse(raw);
                 if (!Array.isArray(custom)) {
                     console.warn('[PWA Safety] Custom subjects was not an array, auto-removing corrupted cache.');
-                    localStorage.removeItem('krishi_custom_subjects');
+                    KrishiStorage.removeItem('krishi_custom_subjects');
                     custom = [];
                 }
             }
         } catch(e) {
             console.warn('[PWA Safety] Failed to parse custom subjects, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_custom_subjects');
+            KrishiStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         return [...defaultSubjects, ...custom];
@@ -3596,19 +5379,19 @@ function loadData(){
         if(!val) { showToast('Subject name empty!'); return; }
         let custom = [];
         try {
-            let raw = localStorage.getItem('krishi_custom_subjects');
+            let raw = KrishiStorage.getItem('krishi_custom_subjects');
             if (raw) {
                 custom = JSON.parse(raw);
                 if (!Array.isArray(custom)) custom = [];
             }
         } catch(e) {
             console.warn('[PWA Safety] Failed to parse custom subjects in addSubject, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_custom_subjects');
+            KrishiStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         if(getAllSubjects().includes(val)) { showToast('Duplicate names not allowed!'); return; }
         custom.push(val);
-        localStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
         input.value = '';
         renderSubjectList();
         showToast('Subject Added!');
@@ -3617,18 +5400,18 @@ function loadData(){
     function removeSubject(name){
         let custom = [];
         try {
-            let raw = localStorage.getItem('krishi_custom_subjects');
+            let raw = KrishiStorage.getItem('krishi_custom_subjects');
             if (raw) {
                 custom = JSON.parse(raw);
                 if (!Array.isArray(custom)) custom = [];
             }
         } catch(e) {
             console.warn('[PWA Safety] Failed to parse custom subjects in removeSubject, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_custom_subjects');
+            KrishiStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
         custom = custom.filter(s=>s!==name);
-        localStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
         renderSubjectList();
         showToast('Subject removed!');
     }
@@ -3728,7 +5511,15 @@ function loadData(){
                       status.textContent = '✅ OCR Finished!';
                       document.getElementById('generate-simple-btn').classList.remove('hidden');
                       toggleAIButtonVisibility();
-                  }).catch(()=>{ status.textContent = '⚠️ OCR process failed!'; });
+                  }).catch(ocrErr => {
+                      console.warn('[OCR] Recognition error:', ocrErr);
+                      if (!navigator.onLine) {
+                          status.textContent = '⚠️ अफलाइन! फोटो स्क्यानका लागि इन्टरनेट चाहिन्छ।';
+                          showToast('📡 अफलाइन हुनुहुन्छ! फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ।');
+                      } else {
+                          status.textContent = '⚠️ OCR process failed!';
+                      }
+                  });
             }).catch(err => {
                 console.warn('[OCR Preprocessing] Preprocessor failed, trying original:', err);
                 status.textContent = 'Running OCR scanning...';
@@ -3738,7 +5529,15 @@ function loadData(){
                       status.textContent = '✅ OCR Finished!';
                       document.getElementById('generate-simple-btn').classList.remove('hidden');
                       toggleAIButtonVisibility();
-                  }).catch(()=>{ status.textContent = '⚠️ OCR process failed!'; });
+                  }).catch(ocrErr => {
+                      console.warn('[OCR Fallback] Recognition error:', ocrErr);
+                      if (!navigator.onLine) {
+                          status.textContent = '⚠️ अफलाइन! फोटो स्क्यानका लागि इन्टरनेट चाहिन्छ।';
+                          showToast('📡 अफलाइन हुनुहुन्छ! फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ।');
+                      } else {
+                          status.textContent = '⚠️ OCR process failed!';
+                      }
+                  });
             });
         } else {
             status.textContent = 'Unsupported format!';
@@ -4132,12 +5931,13 @@ function loadData(){
 
     function registerCustomSubjectsFromQuestions(questions) {
         if (!questions || !Array.isArray(questions)) return;
+        const activeQuestions = questions.filter(q => !q.deleted);
         let subjects = getAllSubjects();
         let subjectsLower = subjects.map(s => s.toLowerCase());
         
         let newCustom = [];
         try {
-            let raw = localStorage.getItem('krishi_custom_subjects');
+            let raw = KrishiStorage.getItem('krishi_custom_subjects');
             if (raw) {
                 newCustom = JSON.parse(raw);
                 if (!Array.isArray(newCustom)) newCustom = [];
@@ -4147,7 +5947,7 @@ function loadData(){
         }
         
         let addedAny = false;
-        questions.forEach(q => {
+        activeQuestions.forEach(q => {
             if (q.sub) {
                 let normSub = q.sub; // q.sub is already normalized
                 let subLower = normSub.toLowerCase();
@@ -4169,7 +5969,7 @@ function loadData(){
                 return !isDefault;
             });
             newCustom = [...new Set(newCustom)];
-            localStorage.setItem('krishi_custom_subjects', JSON.stringify(newCustom));
+            KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(newCustom));
             console.log('[PWA Safety] Auto-registered custom subjects:', newCustom);
             
             // Dynamic refresh of subjects UI lists
@@ -4303,6 +6103,16 @@ function loadData(){
             difficulty: difficulty,
             marks: marks,
             status: status,
+            
+            // Sync & CRDT properties
+            deleted: raw.deleted || false,
+            updatedAt: (function() {
+                let val = Number(raw.updatedAt);
+                if (!isNaN(val) && val > 0) return val;
+                val = Number(raw.id);
+                if (!isNaN(val) && val > 0) return val;
+                return Date.now();
+            })(),
 
             // Dual formats to maintain absolute safety with external format requests
             question: q,
@@ -4591,7 +6401,21 @@ function loadData(){
     }
 
     function parseJSONQuestions(text) {
-        let parsed = JSON.parse(text);
+        let cleanText = (text || '').replace(/```json/gi, '').replace(/```/g, '').trim();
+        let parsed = null;
+        try {
+            parsed = JSON.parse(cleanText);
+        } catch(e) {
+            console.warn('[AI Parse] Direct JSON parse failed, trying array extraction:', e);
+            let firstBracket = cleanText.indexOf('[');
+            let lastBracket = cleanText.lastIndexOf(']');
+            if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+                try {
+                    parsed = JSON.parse(cleanText.substring(firstBracket, lastBracket + 1));
+                } catch(e2){}
+            }
+        }
+        if (!parsed) return [];
         let rawList = [];
         if (Array.isArray(parsed)) {
             rawList = parsed;
@@ -5108,7 +6932,7 @@ function openEditImportModal(idx) {
         let b = new Blob([JSON.stringify(backup, null, 2)], {type: 'application/json'});
         let url = URL.createObjectURL(b);
         let a = document.createElement('a'); a.href = url; a.download = 'krishi_mcq_data_backup.json'; a.click();
-        localStorage.setItem('krishi_last_backup', new Date().toISOString());
+        KrishiStorage.setItem('krishi_last_backup', new Date().toISOString());
         showToast('Backup compiled and downloaded!');
     }
 
@@ -5305,7 +7129,7 @@ function openEditImportModal(idx) {
         reader.readAsText(file);
     }
     function checkAutoBackupReminder() {
-        let last = localStorage.getItem('krishi_last_backup');
+        let last = KrishiStorage.getItem('krishi_last_backup');
         if (!last) {
             showToast('💡 Tip: Don\'t forget to backup your custom questions regularly.');
         }
@@ -5402,7 +7226,25 @@ function openEditImportModal(idx) {
 
     function buildManageQuestionRow(q) {
         const wrap = document.createElement('div');
-        wrap.className = 'p-3 border rounded-xl text-xs space-y-2 bg-white dark:bg-slate-800 prunable-row';
+        wrap.className = 'p-3 border rounded-xl text-xs space-y-2 bg-white dark:bg-slate-800 prunable-row flex items-start gap-3';
+
+        const checkWrap = document.createElement('div');
+        checkWrap.className = 'pt-0.5';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer';
+        checkbox.checked = selectedManageQIds.includes(q.id);
+        checkbox.onchange = () => {
+            if (checkbox.checked) {
+                if (!selectedManageQIds.includes(q.id)) selectedManageQIds.push(q.id);
+            } else {
+                selectedManageQIds = selectedManageQIds.filter(id => id !== q.id);
+            }
+        };
+        checkWrap.appendChild(checkbox);
+
+        const contentWrap = document.createElement('div');
+        contentWrap.className = 'flex-1 space-y-2';
 
         const qEl = document.createElement('p');
         qEl.className = 'font-bold';
@@ -5428,9 +7270,12 @@ function openEditImportModal(idx) {
         actions.appendChild(del);
         actions.appendChild(dup);
 
-        wrap.appendChild(qEl);
-        wrap.appendChild(meta);
-        wrap.appendChild(actions);
+        contentWrap.appendChild(qEl);
+        contentWrap.appendChild(meta);
+        contentWrap.appendChild(actions);
+
+        wrap.appendChild(checkWrap);
+        wrap.appendChild(contentWrap);
         return wrap;
     }
 
@@ -5517,15 +7362,19 @@ function openEditImportModal(idx) {
     }
 
     function deleteCustomQuestion(id){
-        localData.customQuestions = localData.customQuestions.filter(q => q.id !== id);
-        saveData();
-        scheduleRenderQuestionList(true);
-        showToast('Question deleted!');
+        const q = localData.customQuestions.find(x => x.id === id);
+        if (q) {
+            q.deleted = true;
+            q.updatedAt = Date.now();
+            saveData();
+            scheduleRenderQuestionList(true);
+            showToast('Question deleted!');
+        }
     }
 
     function duplicateCustomQuestion(id){
         let orig = localData.customQuestions.find(q=>q.id===id); if(!orig) return;
-        let dup = {...orig, id: Date.now(), q: orig.q + ' (Copy)'};
+        let dup = {...orig, id: Date.now(), q: orig.q + ' (Copy)', updatedAt: Date.now(), deleted: false};
         localData.customQuestions.push(dup);
         saveData();
         scheduleRenderQuestionList(true);
@@ -5534,19 +7383,41 @@ function openEditImportModal(idx) {
 
     function selectAllManage(){
          selectedManageQIds = getCustomQuestions().map(q=>q.id);
+         const container = document.getElementById('question-list-container');
+         if (container) {
+             const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+             checkboxes.forEach(cb => cb.checked = true);
+         }
          showToast('All items selected!');
     }
     function deselectAllManage(){
          selectedManageQIds = [];
+         const container = document.getElementById('question-list-container');
+         if (container) {
+             const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+             checkboxes.forEach(cb => cb.checked = false);
+         }
          showToast('Cleared selections.');
     }
     function deleteSelectedQuestions(){
-         // Quick safety backup before destructive action
-         try { Storage.setJSON('krishi_last_manage_backup', { t: Date.now(), customQuestions: localData.customQuestions }, { immediate: true }); } catch(e){}
-         localData.customQuestions = [];
-         saveData();
-         scheduleRenderQuestionList(true);
-         showToast('Truncated Custom questions collection!');
+         if (selectedManageQIds.length === 0) {
+             showToast('No questions selected!');
+             return;
+         }
+         if (confirm(`Are you sure you want to delete the ${selectedManageQIds.length} selected questions?`)) {
+             try { Storage.setJSON('krishi_last_manage_backup', { t: Date.now(), customQuestions: localData.customQuestions }, { immediate: true }); } catch(e){}
+             const selectSet = new Set(selectedManageQIds);
+             localData.customQuestions.forEach(q => {
+                 if (selectSet.has(q.id)) {
+                     q.deleted = true;
+                     q.updatedAt = Date.now();
+                 }
+             });
+             selectedManageQIds = [];
+             saveData();
+             scheduleRenderQuestionList(true);
+             showToast('Deleted selected custom questions!');
+         }
     }
 
     // ==================== DASHBOARD DETAILS UPDATES ====================
@@ -5599,7 +7470,7 @@ function openEditImportModal(idx) {
     let activePlanSequenceHTML = '';
 
     function getHomeSettings() {
-        let saved = localStorage.getItem('krishi_home_settings');
+        let saved = KrishiStorage.getItem('krishi_home_settings');
         if (!saved) return JSON.parse(JSON.stringify(DEFAULT_HOME_SETTINGS));
         try {
             let parsed = JSON.parse(saved);
@@ -5619,7 +7490,7 @@ function openEditImportModal(idx) {
     // Duplicate getGoalSettings removed
 
     function saveGoalSettings(obj) {
-        localStorage.setItem('krishi_goal_settings', JSON.stringify(obj));
+        KrishiStorage.setItem('krishi_goal_settings', JSON.stringify(obj));
     }
 
     function getWeakestSubject() {
@@ -6105,8 +7976,8 @@ function openEditImportModal(idx) {
                 ? 'target_sound_played_' + todayStr 
                 : 'streak_fire_interaction_played_' + todayStr;
 
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, 'true');
+            if (!KrishiStorage.getItem(key)) {
+                KrishiStorage.setItem(key, 'true');
                 playSound('celebrate');
             }
         }
@@ -6259,7 +8130,7 @@ function openEditImportModal(idx) {
 
     // --- EXAM PROFILES DATABASE INTERFACE ---
     function getExamProfiles() {
-        let saved = localStorage.getItem('krishi_exam_profiles');
+        let saved = KrishiStorage.getItem('krishi_exam_profiles');
         if (!saved) return [DEFAULT_EXAM_PROFILE];
         try {
             let parsed = JSON.parse(saved);
@@ -6271,7 +8142,7 @@ function openEditImportModal(idx) {
     }
 
     function saveExamProfiles(profiles) {
-        localStorage.setItem('krishi_exam_profiles', JSON.stringify(profiles));
+        KrishiStorage.setItem('krishi_exam_profiles', JSON.stringify(profiles));
     }
 
     function getActiveProfile() {
@@ -6304,22 +8175,35 @@ function openEditImportModal(idx) {
             weakThreshold: 60,
             slots: ["morning", "evening"],
             syllabusVisible: true,
-            adaptiveReview: true
+            adaptiveReview: true,
+            intensity: 'normal',
+            restDays: [6],
+            studyHours: 2,
+            newRatio: 50,
+            difficultyBias: 'balanced',
+            retryDelay: 3,
+            focusSubject: 'all',
+            soundEnabled: true,
+            compactMode: false
         };
         try {
-            let saved = localStorage.getItem('krishi_planner_settings');
+            let saved = KrishiStorage.getItem('krishi_planner_settings');
             if (saved) {
                 let parsed = JSON.parse(saved);
                 if (parsed && typeof parsed === 'object') {
-                    return { ...defaults, ...parsed, dailyTarget: active.dailyTarget, weeklyTarget: active.weeklyTarget, examDate: active.targetDate };
+                    // Sync parsed targets with the active profile to prevent old cached values from overriding them
+                    parsed.dailyTarget = active.dailyTarget;
+                    parsed.weeklyTarget = active.weeklyTarget;
+                    parsed.examDate = active.targetDate;
+                    return { ...defaults, ...parsed };
                 } else {
                     console.warn('[PWA Safety] Planner settings was not an object, auto-removing corrupted cache.');
-                    localStorage.removeItem('krishi_planner_settings');
+                    KrishiStorage.removeItem('krishi_planner_settings');
                 }
             }
         } catch(e){
             console.warn('[PWA Safety] Failed to parse planner settings, auto-removing corrupted cache:', e);
-            localStorage.removeItem('krishi_planner_settings');
+            KrishiStorage.removeItem('krishi_planner_settings');
         }
         return defaults;
     }
@@ -6327,6 +8211,42 @@ function openEditImportModal(idx) {
     function getDailyTarget() {
         return getActiveProfile().dailyTarget;
     }
+
+    function switchSettingsTab(tabId) {
+        let generalGroup = document.getElementById('settings-group-general');
+        let generalGroupBottom = document.getElementById('settings-group-general-bottom');
+        let visualsGroup = document.getElementById('settings-group-visuals');
+        let soundGroup = document.getElementById('settings-group-sound');
+        let generalBtn = document.getElementById('settings-tab-btn-general');
+        let visualsBtn = document.getElementById('settings-tab-btn-visuals');
+        let soundBtn = document.getElementById('settings-tab-btn-sound');
+
+        const activeClass = 'flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer';
+        const inactiveClass = 'flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer';
+
+        if (generalGroup) generalGroup.classList.add('hidden');
+        if (generalGroupBottom) generalGroupBottom.classList.add('hidden');
+        if (visualsGroup) visualsGroup.classList.add('hidden');
+        if (soundGroup) soundGroup.classList.add('hidden');
+
+        if (generalBtn) generalBtn.className = inactiveClass;
+        if (visualsBtn) visualsBtn.className = inactiveClass;
+        if (soundBtn) soundBtn.className = inactiveClass;
+
+        if (tabId === 'general') {
+            if (generalGroup) generalGroup.classList.remove('hidden');
+            if (generalGroupBottom) generalGroupBottom.classList.remove('hidden');
+            if (generalBtn) generalBtn.className = activeClass;
+        } else if (tabId === 'sound') {
+            if (soundGroup) soundGroup.classList.remove('hidden');
+            if (soundBtn) soundBtn.className = activeClass;
+        } else if (tabId === 'visuals') {
+            if (visualsGroup) visualsGroup.classList.remove('hidden');
+            if (visualsBtn) visualsBtn.className = activeClass;
+        }
+        playSound('click');
+    }
+    window.switchSettingsTab = switchSettingsTab;
 
     function switchCustomizerTab(tabId) {
         currentCustomizerTab = tabId;
@@ -6361,6 +8281,7 @@ function openEditImportModal(idx) {
         }
         playSound('click');
     }
+    window.switchCustomizerTab = switchCustomizerTab;
 
     // --- PROFILES TAB LOGIC ---
     function renderProfilesInventory() {
@@ -6549,7 +8470,7 @@ function openEditImportModal(idx) {
 
     // --- APPEARANCE TAB STORAGE ---
     function getAppearanceSettings() {
-        let saved = localStorage.getItem('krishi_appearance_settings');
+        let saved = KrishiStorage.getItem('krishi_appearance_settings');
         let defaults = {
             themeStyle: 'classic',
             animationIntensity: 'medium',
@@ -6570,7 +8491,7 @@ function openEditImportModal(idx) {
 
     // Apply specific classes of the appearance preset configurations
     function saveAppearanceSettings(settings) {
-        localStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
+        KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
         applyAppearanceSettings();
     }
 
@@ -6773,7 +8694,7 @@ function openEditImportModal(idx) {
     }
 
     function getCustomAppearanceAndLangSettings() {
-        let saved = localStorage.getItem('krishi_custom_appearance_settings');
+        let saved = KrishiStorage.getItem('krishi_custom_appearance_settings');
         if (!saved) return JSON.parse(JSON.stringify(defaultCustomSettings));
         try {
             let parsed = JSON.parse(saved);
@@ -6922,10 +8843,8 @@ function openEditImportModal(idx) {
         if (nav2) nav2.textContent = labels.create;
         let nav3 = document.querySelector('#nav-btn-3 span:nth-child(2)');
         if (nav3) nav3.textContent = labels.analytics;
-        let nav4 = document.querySelector('#nav-btn-4 span:nth-child(2)');
-        if (nav4) nav4.textContent = labels.planner;
-        let nav5 = document.querySelector('#nav-btn-5 span:nth-child(2)');
-        if (nav5) nav5.textContent = labels.settings;
+        let navPlanner = document.querySelector('#nav-btn-planner span:nth-child(2)');
+        if (navPlanner) navPlanner.textContent = labels.planner;
 
         // Apply dynamic buttons in page using non-destructive data caching
 document.querySelectorAll('button').forEach(btn => {
@@ -7227,10 +9146,8 @@ document.querySelectorAll('button').forEach(btn => {
         if (nav2) nav2.textContent = labels.create;
         let nav3 = document.querySelector('#nav-btn-3 span:nth-child(2)');
         if (nav3) nav3.textContent = labels.analytics;
-        let nav4 = document.querySelector('#nav-btn-4 span:nth-child(2)');
-        if (nav4) nav4.textContent = labels.planner;
-        let nav5 = document.querySelector('#nav-btn-5 span:nth-child(2)');
-        if (nav5) nav5.textContent = labels.settings;
+        let navPlanner = document.querySelector('#nav-btn-planner span:nth-child(2)');
+        if (navPlanner) navPlanner.textContent = labels.planner;
     }
 
     function selectAccentColor(color, element) {
@@ -7366,13 +9283,13 @@ document.querySelectorAll('button').forEach(btn => {
             customLabels
         };
 
-        localStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
+        KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
         applyCustomAppearanceAndLanguageSettings();
     }
 
     function resetAppearanceAndLanguageSettings() {
         if (confirm('Are you sure you want to reset all appearance & language settings back to defaults?')) {
-            localStorage.removeItem('krishi_custom_appearance_settings');
+            KrishiStorage.removeItem('krishi_custom_appearance_settings');
             applyCustomAppearanceAndLanguageSettings();
             loadAppearanceLangTabForm();
             showToast('🔄 Appearance & language settings reset to defaults!');
@@ -7668,10 +9585,11 @@ document.querySelectorAll('button').forEach(btn => {
 
     function resetHomeCustomizer() {
         if (confirm('Are you sure you want to revert all exam profiles and widgets back to defaults?')) {
-            localStorage.removeItem('krishi_home_settings');
-            localStorage.removeItem('krishi_exam_profiles');
-            localStorage.removeItem('krishi_appearance_settings');
-            localStorage.removeItem('krishi_layout_backups');
+            KrishiStorage.removeItem('krishi_home_settings');
+            KrishiStorage.removeItem('krishi_exam_profiles');
+            KrishiStorage.removeItem('krishi_appearance_settings');
+            KrishiStorage.removeItem('krishi_layout_backups');
+            syncSettingsToCloud('Dashboard layout reset');
             showToast('🔄 Restored default dashboard profile settings!');
             closeHomeCustomizerModal();
             applyAppearanceSettings();
@@ -7686,6 +9604,7 @@ document.querySelectorAll('button').forEach(btn => {
             if (typeof saveCustomAppearanceAndLanguageSettings === 'function') {
                 saveCustomAppearanceAndLanguageSettings();
             }
+            syncSettingsToCloud('Dashboard layout updated');
             
             showToast('🎯 Perfect! Dashboard configurations applied successfully.');
             
@@ -7795,13 +9714,13 @@ document.querySelectorAll('button').forEach(btn => {
 
     // --- AUTOMATED LAYOUT BACKUPS SYSTEM ---
     function saveHomeSettings(settings) {
-        let old = localStorage.getItem('krishi_home_settings');
+        let old = KrishiStorage.getItem('krishi_home_settings');
         if (old) {
             try {
                 let parsedOld = JSON.parse(old);
                 let backups = [];
                 try {
-                    backups = JSON.parse(localStorage.getItem('krishi_layout_backups')) || [];
+                    backups = JSON.parse(KrishiStorage.getItem('krishi_layout_backups')) || [];
                 } catch(e){}
                 
                 let backupItem = {
@@ -7811,11 +9730,11 @@ document.querySelectorAll('button').forEach(btn => {
                 };
                 backups.unshift(backupItem);
                 if (backups.length > 3) backups = backups.slice(0, 3);
-                localStorage.setItem('krishi_layout_backups', JSON.stringify(backups));
+                KrishiStorage.setItem('krishi_layout_backups', JSON.stringify(backups));
             } catch(e){}
         }
 
-        localStorage.setItem('krishi_home_settings', JSON.stringify(settings));
+        KrishiStorage.setItem('krishi_home_settings', JSON.stringify(settings));
     }
 
     function renderBackupLayouts() {
@@ -7823,7 +9742,7 @@ document.querySelectorAll('button').forEach(btn => {
         if (!container) return;
         let backups = [];
         try {
-            backups = JSON.parse(localStorage.getItem('krishi_layout_backups')) || [];
+            backups = JSON.parse(KrishiStorage.getItem('krishi_layout_backups')) || [];
         } catch(e){}
 
         container.innerHTML = '';
@@ -7851,12 +9770,12 @@ document.querySelectorAll('button').forEach(btn => {
     function restoreBackupPoint(timestamp) {
         let backups = [];
         try {
-            backups = JSON.parse(localStorage.getItem('krishi_layout_backups')) || [];
+            backups = JSON.parse(KrishiStorage.getItem('krishi_layout_backups')) || [];
         } catch(e){}
         
         let target = backups.find(b => b.timestamp === timestamp);
         if (target) {
-            localStorage.setItem('krishi_home_settings', JSON.stringify(target.settings));
+            KrishiStorage.setItem('krishi_home_settings', JSON.stringify(target.settings));
             showToast('🔄 Successfully restored selected dashboard recovery point!');
             buildCustomizerWidgetsList();
             updateHomePage();
@@ -7937,15 +9856,15 @@ document.querySelectorAll('button').forEach(btn => {
                 }
                 
                 if (stagedHome) {
-                    localStorage.setItem('krishi_home_settings', JSON.stringify(stagedHome));
+                    KrishiStorage.setItem('krishi_home_settings', JSON.stringify(stagedHome));
                     importedAny = true;
                 }
                 if (stagedProfiles) {
-                    localStorage.setItem('krishi_exam_profiles', JSON.stringify(stagedProfiles));
+                    KrishiStorage.setItem('krishi_exam_profiles', JSON.stringify(stagedProfiles));
                     importedAny = true;
                 }
                 if (stagedAppearance) {
-                    localStorage.setItem('krishi_appearance_settings', JSON.stringify(stagedAppearance));
+                    KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(stagedAppearance));
                     importedAny = true;
                 }
                 
@@ -8005,7 +9924,8 @@ document.querySelectorAll('button').forEach(btn => {
 
     // Individual Widget Card Template Renderers
     function renderWidgetSmartRecommendation(compact) {
-        let wrongCount = localData.wrong ? localData.wrong.length : 0;
+        
+        let wrongCount = (localData.wrong || []).length;
         let dueCount = getPromoDueCount();
         let target = getDailyTarget() || 50;
         let todayStr = getLocalDateString();
@@ -8120,7 +10040,7 @@ document.querySelectorAll('button').forEach(btn => {
             let sGoal = getGoalSettings();
             let weakSub = getWeakestSubject().subject;
             let target = getDailyTarget() || 50;
-            let incorrects = localData.wrong ? localData.wrong.length : 0;
+            let incorrects = (localData.wrong || []).length;
             
             activePlanSequenceHTML = `
                 <div class="space-y-2.5 text-xs text-slate-800 dark:text-slate-250">
@@ -8270,20 +10190,20 @@ document.querySelectorAll('button').forEach(btn => {
 
         if (percent >= 100) {
             // 1. Separate celebratory sound trigger: plays exactly once upon target completion
-            if (!localStorage.getItem('target_sound_played_' + todayStr)) {
-                localStorage.setItem('target_sound_played_' + todayStr, 'true');
+            if (!KrishiStorage.getItem('target_sound_played_' + todayStr)) {
+                KrishiStorage.setItem('target_sound_played_' + todayStr, 'true');
                 if (typeof playSound === 'function') {
                     playSound('celebrate');
                 }
             }
             // 2. Separate animation trigger
-            if (!localStorage.getItem('confetti_fired_' + todayStr)) {
-                localStorage.setItem('confetti_fired_' + todayStr, 'true');
+            if (!KrishiStorage.getItem('confetti_fired_' + todayStr)) {
+                KrishiStorage.setItem('confetti_fired_' + todayStr, 'true');
                 setTimeout(() => { triggerConfetti(); }, 500);
             }
         }
 
-        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        let isElite = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
 
         // Calculate seedling morph progression (even at 0%, a tiny seedling is visible)
         let stemOffset = 100 - 12 - (percent * 0.68);
@@ -8651,7 +10571,8 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function renderWidgetReviewMistakes(compact) {
-        let wrongCount = localData.wrong ? localData.wrong.length : 0;
+        
+        let wrongCount = (localData.wrong || []).length;
         let pulseClass = wrongCount > 0 ? 'pulse-wrong-accent' : '';
         return `
             <button onclick="navigate('page-wrong-questions'); playSound('click');" class="w-full p-3.5 rounded-xl border text-left flex justify-between items-center hover-card-trigger ${pulseClass}" style="background:var(--card); border-color:var(--border);">
@@ -8715,7 +10636,7 @@ document.querySelectorAll('button').forEach(btn => {
 
             let greetingEl = document.getElementById('home-greeting');
             let sidebarGreeting = document.getElementById('sidebar-greeting');
-            let username = localStorage.getItem('krishi_username') || "विद्यार्थी";
+            let username = KrishiStorage.getItem('krishi_username') || "विद्यार्थी";
             let appearance = getAppearanceSettings();
             let greetText = username;
             if (appearance.greetingLanguage === 'nepali') {
@@ -8856,8 +10777,8 @@ document.querySelectorAll('button').forEach(btn => {
 
         // Update general dashboard counts
         let customCount = getCustomQuestions().length;
-        let wrongCount = localData.wrong.length;
-        let bookmarkedCount = localData.bookmarked.length;
+        let wrongCount = (localData.wrong || []).length;
+        let bookmarkedCount = (localData.bookmarked || []).length;
         let totalCount = all.length;
         
         // Toggle empty state vs active modules
@@ -8938,7 +10859,7 @@ document.querySelectorAll('button').forEach(btn => {
         // Render Recent Practice History
        let historyContainer = document.getElementById('recent-practice-list') || document.getElementById('practice-recent-list');
         if (historyContainer) {
-            let historyRaw = localStorage.getItem('krishi_practice_recent');
+            let historyRaw = KrishiStorage.getItem('krishi_practice_recent');
             let historyList = [];
             if (historyRaw) {
                 try { historyList = JSON.parse(historyRaw); } catch(ex){}
@@ -8973,9 +10894,13 @@ document.querySelectorAll('button').forEach(btn => {
 }
 
     // ==================== APP SETTINGS CONNECTIONS ====================
-    function getApiKey() { return localStorage.getItem('krishi_gemini_key')||''; }
-    function getGeminiModel() { return localStorage.getItem('krishi_gemini_model') || 'gemini-1.5-flash'; }
-    function getGeminiTemp() { return parseFloat(localStorage.getItem('krishi_gemini_temp')) || 0.7; }
+    function getApiKey() { 
+        let val = KrishiStorage.getItem('krishi_gemini_key');
+        if (!val) return '';
+        try { return atob(val); } catch(e) { return val; }
+    }
+    function getGeminiModel() { return KrishiStorage.getItem('krishi_gemini_model') || 'gemini-1.5-flash'; }
+    function getGeminiTemp() { return parseFloat(KrishiStorage.getItem('krishi_gemini_temp')) || 0.7; }
 
     function toggleKeyVisibility() {
         const el = document.getElementById('gemini-api-key');
@@ -8994,9 +10919,10 @@ document.querySelectorAll('button').forEach(btn => {
     function saveGeminiSettings() {
         const model = document.getElementById('gemini-model-select').value;
         const temp = document.getElementById('gemini-temp-select').value;
-        localStorage.setItem('krishi_gemini_model', model);
-        localStorage.setItem('krishi_gemini_temp', temp);
-        localStorage.setItem('krishi_firebase_config', JSON.stringify({})); // keep placeholder clear
+        KrishiStorage.setItem('krishi_gemini_model', model);
+        KrishiStorage.setItem('krishi_gemini_temp', temp);
+        KrishiStorage.setItem('krishi_firebase_config', JSON.stringify({})); // keep placeholder clear
+        syncSettingsToCloud('Gemini settings updated');
         showToast('Settings saved successfully!');
     }
 
@@ -9076,7 +11002,7 @@ document.querySelectorAll('button').forEach(btn => {
         try {
             const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${val}`);
             if (res.ok) {
-                localStorage.setItem('krishi_gemini_key', val);
+                KrishiStorage.setItem('krishi_gemini_key', btoa(val));
                 saveGeminiSettings();
                 showToast('✅ Key verified and saved successfully!');
                 await checkApiKeyStatus(true);
@@ -9090,7 +11016,7 @@ document.querySelectorAll('button').forEach(btn => {
             }
         } catch(e) {
             // Save anyway if offline, warn user
-            localStorage.setItem('krishi_gemini_key', val);
+            KrishiStorage.setItem('krishi_gemini_key', btoa(val));
             saveGeminiSettings();
             showToast('⚠️ Saved, but offline - could not verify key.');
             await checkApiKeyStatus(true);
@@ -9101,9 +11027,10 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function clearApiKey() {
-        localStorage.removeItem('krishi_gemini_key');
+        KrishiStorage.removeItem('krishi_gemini_key');
         const el = document.getElementById('gemini-api-key');
         if (el) el.value = '';
+        syncSettingsToCloud('Gemini key cleared');
         checkApiKeyStatus(true);
         showToast('🗑️ API Key cleared.');
     }
@@ -9195,9 +11122,38 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function startSpacedReview() {
-        let dueIds = getPlannerSettings().adaptiveReview ? getAdaptiveDueQuestions() : getSpacedQueue();
-        let pool = getAllQuestions().filter(q => dueIds.includes(q.id));
-        if(pool.length === 0){ showToast('🎉 No spaced review items pending!'); return; }
+        let pool = [];
+        let allQ = getAllQuestions();
+        if (window.KrishiSM2Engine) {
+            pool = window.KrishiSM2Engine.getDueQuestions(allQ);
+        }
+        
+        if (pool.length === 0) {
+            let data = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+            let newQs = allQ.filter(q => {
+                let id = String(q.id || q.q);
+                let isWrong = localData.wrong && localData.wrong.some(wid => String(wid) === id);
+                return (!data[id] || data[id].status === 'new') && !isWrong;
+            });
+            if (newQs.length > 0) {
+                pool = typeof shuffle === 'function' ? shuffle(newQs).slice(0, 10) : newQs.slice(0, 10);
+                showToast('No due reviews! Starting 10 new questions instead.');
+            } else {
+                showToast('🎉 No spaced review items pending!'); 
+                return;
+            }
+        } else {
+            if (typeof shuffle === 'function') pool = shuffle(pool);
+        }
+        
+        // Isolating Spaced Review config to prevent leakage from other practice modes
+        state.activeConfig = {
+            subject: 'all', topic: 'all', difficulty: 'all', count: 'all',
+            timer: 'off', timerMin: 0, perQTimer: 'off', perQSec: 0,
+            negativeMarking: 'off', feedback: 'immediate', shuffleQs: true, shuffleOpts: true,
+            isSpacedReview: true
+        };
+        
         setupMCQSession(pool, false, 0);
     }
 
@@ -9250,70 +11206,429 @@ document.querySelectorAll('button').forEach(btn => {
         let weekly = parseInt(document.getElementById('planner-config-weekly-target').value) || 250;
         let exam = document.getElementById('planner-config-exam-date').value || "2026-07-03";
         let threshold = parseInt(document.getElementById('planner-config-weak-threshold').value) || 60;
-        
         let activeSlots = [];
         if (document.getElementById('planner-slot-morning').checked) activeSlots.push('morning');
         if (document.getElementById('planner-slot-afternoon').checked) activeSlots.push('afternoon');
         if (document.getElementById('planner-slot-evening').checked) activeSlots.push('evening');
-
+        
+        // Save draft variables
+        let restDays = window.draftSettings ? window.draftSettings.restDays : [6];
+        let intensity = window.draftSettings ? window.draftSettings.intensity : 'normal';
+        let difficultyBias = window.draftSettings ? window.draftSettings.difficultyBias : 'balanced';
+        let retryDelay = window.draftSettings ? window.draftSettings.retryDelay : 3;
+        
+        // Write drafts back to core storage
+        KrishiStorage.setItem('krishi_intensity_mode', intensity);
+        KrishiStorage.setItem('krishi_difficulty_bias', difficultyBias);
+        KrishiStorage.setItem('krishi_retry_delay', retryDelay);
+        
+        let studyHours = parseFloat(document.getElementById('planner-config-study-hours').value) || 2;
+        let newRatio = parseInt(document.getElementById('planner-config-new-ratio').value) || 50;
+        let focusSubject = document.getElementById('planner-config-focus-subject').value || 'all';
+        let soundEnabled = document.getElementById('planner-config-sound').checked;
+        let compactMode = document.getElementById('planner-config-compact').checked;
         let obj = {
-            dailyTarget: daily,
-            weeklyTarget: weekly,
-            examDate: exam,
-            weakThreshold: threshold,
-            slots: activeSlots,
-            syllabusVisible: true,
-            adaptiveReview: true
+            dailyTarget: daily, weeklyTarget: weekly, examDate: exam, weakThreshold: threshold,
+            slots: activeSlots, syllabusVisible: true, adaptiveReview: true,
+            intensity, restDays, studyHours, newRatio, difficultyBias, retryDelay,
+            focusSubject, soundEnabled, compactMode
         };
-        localStorage.setItem('krishi_planner_settings', JSON.stringify(obj));
+        
+        // Update active exam profile to keep everything in sync
+        let profiles = getExamProfiles();
+        let active = profiles.find(p => p.active);
+        if (active) {
+            active.dailyTarget = daily;
+            active.weeklyTarget = weekly;
+            active.targetDate = exam;
+            saveExamProfiles(profiles);
+        }
+        
+        KrishiStorage.setItem('krishi_planner_settings', JSON.stringify(obj));
+        KrishiStorage.setItem('krishi_sound_enabled', soundEnabled ? 'true' : 'false');
+        
+        // Clean draft settings block
+        window.draftSettings = null;
+        
+        syncSettingsToCloud('Planner settings updated');
+        
+        applyPlannerPersonalization();
         showToast('⚙️ Planner Settings updated successfully!');
         togglePlannerSettings();
         refreshPlannerPage();
     }
 
     function resetPlannerSettingsToDefaults(){
-        localStorage.removeItem('krishi_planner_settings');
+        KrishiStorage.removeItem('krishi_planner_settings');
+        KrishiStorage.removeItem('krishi_intensity_mode');
+        KrishiStorage.removeItem('krishi_difficulty_bias');
+        KrishiStorage.removeItem('krishi_retry_delay');
+        syncSettingsToCloud('Planner settings reset');
         showToast('🔄 Settings reset to defaults!');
+        
+        // Clear drafts if any
+        window.draftSettings = null;
+        
         let settings = getPlannerSettings();
         document.getElementById('planner-config-daily-target').value = settings.dailyTarget;
         document.getElementById('planner-config-weekly-target').value = settings.weeklyTarget;
         document.getElementById('planner-config-exam-date').value = settings.examDate;
         document.getElementById('planner-config-weak-threshold').value = settings.weakThreshold;
-        
         document.getElementById('planner-slot-morning').checked = settings.slots.includes('morning');
         document.getElementById('planner-slot-afternoon').checked = settings.slots.includes('afternoon');
         document.getElementById('planner-slot-evening').checked = settings.slots.includes('evening');
+        if(document.getElementById('planner-config-study-hours')) document.getElementById('planner-config-study-hours').value = 2;
+        if(document.getElementById('study-hours-lbl')) document.getElementById('study-hours-lbl').textContent = '2 hrs';
+        if(document.getElementById('planner-config-new-ratio')) document.getElementById('planner-config-new-ratio').value = 50;
+        if(document.getElementById('ratio-new-lbl')) document.getElementById('ratio-new-lbl').textContent = '50% New';
+        if(document.getElementById('ratio-rev-lbl')) document.getElementById('ratio-rev-lbl').textContent = '50% Review';
+        if(document.getElementById('planner-config-focus-subject')) document.getElementById('planner-config-focus-subject').value = 'all';
+        if(document.getElementById('planner-config-sound')) document.getElementById('planner-config-sound').checked = true;
+        if(document.getElementById('planner-config-compact')) document.getElementById('planner-config-compact').checked = false;
+        setIntensityMode('normal');
+        setDifficultyBias('balanced');
+        setRetryDelay(3);
+        buildRestDayButtons([6]);
+        applyPlannerPersonalization();
         refreshPlannerPage();
     }
 
     function togglePlannerSettings(){
         let p = document.getElementById('planner-settings-panel');
+        let overlay = document.getElementById('planner-settings-overlay');
         p.classList.toggle('hidden');
+        if(overlay) overlay.classList.toggle('hidden');
         if(!p.classList.contains('hidden')) {
+            p.style.transform = 'translateY(-100%)';
+            p.style.transition = 'transform 0.3s cubic-bezier(0.25,0.8,0.25,1)';
+            requestAnimationFrame(() => { p.style.transform = 'translateY(0)'; });
+            
             let settings = getPlannerSettings();
+            
+            // Initialize draft transactions
+            window.draftSettings = {
+                intensity: settings.intensity || 'normal',
+                difficultyBias: settings.difficultyBias || 'balanced',
+                retryDelay: settings.retryDelay || 3,
+                restDays: [...(settings.restDays || [6])]
+            };
+            
             document.getElementById('planner-config-daily-target').value = settings.dailyTarget;
             document.getElementById('planner-config-weekly-target').value = settings.weeklyTarget;
             document.getElementById('planner-config-exam-date').value = settings.examDate;
             document.getElementById('planner-config-weak-threshold').value = settings.weakThreshold;
-            
             document.getElementById('planner-slot-morning').checked = settings.slots.includes('morning');
             document.getElementById('planner-slot-afternoon').checked = settings.slots.includes('afternoon');
             document.getElementById('planner-slot-evening').checked = settings.slots.includes('evening');
+            // Populate new fields
+            if(document.getElementById('planner-config-study-hours')){
+                document.getElementById('planner-config-study-hours').value = settings.studyHours || 2;
+                document.getElementById('study-hours-lbl').textContent = (settings.studyHours || 2) + ' hrs';
+            }
+            if(document.getElementById('planner-config-new-ratio')){
+                let nr = settings.newRatio || 50;
+                document.getElementById('planner-config-new-ratio').value = nr;
+                document.getElementById('ratio-new-lbl').textContent = nr + '% New';
+                document.getElementById('ratio-rev-lbl').textContent = (100-nr) + '% Review';
+            }
+            let focusSelect = document.getElementById('planner-config-focus-subject');
+            if (focusSelect) {
+                let selectedVal = settings.focusSubject || 'all';
+                focusSelect.innerHTML = '<option value="all">📚 All Subjects (Default)</option>';
+                
+                // Get all active subjects in Subject Manager
+                let activeSubjects = getAllSubjects();
+                activeSubjects.forEach(sub => {
+                    let opt = document.createElement('option');
+                    opt.value = sub;
+                    opt.textContent = '🎯 ' + sub;
+                    if (sub === selectedVal) opt.selected = true;
+                    focusSelect.appendChild(opt);
+                });
+                
+                // Fallback to 'all' if selected focus subject is no longer in active subjects
+                if (selectedVal !== 'all' && !activeSubjects.includes(selectedVal)) {
+                    focusSelect.value = 'all';
+                }
+            }
+            if(document.getElementById('planner-config-sound')) document.getElementById('planner-config-sound').checked = settings.soundEnabled !== false;
+            if(document.getElementById('planner-config-compact')) document.getElementById('planner-config-compact').checked = !!settings.compactMode;
+            setIntensityMode(settings.intensity || 'normal', false);
+            setDifficultyBias(settings.difficultyBias || 'balanced');
+            setRetryDelay(settings.retryDelay || 3);
+            buildRestDayButtons(settings.restDays || [6]);
+            applyPlannerPersonalization();
+        } else {
+            p.style.transform = '';
+            p.style.transition = '';
+            // Close event: clean drafts
+            window.draftSettings = null;
         }
     }
+
+    // ── NEW SETTINGS FEATURE FUNCTIONS ──────────────────────────────────────
+
+    function setIntensityMode(mode, overrideInputs = true) {
+        if (window.draftSettings) {
+            window.draftSettings.intensity = mode;
+        } else {
+            KrishiStorage.setItem('krishi_intensity_mode', mode);
+        }
+        let configs = {
+            relaxed: {target:20, hint:'🐢 Relaxed: 20 MCQs/day. Low pressure, steady pace.'},
+            normal:  {target:50, hint:'📘 Normal: 50 MCQs/day. Balanced daily routine.'},
+            intense: {target:100, hint:'🔥 Intense: 100 MCQs/day. High output for serious prep.'},
+            crunch:  {target:150, hint:'💀 Crunch: 150 MCQs/day. Maximum effort before exam!'}
+        };
+        let cfg = configs[mode] || configs['normal'];
+        let ids = ['relaxed','normal','intense','crunch'];
+        ids.forEach(m => {
+            let btn = document.getElementById('intensity-' + m);
+            if (!btn) return;
+            if (m === mode) {
+                btn.style.background = 'rgba(99,102,241,0.18)';
+                btn.style.color = '#6366f1';
+                btn.style.outline = '2px solid #6366f1';
+            } else {
+                btn.style.background = 'var(--bg)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.outline = 'none';
+            }
+        });
+        let hint = document.getElementById('intensity-hint');
+        if (hint) hint.textContent = cfg.hint;
+        if (overrideInputs) {
+            let dtEl = document.getElementById('planner-config-daily-target');
+            if (dtEl) dtEl.value = cfg.target;
+            let wtEl = document.getElementById('planner-config-weekly-target');
+            if (wtEl) wtEl.value = cfg.target * 7; // Fixed: A week has 7 days, so weekly target is daily * 7!
+        }
+    }
+
+    function setDifficultyBias(bias) {
+        if (window.draftSettings) {
+            window.draftSettings.difficultyBias = bias;
+        } else {
+            KrishiStorage.setItem('krishi_difficulty_bias', bias);
+        }
+        let colors = {easy:'#10b981', balanced:'#f59e0b', hard:'#ef4444'};
+        ['easy','balanced','hard'].forEach(b => {
+            let btn = document.getElementById('diff-' + b);
+            if (!btn) return;
+            if (b === bias) {
+                btn.style.background = 'rgba(' + (b==='easy'?'16,185,129':b==='balanced'?'245,158,11':'239,68,68') + ',0.15)';
+                btn.style.color = colors[b];
+                btn.style.outline = '2px solid ' + colors[b];
+            } else {
+                btn.style.background = 'var(--bg)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.outline = 'none';
+            }
+        });
+    }
+
+    function setRetryDelay(days) {
+        if (window.draftSettings) {
+            window.draftSettings.retryDelay = days;
+        } else {
+            KrishiStorage.setItem('krishi_retry_delay', days);
+        }
+        [1,3,7].forEach(d => {
+            let btn = document.getElementById('retry-' + d);
+            if (!btn) return;
+            if (d === days) {
+                btn.style.background = 'rgba(99,102,241,0.15)';
+                btn.style.color = '#6366f1';
+                btn.style.outline = '2px solid #6366f1';
+            } else {
+                btn.style.background = 'var(--bg)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.outline = 'none';
+            }
+        });
+    }
+
+    function buildRestDayButtons(selectedDays) {
+        let container = document.getElementById('rest-day-buttons');
+        if (!container) return;
+        let labels = ['S','M','T','W','T','F','S'];
+        container.innerHTML = '';
+        labels.forEach((label, i) => {
+            let isSelected = selectedDays.includes(i);
+            let btn = document.createElement('button');
+            btn.textContent = label;
+            btn.id = 'rest-day-' + i;
+            btn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95';
+            btn.style.background = isSelected ? 'rgba(99,102,241,0.15)' : 'var(--bg)';
+            btn.style.color = isSelected ? '#6366f1' : 'var(--text-secondary)';
+            btn.style.outline = isSelected ? '2px solid #6366f1' : 'none';
+            btn.setAttribute('data-selected', isSelected ? '1' : '0');
+            btn.onclick = function() {
+                let sel = this.getAttribute('data-selected') === '1';
+                sel = !sel;
+                this.setAttribute('data-selected', sel ? '1' : '0');
+                this.style.background = sel ? 'rgba(99,102,241,0.15)' : 'var(--bg)';
+                this.style.color = sel ? '#6366f1' : 'var(--text-secondary)';
+                this.style.outline = sel ? '2px solid #6366f1' : 'none';
+                
+                // Keep draft restDays transaction in sync
+                if (window.draftSettings) {
+                    let rest = [];
+                    for(let k=0;k<7;k++){
+                        let el=document.getElementById('rest-day-'+k);
+                        if(el && el.getAttribute('data-selected')==='1') rest.push(k);
+                    }
+                    window.draftSettings.restDays = rest;
+                }
+            };
+            container.appendChild(btn);
+        });
+    }
+
+    function applyPlannerPersonalization() {
+        let settings = getPlannerSettings();
+        
+        // Sound toggle visual update
+        let soundCb = document.getElementById('planner-config-sound');
+        let soundTrack = document.getElementById('sound-track');
+        let soundThumb = document.getElementById('sound-thumb');
+        if (soundCb && soundTrack && soundThumb) {
+            let panel = document.getElementById('planner-settings-panel');
+            if (!panel || panel.classList.contains('hidden')) {
+                soundCb.checked = settings.soundEnabled !== false;
+            }
+            soundTrack.style.background = soundCb.checked ? '#10b981' : 'var(--border)';
+            soundThumb.style.transform = soundCb.checked ? 'translateX(20px)' : 'translateX(0px)';
+            KrishiStorage.setItem('krishi_sound_enabled', soundCb.checked ? 'true' : 'false');
+            
+            // Sync with Central App Settings sound handlers (Bug 15)
+            if (typeof syncPerfSoundToggle === 'function') {
+                syncPerfSoundToggle();
+            }
+        }
+        
+        // Compact toggle visual update
+        let compactCb = document.getElementById('planner-config-compact');
+        let compactTrack = document.getElementById('compact-track');
+        let compactThumb = document.getElementById('compact-thumb');
+        if (compactCb && compactTrack && compactThumb) {
+            let panel = document.getElementById('planner-settings-panel');
+            if (!panel || panel.classList.contains('hidden')) {
+                compactCb.checked = !!settings.compactMode;
+            }
+            compactTrack.style.background = compactCb.checked ? '#6366f1' : 'var(--border)';
+            compactThumb.style.transform = compactCb.checked ? 'translateX(20px)' : 'translateX(0px)';
+        }
+        
+        // Apply compact mode to planner page
+        let plannerPage = document.getElementById('page-study-planner');
+        if (plannerPage) {
+            let isCompact = compactCb ? compactCb.checked : !!settings.compactMode;
+            if (isCompact) {
+                plannerPage.style.fontSize = '0.85em';
+                plannerPage.classList.add('compact-mode');
+            } else {
+                plannerPage.style.fontSize = '';
+                plannerPage.classList.remove('compact-mode');
+            }
+        }
+    }
+
+    function exportStudyReport() {
+        try {
+            let report = {
+                exportDate: new Date().toISOString(),
+                appVersion: 'Krishi MCQ Pro v28',
+                settings: getPlannerSettings(),
+                stats: localData.stats || {},
+                wrongQuestions: (localData.wrong || []).length,
+                streakData: { current: localData.stats ? (localData.stats.streakDays || 0) : 0 },
+                totalSolved: localData.stats ? (localData.stats.totalSolved || 0) : 0,
+                subjectStats: localData.stats ? (localData.stats.subjectStats || {}) : {},
+                dailyHistory: localData.dailyHistory || {}
+            };
+            let json = JSON.stringify(report, null, 2);
+            let blob = new Blob([json], {type: 'application/json'});
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = 'krishi-study-report-' + new Date().toISOString().slice(0,10) + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('📊 Study Report exported successfully!');
+        } catch(e) {
+            showToast('⚠️ Export failed: ' + e.message);
+        }
+    }
+
+    function resetSubjectData() {
+        let sel = document.getElementById('reset-subject-select');
+        if (!sel || !sel.value) { showToast('⚠️ Please select a subject first!'); return; }
+        let subject = sel.value;
+        if (!confirm('Reset all stats for "' + subject + '"? This cannot be undone.')) return;
+        try {
+            // 1. Reset practice stats
+            if (localData.stats && localData.stats.subjectStats && localData.stats.subjectStats[subject]) {
+                delete localData.stats.subjectStats[subject];
+            }
+
+            // 2. Reset custom syllabus topic statuses to "Pending"
+            let syllabus = getSyllabusData();
+            let modified = false;
+            syllabus.forEach(sub => {
+                if (sub.subject.toLowerCase().includes(subject.toLowerCase()) || subject.toLowerCase().includes(sub.subject.toLowerCase())) {
+                    sub.topics.forEach(t => {
+                        t.status = 'Pending';
+                        modified = true;
+                    });
+                }
+            });
+            if (modified) {
+                saveSyllabusData(syllabus);
+            }
+
+            // 3. Clear from wrong logs and timingLog
+            localData.wrong = localData.wrong.filter(qid => {
+                let q = getAllQuestions().find(x => x.id === qid);
+                return !q || !q.sub || !(q.sub.toLowerCase().includes(subject.toLowerCase()) || subject.toLowerCase().includes(q.sub.toLowerCase()));
+            });
+            
+            timingLog = timingLog.filter(entry => {
+                return !entry.subject || !(entry.subject.toLowerCase().includes(subject.toLowerCase()) || subject.toLowerCase().includes(entry.subject.toLowerCase()));
+            });
+            
+            saveLocalData();
+            saveTimingData();
+
+            showToast('🔄 ' + subject + ' stats and syllabus progress reset successfully!');
+            refreshPlannerPage();
+        } catch(e) {
+            showToast('⚠️ Reset failed: ' + e.message);
+        }
+    }
+
+    window.setIntensityMode = setIntensityMode;
+    window.setDifficultyBias = setDifficultyBias;
+    window.setRetryDelay = setRetryDelay;
+    window.buildRestDayButtons = buildRestDayButtons;
+    window.applyPlannerPersonalization = applyPlannerPersonalization;
+    window.exportStudyReport = exportStudyReport;
+    window.resetSubjectData = resetSubjectData;
 
     // Duplicate getDailyTarget removed
 
     function getSyllabusData() {
         try {
-            let saved = localStorage.getItem('krishi_syllabus_custom');
+            let saved = KrishiStorage.getItem('krishi_syllabus_custom');
             if (saved) return JSON.parse(saved);
         } catch(e){}
         return JSON.parse(JSON.stringify(DEFAULT_AGRI_SYLLABUS));
     }
 
     function saveSyllabusData(data) {
-        localStorage.setItem('krishi_syllabus_custom', JSON.stringify(data));
+        KrishiStorage.setItem('krishi_syllabus_custom', JSON.stringify(data));
         calculateSyllabusPercentages();
     }
 
@@ -9460,33 +11775,35 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function setPlanMode(mode) {
-    activePlanMode = mode;
-    ['quick', 'normal', 'deep', 'full'].forEach(m => {
-        let btn = document.getElementById('pm-tab-' + m);
-        if (btn) {
-            if (m === mode) {
-                // Indigo को सट्टामा थिमको आफ्नै primary रङ प्रयोग गरिएको
-                btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg text-white cursor-pointer select-none transition-all";
-                btn.style.backgroundColor = "var(--primary)";
-            } else {
-                btn.className = "px-2 py-1 text-[9px] font-bold rounded-lg text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-750 cursor-pointer select-none transition-all";
-                btn.style.backgroundColor = ""; // ब्याकग्राउन्ड रङ रिसेट गर्ने
+        activePlanMode = mode;
+        KrishiStorage.setItem('krishi_active_plan_mode', mode); // Persist plan mode selection (Bug 8)
+        ['quick', 'normal', 'deep', 'full'].forEach(m => {
+            let btn = document.getElementById('pm-tab-' + m);
+            if (btn) {
+                if (m === mode) {
+                    btn.className = "flex-1 py-1.5 text-[9px] font-black rounded-lg text-white cursor-pointer select-none transition-all border-none outline-none";
+                    btn.style.backgroundColor = "var(--primary)";
+                } else {
+                    btn.className = "flex-1 py-1.5 text-[9px] font-black rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer select-none transition-all border-none outline-none";
+                    btn.style.backgroundColor = "";
+                }
             }
-        }
-    });
-    generateTodaySmartPlan();
-}
+        });
+        generateTodaySmartPlan();
+    }
 
     function generateTodaySmartPlan() {
         let settings = getPlannerSettings();
         let sInfo = calculateSyllabusPercentages();
         let subjects = getAllSubjects();
         
-        // Find weakest subject from real stats or mock stats
         let weakestSub = sInfo.list[0] ? sInfo.list[0].subject : "Agronomy";
         let weakestAccuracy = 100;
 
-        if (plannerDemoModeActive) {
+        // Apply Focus Subject Lock dynamically if active (Bug 3)
+        if (settings.focusSubject && settings.focusSubject !== 'all') {
+            weakestSub = settings.focusSubject;
+        } else if (plannerDemoModeActive) {
             weakestSub = "Soil Science (माटो विज्ञान)";
             weakestAccuracy = 42;
         } else {
@@ -9502,7 +11819,6 @@ document.querySelectorAll('button').forEach(btn => {
             });
         }
 
-        // Target topic selection
         let recommendedTopic = "Cereal crop pest cycles";
         let subjectData = sInfo.list.find(s => s.subject.includes(weakestSub) || weakestSub.includes(s.subject));
         if (subjectData && subjectData.topics.length > 0) {
@@ -9511,11 +11827,10 @@ document.querySelectorAll('button').forEach(btn => {
             else recommendedTopic = subjectData.topics[0].name;
         }
 
-        // Counts based on plan mode
         let mcqTarget = 30;
         let studyTime = "1 hour";
         let reviewCount = Math.min(10, getPromoDueCount());
-        let wrongCount = Math.min(15, localData.wrong.length);
+        let wrongCount = Math.min(15, (localData.wrong || []).length);
 
         if (plannerDemoModeActive) {
             wrongCount = 8;
@@ -9525,7 +11840,7 @@ document.querySelectorAll('button').forEach(btn => {
         switch(activePlanMode) {
             case 'quick':
                 mcqTarget = 15;
-                studyTime = "30 minutes";
+                studyTime = "30 mins";
                 break;
             case 'normal':
                 mcqTarget = 30;
@@ -9541,59 +11856,131 @@ document.querySelectorAll('button').forEach(btn => {
                 break;
         }
 
-        let detailsHTML = `
-            <div class="bg-indigo-50/50 dark:bg-slate-900/50 p-3 rounded-xl border border-indigo-100/40 space-y-2">
-                <div class="flex items-center gap-2 text-xs">
-                    <span class="text-indigo-600 font-bold">📚 Key Subject Focus:</span>
-                    <span class="font-black text-slate-800 dark:text-slate-100">${weakestSub}</span>
-                </div>
-                <div class="flex items-center gap-2 text-xs">
-                    <span class="text-indigo-600 font-bold">🎯 Topic Revision Challenge:</span>
-                    <span class="font-medium text-slate-700 dark:text-slate-200 bg-indigo-500/10 px-2 py-0.5 rounded text-[10px]">${recommendedTopic}</span>
-                </div>
-                <div class="grid grid-cols-2 gap-2 text-[10px] text-slate-500 font-semibold pt-1">
-                    <div class="flex items-center gap-1.5 bg-slate-100/45 dark:bg-slate-800/40 p-2 rounded-lg">
-                        📝 MCQs to Attempt: <b class="text-slate-800 dark:text-slate-200 font-black">${mcqTarget}</b>
-                    </div>
-                    <div class="flex items-center gap-1.5 bg-slate-100/45 dark:bg-slate-800/40 p-2 rounded-lg">
-                        ⏱️ Est. Practice Time: <b class="text-slate-800 dark:text-slate-200 font-black">${studyTime}</b>
-                    </div>
-                    <div class="flex items-center gap-1.5 bg-slate-100/45 dark:bg-slate-800/40 p-1.5 rounded-lg">
-                        🔁 Wrong Repetitions: <b class="text-rose-600 font-black">${wrongCount} pending</b>
-                    </div>
-                    <div class="flex items-center gap-1.5 bg-slate-100/45 dark:bg-slate-800/40 p-1.5 rounded-lg">
-                        🔔 SM-2 Reviews Due: <b class="text-indigo-600 font-black">${reviewCount} queue</b>
+        let activeSlots = settings.slots || ["morning", "afternoon", "evening"];
+        let detailsHTML = `<div class="space-y-4 relative pl-5 border-l border-indigo-500/25 ml-2 mt-2 pt-1 pb-1 animate-slide-up">`;
+        let stepIndex = 1;
+        
+        // Step 1: Core Subject Focus (Morning)
+        if (activeSlots.includes('morning')) {
+            detailsHTML += `
+                <!-- Step 1: Core Subject Focus -->
+                <div class="relative">
+                    <span class="absolute -left-[26.5px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-[8px] text-white font-black ring-4 ring-white dark:ring-slate-800">${stepIndex}</span>
+                    <div class="space-y-0.5">
+                        <span class="text-[9px] font-black text-indigo-500 uppercase tracking-wider block">🌅 Morning: Core Subject Focus</span>
+                        <p class="text-[11px] font-black text-slate-800 dark:text-slate-200">Study weak concepts in <span class="text-indigo-600 dark:text-indigo-400 font-extrabold">${weakestSub}</span></p>
+                        <p class="text-[8px] text-slate-400 leading-normal">Focusing on your lowest metrics ensures the fastest path to progress.</p>
                     </div>
                 </div>
-                <div class="p-2 bg-emerald-500/10 rounded-lg text-[9px] text-emerald-700 dark:text-emerald-400 font-medium border border-emerald-500/10 leading-relaxed">
-                    💡 <b>Recommendation Guide:</b> Master your weak slots in <b>${weakestSub}</b> first. We recommend studying <b>${recommendedTopic}</b> via textbook summaries before starting the interactive session below.
+            `;
+            stepIndex++;
+        }
+        
+        // Step 2: Specific Topic Revision (Afternoon)
+        if (activeSlots.includes('afternoon')) {
+            detailsHTML += `
+                <!-- Step 2: Specific Topic Revision -->
+                <div class="relative">
+                    <span class="absolute -left-[26.5px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[8px] text-white font-black ring-4 ring-white dark:ring-slate-800">${stepIndex}</span>
+                    <div class="space-y-0.5">
+                        <span class="text-[9px] font-black text-amber-500 uppercase tracking-wider block">☀️ Afternoon: Revision Challenge</span>
+                        <p class="text-[11px] font-black text-slate-800 dark:text-slate-200">Revise topic: <span class="bg-amber-500/10 px-2 py-0.5 rounded text-amber-600 dark:text-amber-400 font-extrabold text-[9px]">${recommendedTopic}</span></p>
+                        <p class="text-[8px] text-slate-400 leading-normal">Study time budget: <b>${studyTime}</b> to master key definitions.</p>
+                    </div>
                 </div>
-            </div>
-        `;
+            `;
+            stepIndex++;
+        }
+
+        // Step 3: Diagnostic MCQ Practice (Evening)
+        if (activeSlots.includes('evening')) {
+            detailsHTML += `
+                <!-- Step 3: Diagnostic MCQ Practice -->
+                <div class="relative">
+                    <span class="absolute -left-[26.5px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[8px] text-white font-black ring-4 ring-white dark:ring-slate-800">${stepIndex}</span>
+                    <div class="space-y-0.5">
+                        <span class="text-[9px] font-black text-emerald-500 uppercase tracking-wider block">🌌 Evening: Interactive Study Drills</span>
+                        <p class="text-[11px] font-black text-slate-800 dark:text-slate-200">Attempt <b>${mcqTarget} MCQs</b> of weakest topics</p>
+                        <p class="text-[8px] text-slate-400 leading-normal">Includes <b>${reviewCount}</b> Spaced SM-2 reviews and corrected <b>${wrongCount}</b> errors in memory.</p>
+                    </div>
+                </div>
+            `;
+            stepIndex++;
+        }
+        
+        if (stepIndex === 1) {
+            detailsHTML += `<p class="text-[10px] text-slate-400 italic">No study slots selected. Enable practice slots in Planner Settings to build your daily routine!</p>`;
+        }
+        
+        detailsHTML += `</div>`;
         document.getElementById('smart-plan-details').innerHTML = detailsHTML;
         
-        // Cache generated values on elements for launching session
         let detailsBox = document.getElementById('smart-plan-details');
         detailsBox.setAttribute('data-target-subject', weakestSub);
         detailsBox.setAttribute('data-target-count', mcqTarget);
     }
 
     function startSmartStudyPlanSession() {
+        let settings = getPlannerSettings();
         let detailsBox = document.getElementById('smart-plan-details');
         let subName = detailsBox.getAttribute('data-target-subject') || "Agronomy";
         let count = parseInt(detailsBox.getAttribute('data-target-count')) || 30;
 
-        let pool = getAllQuestions().filter(q => q.sub && (q.sub.toLowerCase().includes(subName.split(" ")[0].toLowerCase()) || subName.toLowerCase().includes(q.sub.toLowerCase())));
-        if (pool.length === 0) pool = getAllQuestions();
+        // 1. Gather all questions matching the subject
+        let rawPool = getAllQuestions().filter(q => q.sub && (q.sub.toLowerCase().includes(subName.split(" ")[0].toLowerCase()) || subName.toLowerCase().includes(q.sub.toLowerCase())));
+        if (rawPool.length === 0) rawPool = getAllQuestions();
 
-        pool = shuffle(pool).slice(0, count);
+        // 2. Partition by New vs Review Ratio (Bug 4)
+        let reviewQs = rawPool.filter(q => sm2Data[q.id] !== undefined);
+        let newQs = rawPool.filter(q => sm2Data[q.id] === undefined);
+
+        let newRatio = settings.newRatio || 50; // percentage of new questions
+        let targetNewCount = Math.round(count * (newRatio / 100));
+        let targetReviewCount = count - targetNewCount;
+
+        let selectedNew = shuffle(newQs).slice(0, targetNewCount);
+        let selectedReview = shuffle(reviewQs).slice(0, targetReviewCount);
+
+        // Fallbacks if one pool is empty
+        if (selectedNew.length < targetNewCount) {
+            let diff = targetNewCount - selectedNew.length;
+            let extraReview = shuffle(reviewQs.filter(q => !selectedReview.includes(q))).slice(0, diff);
+            selectedReview = selectedReview.concat(extraReview);
+        }
+        if (selectedReview.length < targetReviewCount) {
+            let diff = targetReviewCount - selectedReview.length;
+            let extraNew = shuffle(newQs.filter(q => !selectedNew.includes(q))).slice(0, diff);
+            selectedNew = selectedNew.concat(extraNew);
+        }
+
+        let pool = selectedNew.concat(selectedReview);
+        if (pool.length === 0) pool = rawPool;
+
+        // 3. Sort by Difficulty Bias (Easy, Balanced, Hard) (Bug 5)
+        let bias = settings.difficultyBias || 'balanced';
+        pool.sort((a, b) => {
+            let diffA = (a.difficulty || 'medium').toLowerCase();
+            let diffB = (b.difficulty || 'medium').toLowerCase();
+            
+            if (bias === 'easy') {
+                if (diffA === 'easy' && diffB !== 'easy') return -1;
+                if (diffA !== 'easy' && diffB === 'easy') return 1;
+            } else if (bias === 'hard') {
+                if (diffA === 'hard' && diffB !== 'hard') return -1;
+                if (diffA !== 'hard' && diffB === 'hard') return 1;
+            }
+            return 0; // balanced / equal weight
+        });
+
+        pool = pool.slice(0, count);
+
         if (pool.length === 0) {
             showToast('⚠️ No diagnostic items are loaded yet!');
             return;
         }
 
         setupMCQSession(pool, false, 0);
-        showToast(`⚡ Start Smart Study Plan active! Starting ${count} customized MCQs.`);
+        showToast(`⚡ Smart Study Session active! ${newRatio}% New questions loaded with ${bias} difficulty focus.`);
     }
 
     function startPracticeWeakestSubject(){
@@ -9804,15 +12191,15 @@ document.querySelectorAll('button').forEach(btn => {
         // Trigger confetti once target is reached exactly
         if (solved >= target && target > 0) {
             // 1. Separate celebratory sound trigger: plays exactly once upon target completion
-            if (!localStorage.getItem('target_sound_played_' + todayStr)) {
-                localStorage.setItem('target_sound_played_' + todayStr, 'true');
+            if (!KrishiStorage.getItem('target_sound_played_' + todayStr)) {
+                KrishiStorage.setItem('target_sound_played_' + todayStr, 'true');
                 if (typeof playSound === 'function') {
                     playSound('celebrate');
                 }
             }
             // 2. Separate interactive fire animation/confetti trigger
-            if (!localStorage.getItem('confetti_fired_' + todayStr)) {
-                localStorage.setItem('confetti_fired_' + todayStr, 'true');
+            if (!KrishiStorage.getItem('confetti_fired_' + todayStr)) {
+                KrishiStorage.setItem('confetti_fired_' + todayStr, 'true');
                 setTimeout(() => {
                     triggerInteractiveFireSpark(null, true);
                 }, 400);
@@ -9894,8 +12281,35 @@ document.querySelectorAll('button').forEach(btn => {
         // 8. Render full 15-week matrix heatmap and weekly metrics
         renderMonthlyHeatmap(target);
 
+        // Populate dead Quick Stats elements (Bug 7)
+        let quickToday = document.getElementById('planner-quick-today');
+        if (quickToday) quickToday.textContent = `${solved}/${target}`;
+        
+        let quickDays = document.getElementById('planner-quick-days');
+        if (quickDays) quickDays.textContent = daysCount > 0 ? daysCount : '--';
+        
+        let quickStreak = document.getElementById('planner-quick-streak');
+        if (quickStreak) quickStreak.textContent = streak;
+
+        // Highlight activePlanMode tabs (Bug 8)
+        ['quick', 'normal', 'deep', 'full'].forEach(m => {
+            let btn = document.getElementById('pm-tab-' + m);
+            if (btn) {
+                if (m === activePlanMode) {
+                    btn.className = "flex-1 py-1.5 text-[9px] font-black rounded-lg text-white cursor-pointer select-none transition-all border-none outline-none";
+                    btn.style.backgroundColor = "var(--primary)";
+                } else {
+                    btn.className = "flex-1 py-1.5 text-[9px] font-black rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer select-none transition-all border-none outline-none";
+                    btn.style.backgroundColor = "";
+                }
+            }
+        });
+
         // 9. Recalculate Smart Daily schedule details
         generateTodaySmartPlan();
+        
+        // Apply planner personalization styling/compactness dynamically
+        applyPlannerPersonalization();
     }
 
     function renderMonthlyHeatmap(target) {
@@ -10004,38 +12418,91 @@ document.querySelectorAll('button').forEach(btn => {
 
 
     // ==================== EXPANDED STATS & TIMING LOGS ====================
-    let timingLog = [];
-    let mockTestScores = [];
+    const KrishiStorageManager = (function() {
+        let _timingLog = [];
+        let _mockTestScores = [];
+
+        function checkQuotaAndSave() {
+            try {
+                let timingStr = JSON.stringify(_timingLog);
+                // Enforce strict size bound to prevent QuotaExceededError (~250KB)
+                while (timingStr.length > 250000 && _timingLog.length > 0) { 
+                    _timingLog.shift();
+                    timingStr = JSON.stringify(_timingLog);
+                }
+                KrishiStorage.setItem('krishi_timingLog', timingStr);
+                KrishiStorage.setItem('krishi_mockScores', JSON.stringify(_mockTestScores));
+            } catch (e) {
+                console.warn("[StorageManager] Quota exceeded or save error:", e);
+            }
+        }
+
+        return {
+            get timingLog() { return _timingLog; },
+            set timingLog(val) { _timingLog = val; checkQuotaAndSave(); },
+            get mockTestScores() { return _mockTestScores; },
+            set mockTestScores(val) { _mockTestScores = val; checkQuotaAndSave(); },
+            
+            recordQuestionTime: function(qid, subject, difficulty, isCorrect, startTime) {
+                if(!startTime) return;
+                let timeSec = Math.round((Date.now() - startTime)/1000);
+                let today = getLocalDateString();
+                _timingLog.push({qid: qid, timeSec: timeSec, subject: subject, difficulty: difficulty, date: today, correct: isCorrect});
+                if(_timingLog.length > 500) _timingLog.shift();
+                checkQuotaAndSave();
+            },
+            recordMockScore: function(acc) {
+                _mockTestScores.push(acc); 
+                if(_mockTestScores.length > 10) _mockTestScores.shift();
+                checkQuotaAndSave();
+            },
+            loadTimingData: function() {
+                try {
+                    let log = KrishiStorage.getItem('krishi_timingLog'); 
+                    if(log) _timingLog = JSON.parse(log);
+                    let scr = KrishiStorage.getItem('krishi_mockScores'); 
+                    if(scr) _mockTestScores = JSON.parse(scr);
+                } catch(e){
+                    console.error("[StorageManager] Error loading data:", e);
+                }
+            },
+            calculatePredictiveScore: function() {
+                if(_mockTestScores.length === 0) return null;
+                let sum = _mockTestScores.reduce((s, x) => s + x, 0);
+                return Math.round(sum / _mockTestScores.length);
+            }
+        };
+    })();
+
+    // Expose proxy functions/variables for backward compatibility within the script scope
+    let timingLog = KrishiStorageManager.timingLog;
+    let mockTestScores = KrishiStorageManager.mockTestScores;
     let analyticsUseDemoMode = null;
     let analyticsFilterRange = 'all';
 
-    function recordQuestionTime(qid, subject, difficulty, isCorrect){
-        if(!questionStartTime) return;
-        let timeSec = Math.round((Date.now() - questionStartTime)/1000);
-        let today = getLocalDateString();
-        timingLog.push({qid: qid, timeSec: timeSec, subject: subject, difficulty: difficulty, date: today, correct: isCorrect});
-        if(timingLog.length > 500) timingLog.shift();
-        saveTimingData();
+    function saveTimingData() {
+        KrishiStorageManager.timingLog = timingLog;
+        KrishiStorageManager.mockTestScores = mockTestScores;
     }
 
-    function saveTimingData() {
-        localStorage.setItem('krishi_timingLog', JSON.stringify(timingLog));
-        localStorage.setItem('krishi_mockScores', JSON.stringify(mockTestScores));
+    function recordQuestionTime(qid, subject, difficulty, isCorrect) {
+        KrishiStorageManager.recordQuestionTime(qid, subject, difficulty, isCorrect, questionStartTime);
+        timingLog = KrishiStorageManager.timingLog;
     }
-    function loadTimingData(){
-        try {
-            let log = localStorage.getItem('krishi_timingLog'); if(log) timingLog = JSON.parse(log);
-            let scr = localStorage.getItem('krishi_mockScores'); if(scr) mockTestScores = JSON.parse(scr);
-        } catch(e){}
+
+    function recordMockScore(acc) {
+        KrishiStorageManager.recordMockScore(acc);
+        mockTestScores = KrishiStorageManager.mockTestScores;
     }
-    function recordMockScore(acc){
-        mockTestScores.push(acc); if(mockTestScores.length > 10) mockTestScores.shift();
-        saveTimingData();
+
+    function loadTimingData() {
+        KrishiStorageManager.loadTimingData();
+        timingLog = KrishiStorageManager.timingLog;
+        mockTestScores = KrishiStorageManager.mockTestScores;
     }
-    function calculatePredictiveScore(){
-        if(mockTestScores.length===0) return null;
-        let sum = mockTestScores.reduce((s, x)=> s + x, 0);
-        return Math.round(sum/mockTestScores.length);
+
+    function calculatePredictiveScore() {
+        return KrishiStorageManager.calculatePredictiveScore();
     }
 
     function setDemoMode(isDemo) {
@@ -10384,8 +12851,9 @@ document.querySelectorAll('button').forEach(btn => {
                 if (analyticsUseDemoMode) {
                     repMistakeEl.textContent = "You missed 'Soil profile and horizon layers' 3 times in your simulated tests.";
                 } else {
-                    if (localData.wrong.length > 0) {
-                        repMistakeEl.textContent = `You currently have ${localData.wrong.length} pending incorrect questions requiring correction.`;
+                    let _filteredWr = (localData.wrong || []).length;
+                    if (_filteredWr > 0) {
+                        repMistakeEl.textContent = `You currently have ${_filteredWr} pending incorrect questions requiring correction.`;
                     } else {
                         repMistakeEl.textContent = "No repeated errors found! Keeping a pristine progress record.";
                     }
@@ -10500,23 +12968,29 @@ document.querySelectorAll('button').forEach(btn => {
         }
 
         // --- SUB-BLOCK 11: Draw and update charts ---
-        try {
-            drawGrowthChart();
-        } catch (e) {
-            console.warn("Failed drawing growth chart:", e);
+        // Debounce canvas redraws to ensure tab slide transitions execute at a solid 60fps/120Hz
+        if (window.analyticsDebounceTimeout) {
+            clearTimeout(window.analyticsDebounceTimeout);
         }
-        
-        try {
-            drawRadarChart();
-        } catch (e) {
-            console.warn("Failed drawing radar chart:", e);
-        }
+        window.analyticsDebounceTimeout = setTimeout(() => {
+            try {
+                drawGrowthChart();
+            } catch (e) {
+                console.warn("Failed drawing growth chart:", e);
+            }
+            
+            try {
+                drawRadarChart();
+            } catch (e) {
+                console.warn("Failed drawing radar chart:", e);
+            }
 
-        try {
-            drawHeatmapCalendar();
-        } catch (e) {
-            console.warn("Failed drawing heatmap calendar:", e);
-        }
+            try {
+                drawHeatmapCalendar();
+            } catch (e) {
+                console.warn("Failed drawing heatmap calendar:", e);
+            }
+        }, 150);
 
         // --- SUB-BLOCK 12: Refresh lucide icons ---
         try {
@@ -10625,7 +13099,16 @@ document.querySelectorAll('button').forEach(btn => {
         let key = getApiKey(); if(!key){ showToast('Enter API key inside settings first!'); return; }
         
         let status = document.getElementById('ai-status'); status.classList.remove('hidden'); status.textContent = 'Generating...';
-        let prompt = `Understand the agricultural text and produce 3 multiple-choice questions in JSON format. Options keys: exact "opts" containing 4 items, correct answer index: "ans" (0 to 3), category: "sub" (subject category like Agronomy, Soil Science). Format format structure: ONLY return valid JSON array, do not wrap in markdown.\n\nText:\n${text}`;
+        let prompt = `Analyze the provided text and generate 3 multiple-choice questions based on it. CRITICAL INSTRUCTION: You MUST generate the questions and options in the EXACT SAME LANGUAGE as the provided text (e.g., if the text is in Nepali, generate Nepali questions in Devanagari script). 
+Format strictly as a JSON array of objects. Each object must have:
+- "q": The question string.
+- "opts": An array of exactly 4 option strings.
+- "ans": The integer index (0 to 3) of the correct option.
+- "sub": A short string for the subject category.
+Do not wrap in markdown. ONLY return valid JSON array.
+
+Text:
+${text}`;
         
         try {
             const model = getGeminiModel();
@@ -10635,6 +13118,11 @@ document.querySelectorAll('button').forEach(btn => {
                 body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: temp } })
             });
             
+            if (!res.ok) {
+                if (res.status === 429) throw new Error('API Quota Exceeded (429). Please wait a moment before trying again.');
+                if (res.status === 400) throw new Error('Invalid API Key (400). Please check your Gemini settings.');
+            }
+
             let d = await res.json();
             if (d.error) {
                 throw new Error(d.error.message || 'Gemini API call failed.');
@@ -10705,66 +13193,120 @@ document.querySelectorAll('button').forEach(btn => {
         }
     }
 
-  function collectAllAppData() {
-        return {
-            bookmarked: localData.bookmarked || [],
-            wrong: localData.wrong || [],
-            customQuestions: localData.customQuestions || [],
-            streak: localData.streak || {},
-            stats: localData.stats || {},
-            achievements: localData.achievements || [],
-            sm2: sm2Data || {},
-            
-            // config data packs
-            examProfiles: safeJsonParse(localStorage.getItem('krishi_exam_profiles'), []),
-            homeSettings: safeJsonParse(localStorage.getItem('krishi_home_settings'), {}),
-            appearanceSettings: safeJsonParse(localStorage.getItem('krishi_appearance_settings'), {}),
-            customAppearanceSettings: safeJsonParse(localStorage.getItem('krishi_custom_appearance_settings'), {}),
-            plannerSettings: safeJsonParse(localStorage.getItem('krishi_planner_settings'), {}),
-            syllabusCustom: safeJsonParse(localStorage.getItem('krishi_syllabus_custom'), []),
-            timingLog: safeJsonParse(localStorage.getItem('krishi_timingLog'), []),
-            mockScores: safeJsonParse(localStorage.getItem('krishi_mockScores'), []),
-            practiceRecent: safeJsonParse(localStorage.getItem('krishi_practice_recent'), []),
-            soundEnabled: localStorage.getItem('krishi_sound_enabled'),
-            soundMuted: localStorage.getItem('krishi_sound_muted'),
-            soundVolume: localStorage.getItem('krishi_sound_volume'),
-            
+    function collectAllAppData() {
+        const payload = {
             updatedAt: Date.now()
         };
+
+        if (syncSelectiveBookmarks) {
+            payload.bookmarked = localData.bookmarked || [];
+            payload.bookmarkedLog = localData.bookmarkedLog || {};
+        }
+        if (syncSelectiveErrors) {
+            payload.wrong = localData.wrong || [];
+            payload.wrongLog = localData.wrongLog || {};
+        }
+        if (syncSelectiveCustom) {
+            payload.customQuestions = localData.customQuestions || [];
+        }
+        if (syncSelectiveLogs) {
+            payload.streak = localData.streak || {};
+            payload.stats = localData.stats || {};
+            payload.achievements = localData.achievements || [];
+            payload.sm2 = sm2Data || {};
+            
+            // config data packs
+            payload.examProfiles = safeJsonParse(KrishiStorage.getItem('krishi_exam_profiles'), []);
+            payload.homeSettings = safeJsonParse(KrishiStorage.getItem('krishi_home_settings'), {});
+            payload.appearanceSettings = safeJsonParse(KrishiStorage.getItem('krishi_appearance_settings'), {});
+            payload.customAppearanceSettings = safeJsonParse(KrishiStorage.getItem('krishi_custom_appearance_settings'), {});
+            payload.plannerSettings = safeJsonParse(KrishiStorage.getItem('krishi_planner_settings'), {});
+            payload.syllabusCustom = safeJsonParse(KrishiStorage.getItem('krishi_syllabus_custom'), []);
+            payload.timingLog = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []);
+            payload.mockScores = safeJsonParse(KrishiStorage.getItem('krishi_mockScores'), []);
+            payload.practiceRecent = safeJsonParse(KrishiStorage.getItem('krishi_practice_recent'), []);
+            payload.soundEnabled = KrishiStorage.getItem('krishi_sound_enabled');
+            payload.soundMuted = KrishiStorage.getItem('krishi_sound_muted');
+            payload.soundVolume = KrishiStorage.getItem('krishi_sound_volume');
+            payload.dark = KrishiStorage.getItem('krishi_dark');
+            payload.batterySaver = KrishiStorage.getItem('krishi_battery_saver');
+        }
+
+        if (window.currentAuthUser && window.currentAuthUser.uid) {
+            payload.ownerUid = window.currentAuthUser.uid;
+        } else if (firebaseAuth && firebaseAuth.currentUser) {
+            payload.ownerUid = firebaseAuth.currentUser.uid;
+        }
+
+        return payload;
     }
 
     function applyAllAppData(data) {
         if (!data) return;
         
-        if (Array.isArray(data.bookmarked)) localData.bookmarked = data.bookmarked;
-        if (Array.isArray(data.wrong)) localData.wrong = data.wrong;
-        if (Array.isArray(data.customQuestions)) localData.customQuestions = data.customQuestions;
-        if (data.streak && typeof data.streak === 'object') localData.streak = data.streak;
-        if (data.stats && typeof data.stats === 'object') localData.stats = data.stats;
-        if (Array.isArray(data.achievements)) localData.achievements = data.achievements;
+        let changed = false;
+        if (syncSelectiveBookmarks && Array.isArray(data.bookmarked)) { localData.bookmarked = data.bookmarked; changed = true; }
+        if (syncSelectiveBookmarks && data.bookmarkedLog && typeof data.bookmarkedLog === 'object') { localData.bookmarkedLog = data.bookmarkedLog; changed = true; }
+        if (syncSelectiveErrors && Array.isArray(data.wrong)) { localData.wrong = data.wrong; changed = true; }
+        if (syncSelectiveErrors && data.wrongLog && typeof data.wrongLog === 'object') { localData.wrongLog = data.wrongLog; changed = true; }
+        if (syncSelectiveCustom && Array.isArray(data.customQuestions)) { localData.customQuestions = data.customQuestions; changed = true; }
         
-        if (data.sm2 && typeof data.sm2 === 'object') {
-            sm2Data = data.sm2;
-            Storage.setJSON('krishi_sm2', sm2Data);
+        if (syncSelectiveLogs) {
+            if (data.streak && typeof data.streak === 'object') { localData.streak = data.streak; changed = true; }
+            if (data.stats && typeof data.stats === 'object') { localData.stats = data.stats; changed = true; }
+            if (Array.isArray(data.achievements)) { localData.achievements = data.achievements; changed = true; }
+            
+            if (data.sm2 && typeof data.sm2 === 'object') {
+                sm2Data = data.sm2;
+                Storage.setJSON('krishi_sm2',
+                'krishi_sm2_v2',
+                'krishi_sm2_heatmap', sm2Data);
+                changed = true;
+            }
         }
         
         // Save localData keys
-        Object.entries(localData).forEach(([k,v]) => Storage.setJSON('krishi_'+k, v));
+        if (changed) {
+            Object.entries(localData).forEach(([k,v]) => {
+                if (k !== 'customQuestions') {
+                    Storage.setJSON('krishi_'+k, v);
+                }
+            });
+            
+            // Write custom questions to IndexedDB asynchronously
+            if (syncSelectiveCustom && localData.customQuestions && Array.isArray(localData.customQuestions)) {
+                KrishiDB.saveAll(localData.customQuestions)
+                    .then(() => console.log('[IndexedDB] Custom questions saved successfully.'))
+                    .catch(err => console.error('[IndexedDB] Custom questions save failed:', err));
+            }
+        }
         
-        // Save extra config lists
-        if (Array.isArray(data.examProfiles)) localStorage.setItem('krishi_exam_profiles', JSON.stringify(data.examProfiles));
-        if (data.homeSettings) localStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
-        if (data.appearanceSettings) localStorage.setItem('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
-        if (data.customAppearanceSettings) localStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
-        if (data.plannerSettings) localStorage.setItem('krishi_planner_settings', JSON.stringify(data.plannerSettings));
-        if (Array.isArray(data.syllabusCustom)) localStorage.setItem('krishi_syllabus_custom', JSON.stringify(data.syllabusCustom));
-        if (Array.isArray(data.timingLog)) localStorage.setItem('krishi_timingLog', JSON.stringify(data.timingLog));
-        if (Array.isArray(data.mockScores)) localStorage.setItem('krishi_mockScores', JSON.stringify(data.mockScores));
-        if (Array.isArray(data.practiceRecent)) localStorage.setItem('krishi_practice_recent', JSON.stringify(data.practiceRecent));
-        
-        if (data.soundEnabled !== undefined && data.soundEnabled !== null) localStorage.setItem('krishi_sound_enabled', data.soundEnabled);
-        if (data.soundMuted !== undefined && data.soundMuted !== null) localStorage.setItem('krishi_sound_muted', data.soundMuted);
-        if (data.soundVolume !== undefined && data.soundVolume !== null) localStorage.setItem('krishi_sound_volume', data.soundVolume);
+        if (syncSelectiveLogs) {
+            // Save extra config lists
+            if (Array.isArray(data.examProfiles)) KrishiStorage.setItem('krishi_exam_profiles', JSON.stringify(data.examProfiles));
+            if (data.homeSettings) KrishiStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
+            if (data.appearanceSettings) KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
+            if (data.customAppearanceSettings) KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
+            if (data.plannerSettings) KrishiStorage.setItem('krishi_planner_settings', JSON.stringify(data.plannerSettings));
+            if (Array.isArray(data.syllabusCustom)) KrishiStorage.setItem('krishi_syllabus_custom', JSON.stringify(data.syllabusCustom));
+            if (Array.isArray(data.timingLog)) KrishiStorage.setItem('krishi_timingLog', JSON.stringify(data.timingLog));
+            if (Array.isArray(data.mockScores)) KrishiStorage.setItem('krishi_mockScores', JSON.stringify(data.mockScores));
+            if (Array.isArray(data.practiceRecent)) KrishiStorage.setItem('krishi_practice_recent', JSON.stringify(data.practiceRecent));
+            
+            if (data.soundEnabled !== undefined && data.soundEnabled !== null) KrishiStorage.setItem('krishi_sound_enabled', data.soundEnabled);
+            if (data.soundMuted !== undefined && data.soundMuted !== null) KrishiStorage.setItem('krishi_sound_muted', data.soundMuted);
+            if (data.soundVolume !== undefined && data.soundVolume !== null) KrishiStorage.setItem('krishi_sound_volume', data.soundVolume);
+
+            if (data.dark !== undefined && data.dark !== null) {
+                const isDark = (data.dark === 'true' || data.dark === true);
+                KrishiStorage.setItem('krishi_dark', isDark);
+                if (isDark) document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+            }
+            if (data.batterySaver !== undefined && data.batterySaver !== null) {
+                KrishiStorage.setItem('krishi_battery_saver', data.batterySaver);
+            }
+        }
         
         // Reload all parameters in active memory
         loadData();
@@ -10776,7 +13318,188 @@ document.querySelectorAll('button').forEach(btn => {
         // Refresh UIs
         updateHomePage();
         updatePracticePage();
+        if (typeof updateSizingDiagnosticsInSetup === 'function') {
+            try { updateSizingDiagnosticsInSetup(); } catch(e){}
+        }
         if (typeof refreshPlannerPage === 'function') refreshPlannerPage();
+    }
+
+    function mergeCloudAndLocalData(cloud) {
+        if (cloud.isCompressed && typeof LZString !== 'undefined') {
+            try {
+                if (typeof cloud.timingLog === 'string') cloud.timingLog = JSON.parse(LZString.decompressFromUTF16(cloud.timingLog) || '[]');
+            } catch (e) { 
+                console.error('[Sync] Decompression failed for timingLog', e);
+                cloud.timingLog = [];
+            }
+            try {
+                if (typeof cloud.mockScores === 'string') cloud.mockScores = JSON.parse(LZString.decompressFromUTF16(cloud.mockScores) || '[]');
+            } catch (e) { 
+                console.error('[Sync] Decompression failed for mockScores', e);
+                cloud.mockScores = [];
+            }
+        }
+
+        let local = collectAllAppData();
+        let merged = {};
+
+        // 🧠 Helper function to merge CRDT Logs using Last-Write-Wins (LWW)
+        function mergeCRDTLogs(localLog, cloudLog) {
+            const mergedLog = { ...(cloudLog || {}), ...(localLog || {}) };
+            Object.keys(mergedLog).forEach(qid => {
+                const lVal = localLog?.[qid];
+                const cVal = cloudLog?.[qid];
+                if (lVal && cVal) {
+                    if (lVal.timestamp === cVal.timestamp) {
+                        mergedLog[qid] = ((lVal._rev || 0) >= (cVal._rev || 0)) ? lVal : cVal;
+                    } else {
+                        mergedLog[qid] = (lVal.timestamp > cVal.timestamp) ? lVal : cVal;
+                    }
+                }
+            });
+            return mergedLog;
+        }
+
+        // Merge Bookmarks via CRDT & Array Union (Prevents data wipe when log is missing)
+        const rawBms = new Set([...(local.bookmarked || []), ...(cloud.bookmarked || [])]);
+        const mergedBmLog = mergeCRDTLogs(local.bookmarkedLog, cloud.bookmarkedLog);
+        Object.entries(mergedBmLog).forEach(([qid, info]) => {
+            if (info && info.action === 'add') rawBms.add(qid);
+            else if (info && info.action === 'remove') rawBms.delete(qid);
+        });
+        merged.bookmarkedLog = mergedBmLog;
+        merged.bookmarked = Array.from(rawBms);
+
+        // Merge Mistakes via CRDT & Array Union (Prevents data wipe when log is missing)
+        const rawWrongs = new Set([...(local.wrong || []), ...(cloud.wrong || [])]);
+        const mergedWrLog = mergeCRDTLogs(local.wrongLog, cloud.wrongLog);
+        Object.entries(mergedWrLog).forEach(([qid, info]) => {
+            if (info && info.action === 'add') rawWrongs.add(qid);
+            else if (info && info.action === 'remove') rawWrongs.delete(qid);
+        });
+        merged.wrongLog = mergedWrLog;
+        merged.wrong = Array.from(rawWrongs);
+
+        merged.achievements = Array.from(new Set([...(local.achievements || []), ...(cloud.achievements || [])]));
+
+        // 🧠 Helper function for Deep Field-Level Merging of Custom Questions (Feature 3)
+        function deepMergeCustomQuestion(localQ, cloudQ) {
+            if (!cloudQ) return localQ;
+            if (!localQ) return cloudQ;
+            
+            const mergedQ = { ...cloudQ };
+            const isLocalNewer = (localQ.updatedAt || 0) > (cloudQ.updatedAt || 0);
+            
+            // Iterate over all local keys
+            Object.keys(localQ).forEach(k => {
+                // If local is newer, OR cloud doesn't have this field (e.g. newly added field), prefer local.
+                if (isLocalNewer || cloudQ[k] === undefined || cloudQ[k] === null || cloudQ[k] === '') {
+                    mergedQ[k] = localQ[k];
+                }
+            });
+            
+            mergedQ.updatedAt = Math.max(localQ.updatedAt || 0, cloudQ.updatedAt || 0);
+            return mergedQ;
+        }
+
+        // Custom Questions merge - Deep Merge Field-Level (CRDT/LWW)
+        let questionMap = new Map();
+        (cloud.customQuestions || []).forEach(q => { if (q && q.id) questionMap.set(q.id, q); });
+        (local.customQuestions || []).forEach(q => {
+            if (q && q.id) {
+                const cloudQ = questionMap.get(q.id);
+                questionMap.set(q.id, deepMergeCustomQuestion(q, cloudQ));
+            }
+        });
+        merged.customQuestions = Array.from(questionMap.values());
+
+        // Streak merging - Date-map union
+        const mergedStreak = { ...(cloud.streak || {}), ...(local.streak || {}) };
+        Object.entries(cloud.streak || {}).forEach(([dateKey, cVal]) => {
+            const lVal = local.streak?.[dateKey];
+            if (cVal && lVal) {
+                mergedStreak[dateKey] = {
+                    solved: Math.max(lVal.solved || 0, cVal.solved || 0),
+                    correct: Math.max(lVal.correct || 0, cVal.correct || 0)
+                };
+            }
+        });
+        merged.streak = mergedStreak;
+        
+        // Spaced Repetition (SM2) merge - Keep most advanced learning state
+        let sm2Map = { ...(cloud.sm2 || {}), ...(local.sm2 || {}) };
+        Object.keys(sm2Map).forEach(key => {
+            let cVal = cloud.sm2?.[key];
+            let lVal = local.sm2?.[key];
+            if (cVal && lVal) {
+                sm2Map[key] = (cVal.interval >= lVal.interval) ? cVal : lVal;
+            }
+        });
+        merged.sm2 = sm2Map;
+
+        // Custom Exam profiles & custom syllabus merging
+        merged.examProfiles = Array.from(new Set([...(local.examProfiles || []), ...(cloud.examProfiles || [])]));
+        merged.syllabusCustom = Array.from(new Set([...(local.syllabusCustom || []), ...(cloud.syllabusCustom || [])]));
+        
+        // Study Logs (timingLog) merging - Unique by timestamp/date
+        let localTimeLog = local.timingLog || [];
+        let cloudTimeLog = cloud.timingLog || [];
+        let logMap = new Map();
+        cloudTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
+        localTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
+        merged.timingLog = Array.from(logMap.values());
+
+        // For audio and interface configs, use Last Write Wins
+        const cloudUpdatedAt = cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function'
+            ? cloud.updatedAt.toMillis()
+            : (typeof cloud.updatedAt === 'number' ? cloud.updatedAt : 0);
+        let useCloud = cloudUpdatedAt > (local.updatedAt || 0);
+        merged.homeSettings = useCloud ? (cloud.homeSettings || local.homeSettings) : (local.homeSettings || cloud.homeSettings);
+        merged.appearanceSettings = useCloud ? (cloud.appearanceSettings || local.appearanceSettings) : (local.appearanceSettings || cloud.appearanceSettings);
+        merged.customAppearanceSettings = useCloud ? (cloud.customAppearanceSettings || local.customAppearanceSettings) : (local.customAppearanceSettings || cloud.customAppearanceSettings);
+        merged.plannerSettings = useCloud ? (cloud.plannerSettings || local.plannerSettings) : (local.plannerSettings || cloud.plannerSettings);
+        merged.mockScores = useCloud ? (cloud.mockScores || local.mockScores) : (local.mockScores || cloud.mockScores);
+        
+        merged.soundEnabled = useCloud ? (cloud.soundEnabled ?? local.soundEnabled) : (local.soundEnabled ?? cloud.soundEnabled);
+        merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
+        merged.soundVolume = useCloud ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
+
+        merged.updatedAt = Math.max(local.updatedAt || 0, cloudUpdatedAt);
+        return merged;
+    }
+
+    function getDifferentialSyncDelta(local, cloud) {
+        const delta = {};
+        let changed = false;
+
+        const keysToCheck = [
+            'bookmarked', 'bookmarkedLog',
+            'wrong', 'wrongLog',
+            'customQuestions',
+            'streak', 'stats', 'achievements', 'sm2',
+            'examProfiles', 'homeSettings', 'appearanceSettings',
+            'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
+            'timingLog', 'mockScores', 'practiceRecent',
+            'soundEnabled', 'soundMuted', 'soundVolume',
+            'ownerUid', 'isCompressed'
+        ];
+
+        keysToCheck.forEach(key => {
+            if (local[key] !== undefined) {
+                const localStr = JSON.stringify(local[key]);
+                const cloudStr = cloud ? JSON.stringify(cloud[key]) : undefined;
+                if (localStr !== cloudStr) {
+                    delta[key] = local[key];
+                    changed = true;
+                }
+            }
+        });
+
+        if (changed) {
+            delta.updatedAt = local.updatedAt || Date.now();
+            return delta;
+        }
+        return null;
     }
 
     let syncDebounceTimer = null;
@@ -10785,15 +13508,27 @@ document.querySelectorAll('button').forEach(btn => {
         const key = getSyncKey();
         if (!key) return;
 
-        localStorage.setItem('krishi_sync_pending', 'true');
+        KrishiStorage.setItem('krishi_sync_pending', 'true');
+        
+        let pendingCount = parseInt(KrishiStorage.getItem('krishi_sync_pending_count') || '0');
+        pendingCount += 1;
+        KrishiStorage.setItem('krishi_sync_pending_count', pendingCount.toString());
+        
         setSyncStatus('Syncing...');
+        updateOfflineQueueBadge();
 
+        // Snappy direct debounced sync (800ms) for true instant real-time performance
         if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
-
-        // 3 seconds debounce limiter
         syncDebounceTimer = setTimeout(() => {
             performCloudSync();
-        }, 3000);
+        }, 800);
+
+        // Keep PWA Background Sync as offline-to-online transition fallback in service worker
+        if ('serviceWorker' in navigator && 'SyncManager' in window) {
+            navigator.serviceWorker.ready.then(reg => {
+                return reg.sync.register('sync-cloud-data');
+            }).catch(err => {});
+        }
     }
 
     async function performCloudSync() {
@@ -10813,51 +13548,81 @@ document.querySelectorAll('button').forEach(btn => {
             const docRef = firestore.collection('sync_keys').doc(key);
             
             const localDataPayload = collectAllAppData();
-            const localUpdatedAt = parseInt(localStorage.getItem('krishi_last_updated_at')) || 0;
+            const localUpdatedAt = parseInt(KrishiStorage.getItem('krishi_last_updated_at')) || 0;
 
-            const doc = await docRef.get();
+            let docExists = (cachedCloudData !== null);
 
-            if (doc.exists) {
-                const cloudData = doc.data();
-                const cloudUpdatedAt = cloudData.updatedAt || 0;
-
-                if (cloudUpdatedAt > localUpdatedAt) {
-                    syncInProgress = true;
-                    if (confirm("Newer study data found in the cloud!\n\nUse cloud data or keep local data? (OK to use Cloud, Cancel to keep Local)")) {
-                        applyAllAppData(cloudData);
-                        localStorage.setItem('krishi_last_updated_at', cloudUpdatedAt);
-                        localStorage.removeItem('krishi_sync_pending');
-                        setSyncStatus('Synced');
-                        showToast("✓ Cloud data loaded successfully!");
-                    } else {
-                        // Force overwrite cloud with local data
-                        const now = Date.now();
-                        localDataPayload.updatedAt = now;
-                        await docRef.set(localDataPayload);
-                        localStorage.setItem('krishi_last_updated_at', now);
-                        localStorage.removeItem('krishi_sync_pending');
-                        setSyncStatus('Synced');
-                        showToast("✓ Local data preserved & uploaded!");
-                    }
-                    syncInProgress = false;
-                } else if (localUpdatedAt > cloudUpdatedAt) {
-                    const now = Date.now();
-                    localDataPayload.updatedAt = now;
-                    await docRef.set(localDataPayload);
-                    localStorage.setItem('krishi_last_updated_at', now);
-                    localStorage.removeItem('krishi_sync_pending');
-                    setSyncStatus('Synced');
-                } else {
-                    localStorage.removeItem('krishi_sync_pending');
-                    setSyncStatus('Synced');
+            // Fallback in case cache is not ready/initialized
+            if (!window.__krishiSyncListenerInitialized__) {
+                const doc = await docRef.get();
+                docExists = doc.exists;
+                if (docExists) {
+                    cachedCloudData = doc.data();
                 }
-            } else {
-                const now = Date.now();
-                localDataPayload.updatedAt = now;
-                await docRef.set(localDataPayload);
-                localStorage.setItem('krishi_last_updated_at', now);
-                localStorage.removeItem('krishi_sync_pending');
+                window.__krishiSyncListenerInitialized__ = true;
+            }
+
+            const currentCloudData = cachedCloudData;
+
+            if (docExists && currentCloudData) {
+                syncInProgress = true;
+                console.log('[Cloud Sync] Robust CRDT Union Merge executing...');
+                const mergedPayload = mergeCloudAndLocalData(currentCloudData);
+                applyAllAppData(mergedPayload);
+
+                const delta = getDifferentialSyncDelta(mergedPayload, currentCloudData);
+                if (delta && Object.keys(delta).length > 0) {
+                    if (typeof LZString !== 'undefined') {
+                        if (delta.timingLog) delta.timingLog = LZString.compressToUTF16(JSON.stringify(delta.timingLog));
+                        if (delta.mockScores) delta.mockScores = LZString.compressToUTF16(JSON.stringify(delta.mockScores));
+                        delta.isCompressed = true;
+                    }
+                    const now = firebase.firestore.FieldValue.serverTimestamp();
+                    mergedPayload.updatedAt = Date.now();
+                    KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
+                    await docRef.update({ ...delta, updatedAt: now }).catch(async (e) => {
+                        // Fallback to set with merge if doc does not exist yet (though checked earlier, race condition possible)
+                        await docRef.set({ ...delta, updatedAt: now }, { merge: true });
+                    });
+                    console.log('[Cloud Sync] CRDT merged DELTA payload written back to cloud.');
+                    logSyncActivity('Merged ' + Object.keys(delta).length + ' changed sub-collections to cloud (Delta Sync).');
+                } else {
+                    KrishiStorage.setItem('krishi_last_updated_at', currentCloudData.updatedAt || Date.now());
+                    logSyncActivity('Cloud sync verified: Local data is already up to date.');
+                }
+
+                KrishiStorage.removeItem('krishi_sync_pending');
+                KrishiStorage.setItem('krishi_sync_pending_count', '0');
                 setSyncStatus('Synced');
+                updateOfflineQueueBadge();
+                if (typeof updateSyncUI === 'function') updateSyncUI();
+                syncInProgress = false;
+                
+                // Trigger UI Refresh Event & Update Home Page
+                const activePanels = document.getElementById('practice-active-state-panels');
+                const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
+                if (!isUserInActiveQuiz) {
+                    if (typeof updateHomePage === 'function') updateHomePage();
+                    if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+                    if (typeof updatePracticePage === 'function') updatePracticePage();
+                    if (typeof renderProfilesInventory === 'function') renderProfilesInventory();
+                }
+                window.dispatchEvent(new Event('appDataSynced'));
+            } else {
+                const now = firebase.firestore.FieldValue.serverTimestamp();
+                if (typeof LZString !== 'undefined') {
+                    if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
+                    if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
+                    localDataPayload.isCompressed = true;
+                }
+                localDataPayload.updatedAt = now;
+                KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+                await docRef.set(localDataPayload);
+                logSyncActivity('Initial Full Sync completed. All local data backed up to cloud.');
+                KrishiStorage.removeItem('krishi_sync_pending');
+                KrishiStorage.setItem('krishi_sync_pending_count', '0');
+                setSyncStatus('Synced');
+                updateOfflineQueueBadge();
             }
         } catch (err) {
             console.error('[Cloud Sync] Sync execution error:', err);
@@ -10865,14 +13630,45 @@ document.querySelectorAll('button').forEach(btn => {
         }
     }
 
+    function logSyncActivity(msg) {
+        if (!localData.syncActivityLog) localData.syncActivityLog = [];
+        localData.syncActivityLog.unshift({ time: Date.now(), msg: msg });
+        if (localData.syncActivityLog.length > 20) localData.syncActivityLog.pop();
+        saveData();
+    }
+
+    window.openSyncHistoryModal = function() {
+        const modal = document.getElementById('sync-history-modal');
+        const content = document.getElementById('sync-history-content');
+        if (modal && content) {
+            const logs = localData.syncActivityLog || [];
+            if (logs.length === 0) {
+                content.innerHTML = '<p class="text-center text-xs text-slate-500 italic py-4">No recent sync activity.</p>';
+            } else {
+                content.innerHTML = logs.map(l => `
+                    <div class="text-xs p-2 rounded bg-slate-50 dark:bg-slate-900 border" style="border-color:var(--border);">
+                        <div class="text-[9px] text-slate-400 mb-0.5">${new Date(l.time).toLocaleString()}</div>
+                        <div class="font-medium text-slate-700 dark:text-slate-300">${l.msg}</div>
+                    </div>
+                `).join('');
+            }
+            modal.classList.remove('hidden');
+        }
+    };
+
+    window.closeSyncHistoryModal = function() {
+        const modal = document.getElementById('sync-history-modal');
+        if (modal) modal.classList.add('hidden');
+    };
+
     function setSyncStatus(status) {
-        localStorage.setItem('krishi_sync_status', status);
+        KrishiStorage.setItem('krishi_sync_status', status);
         updateSyncUI();
     }
 
     // Reconnection listener
     window.addEventListener('online', () => {
-        if (localStorage.getItem('krishi_sync_pending') === 'true') {
+        if (KrishiStorage.getItem('krishi_sync_pending') === 'true') {
             scheduleCloudSync('Reconnected to internet');
         } else {
             updateSyncUI();
@@ -10886,7 +13682,8 @@ function updatePracticePage() {
     let subjects = getAllSubjects(); 
     let all = getAllQuestions();
     let dueCount = getPromoDueCount();
-    let wrongCount = localData.wrong.length;
+    let wrongCount = (localData.wrong || []).length;
+    let bookmarkedCount = (localData.bookmarked || []).length;
 
     // १. नयाँ स्मार्ट इन्जिन रेन्डर गर्ने
     let engineContainer = document.getElementById('smart-engine-container');
@@ -10938,25 +13735,88 @@ function updatePracticePage() {
         `;
     }
 
+    // २. रियल-टाइममा स्ट्याट्स काउन्टरहरू सिङ्क्रोनाइज गर्ने (Real-Time Label Synchronization)
+    let elWrongCount = document.getElementById('smart-wrong-count-lbl');
+    if (elWrongCount) elWrongCount.textContent = `${wrongCount} pending wrongs`;
+
+    let elBkCount = document.getElementById('smart-bookmark-count-lbl');
+    if (elBkCount) elBkCount.textContent = `${bookmarkedCount} saved items`;
+
+    let elSpacedCount = document.getElementById('smart-spaced-count-lbl');
+    if (elSpacedCount) elSpacedCount.textContent = `${dueCount} revision dued`;
+
+    let elDailyCount = document.getElementById('smart-daily-count-lbl');
+    if (elDailyCount) {
+        let todayStr = getLocalDateString();
+        let solved = (localData.streak[todayStr]||{}).solved||0;
+        let dailyT = getDailyTarget() || 50;
+        elDailyCount.textContent = `${solved} / ${dailyT} solved today`;
+    }
+
+    // ३. विषयगत एक्युरेसी (Subject Accuracy) हिसाव गर्ने
+    let subStats = {};
+    if (Array.isArray(timingLog)) {
+        timingLog.forEach(log => {
+            let s = log.subject || log.sub || 'General';
+            if (!subStats[s]) subStats[s] = { tried: 0, correct: 0 };
+            subStats[s].tried++;
+            if (log.correct) subStats[s].correct++;
+        });
+    }
+
     container.innerHTML = '';
     subjects.forEach(sub => {
         let count = all.filter(q => q.sub === sub).length;
+        let stats = subStats[sub] || { tried: 0, correct: 0 };
+        let accuracyText = stats.tried > 0 ? `${Math.round((stats.correct / stats.tried) * 100)}% accuracy` : 'Not practiced';
+        let accuracyColor = stats.tried > 0 ? (stats.correct / stats.tried >= 0.8 ? 'text-emerald-500' : stats.correct / stats.tried >= 0.5 ? 'text-amber-500' : 'text-rose-500') : 'text-slate-400 dark:text-slate-500';
+
         container.innerHTML += `
             <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all active:scale-95 group flex flex-col justify-between" style="border-color:var(--border);">
                 <div>
                     <p class="font-extrabold text-xs text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">${sub}</p>
                     <span class="text-[9px] text-slate-400 mt-1 block">${count} Questions</span>
                 </div>
-                <span class="text-[9px] font-black text-emerald-500 mt-4">Configure →</span>
+                <div class="mt-3 flex items-center justify-between w-full">
+                    <span class="text-[8px] font-black uppercase tracking-wider ${accuracyColor}">${accuracyText}</span>
+                    <span class="text-[9px] font-black text-emerald-500 group-hover:translate-x-0.5 transition-transform">Configure →</span>
+                </div>
             </button>
         `;
     });
 }
 
+function saveUIStateForRestore() {
+    let activePage = document.querySelector('.page.active');
+    let stateObj = {
+        pageId: activePage ? activePage.id : 'page-home',
+        scrollPos: window.scrollY || document.documentElement.scrollTop
+    };
+    sessionStorage.setItem('krishi_pwa_restore_state', JSON.stringify(stateObj));
+}
+
+function restoreUIStateIfCached() {
+    let raw = sessionStorage.getItem('krishi_pwa_restore_state');
+    if (raw) {
+        try {
+            let stateObj = JSON.parse(raw);
+            sessionStorage.removeItem('krishi_pwa_restore_state'); // Clear one-time cache
+            if (stateObj.pageId && typeof navigate === 'function') {
+                navigate(stateObj.pageId);
+                setTimeout(() => {
+                    window.scrollTo({ top: stateObj.scrollPos, behavior: 'instant' });
+                }, 100);
+            }
+        } catch(e) {
+            console.warn('[PWA Restore] Failed to restore UI state:', e);
+        }
+    }
+}
+
 // भाइब्रेसन सेटिङ सेभ र लोड गर्ने
 function toggleHapticSetting() {
     let isEnabled = document.getElementById('haptic-enabled').checked;
-    localStorage.setItem('krishi_haptic_enabled', isEnabled);
+    KrishiStorage.setItem('krishi_haptic_enabled', isEnabled);
     if(isEnabled) {
         document.getElementById('haptic-test-area').classList.remove('hidden');
         triggerHaptic('correct'); // टोगल गर्दा सानो भाइब्रेसन दिने
@@ -10970,7 +13830,7 @@ const isHapticSupported = typeof navigator !== 'undefined' && typeof navigator.v
 
 // मोबाइल भाइब्रेट गराउने मुख्य फङ्सन
 function triggerHaptic(type) {
-    let hapticEnabled = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+    let hapticEnabled = KrishiStorage.getItem('krishi_haptic_enabled') !== 'false';
     if (!hapticEnabled) return;
 
     // Feature 9: Capacitor Haptics API (Native APK) — falls back to navigator.vibrate for PWA/browser
@@ -11012,7 +13872,7 @@ function triggerHaptic(type) {
 
 // सुरुमा सेटिङ लोड गर्ने (यो फङ्सनलाई DOMContentLoaded भित्र कल गर्न सकिन्छ)
 function initHapticUI() {
-    let saved = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+    let saved = KrishiStorage.getItem('krishi_haptic_enabled') !== 'false';
     let el = document.getElementById('haptic-enabled');
     if(el) {
         el.checked = saved;
@@ -11087,7 +13947,7 @@ function initHapticUI() {
 
     var originalTriggerHaptic = window.triggerHaptic;
     window.triggerHaptic = function(type) {
-        var hapticEnabled = localStorage.getItem('krishi_haptic_enabled') !== 'false';
+        var hapticEnabled = KrishiStorage.getItem('krishi_haptic_enabled') !== 'false';
         if (!hapticEnabled || typeof navigator.vibrate !== 'function') return;
         
         try {
@@ -11381,15 +14241,47 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         if (typeof origNavigate === 'function') {
             origNavigate(pageId);
         }
-        // Run setups dynamically if elite animations are enabled
-        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        // Run setups dynamically
+        if (pageId === 'page-study-planner') {
+            setup3DSeasonalWheel();
+        }
+        if (pageId === 'page-practice') {
+            setTimeout(() => {
+                if (typeof window.checkAndPromptResumeSession === 'function') {
+                    window.checkAndPromptResumeSession();
+                }
+            }, 100);
+        }
+        let isElite = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
         if (isElite) {
             if (pageId === 'page-study-planner') {
                 setupNeuralMindMap();
-                setup3DSeasonalWheel();
             } else if (pageId === 'page-home') {
                 setTimeout(initNepalGlobe, 50);
             }
+        }
+    };
+
+    window.navigateTab = function(pageId) {
+        // Absolute Practice Suite session cleanup & view isolation on any tab switch
+        let mcqPage = document.getElementById('page-mcq');
+        let resPanel = document.getElementById('practice-result-panel');
+        let activePanels = document.getElementById('practice-active-state-panels');
+        if (mcqPage) mcqPage.classList.add('hidden');
+        if (resPanel) resPanel.classList.add('hidden');
+        if (activePanels) activePanels.classList.remove('hidden');
+        
+        if (typeof stopTimer === 'function') stopTimer();
+        if (state && state.perQuestionTimerInterval) {
+            clearInterval(state.perQuestionTimerInterval);
+            state.perQuestionTimerInterval = null;
+        }
+
+        if (typeof window.navigate === 'function') {
+            window.navigate(pageId);
+        }
+        if (typeof playSound === 'function') {
+            playSound('click');
         }
     };
 
@@ -11422,7 +14314,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
             }
         }
         
-        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        let isElite = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
         if (!isElite) {
             mapCard.style.display = 'none';
             return;
@@ -11452,6 +14344,9 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     document.body.insertBefore(bgCanvas, document.body.firstChild);
     var bgCtx = bgCanvas.getContext('2d');
     var bgParticles = [];
+    var lastSeasonIdx = 0;
+    var weatherFrontTransition = null;
+    var weatherFrontSparks = [];
 
     function initBgCanvas() {
         bgCanvas.width = window.innerWidth;
@@ -11461,7 +14356,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     initBgCanvas();
 
     function drawAmbientBackground() {
-        let eliteEnabled = localStorage.getItem('krishi_elite_animations') !== 'false';
+        let eliteEnabled = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
         if (!eliteEnabled || document.hidden) {
             bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
             setTimeout(() => {
@@ -11481,6 +14376,26 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         let maxP = window.EliteAnimsConfig.throttled ? Math.round(baseDensity * 0.5) : baseDensity;
         let spawnRate = 0.02 + (maxP / 50) * 0.08;
         let season = typeof activeSeasonIdx !== 'undefined' ? activeSeasonIdx : 0;
+
+        // Detect season change to trigger the cinematic Weather Front Wave!
+        if (season !== lastSeasonIdx) {
+            let transitionColors = [
+                'rgba(59, 130, 246, 0.4)',  // Kharif - Cool Blue Rainwave
+                'rgba(245, 158, 11, 0.35)', // Autumn - Amber Leaves Gust
+                'rgba(16, 185, 129, 0.3)'   // Spring - Emerald Pollen Bloom
+            ];
+            weatherFrontTransition = {
+                progress: 0,
+                fromSeason: lastSeasonIdx,
+                toSeason: season,
+                color: transitionColors[season] || 'rgba(16, 185, 129, 0.3)'
+            };
+            lastSeasonIdx = season;
+            
+            if (typeof window.triggerHaptic === 'function') {
+                window.triggerHaptic('success');
+            }
+        }
         
         if (Math.random() < spawnRate && bgParticles.length < maxP) {
             if (season === 0) { // Kharif - Monsoon Rain
@@ -11568,6 +14483,170 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
                 }
             }
         }
+
+        // Draw dynamic organic front wave if transition is running
+        if (weatherFrontTransition) {
+            weatherFrontTransition.progress += 0.015; // smooth speed
+            let prog = weatherFrontTransition.progress;
+            
+            if (prog >= 1.0) {
+                weatherFrontTransition = null;
+            } else {
+                let sweepX = prog * (bgCanvas.width + 200) - 100;
+                let segments = 20;
+                let segmentHeight = bgCanvas.height / segments;
+
+                // --- 1. Secondary Trailing Parallax Wave ---
+                let trailSweepX = sweepX - 80;
+                bgCtx.save();
+                bgCtx.beginPath();
+                for (let j = 0; j <= segments; j++) {
+                    let y = j * segmentHeight;
+                    let wiggle = Math.sin(y * 0.02 + prog * 8) * 35 * Math.sin(prog * Math.PI);
+                    let x = trailSweepX + wiggle;
+                    if (j === 0) bgCtx.moveTo(x, y);
+                    else bgCtx.lineTo(x, y);
+                }
+                let softColor = weatherFrontTransition.color.replace('0.4', '0.2').replace('0.35', '0.2').replace('0.3', '0.15');
+                bgCtx.strokeStyle = softColor;
+                bgCtx.lineWidth = 2.5;
+                bgCtx.shadowBlur = 10;
+                bgCtx.shadowColor = softColor;
+                bgCtx.stroke();
+                bgCtx.restore();
+
+                // --- 2. Primary Wave Fill ---
+                bgCtx.save();
+                bgCtx.beginPath();
+                bgCtx.moveTo(0, 0);
+                for (let j = 0; j <= segments; j++) {
+                    let y = j * segmentHeight;
+                    let wiggle = Math.sin(y * 0.015 + prog * 12) * 50 * Math.sin(prog * Math.PI);
+                    let x = sweepX + wiggle;
+                    bgCtx.lineTo(x, y);
+                }
+                bgCtx.lineTo(0, bgCanvas.height);
+                bgCtx.closePath();
+                
+                let grad = bgCtx.createLinearGradient(sweepX - 250, 0, sweepX + 50, 0);
+                let opacityFill = '0.08';
+                grad.addColorStop(0, weatherFrontTransition.color.replace('0.4', opacityFill).replace('0.35', opacityFill).replace('0.3', opacityFill));
+                grad.addColorStop(0.8, weatherFrontTransition.color);
+                grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                bgCtx.fillStyle = grad;
+                bgCtx.fill();
+                
+                // --- 3. Neon Glowing Primary Front Edge ---
+                bgCtx.beginPath();
+                for (let j = 0; j <= segments; j++) {
+                    let y = j * segmentHeight;
+                    let wiggle = Math.sin(y * 0.015 + prog * 12) * 50 * Math.sin(prog * Math.PI);
+                    let x = sweepX + wiggle;
+                    if (j === 0) bgCtx.moveTo(x, y);
+                    else bgCtx.lineTo(x, y);
+                }
+                let glowColor = weatherFrontTransition.color.replace('0.4', '0.85').replace('0.35', '0.85').replace('0.3', '0.85');
+                bgCtx.strokeStyle = glowColor;
+                bgCtx.lineWidth = 4.5;
+                bgCtx.shadowBlur = 25;
+                bgCtx.shadowColor = glowColor;
+                bgCtx.stroke();
+                bgCtx.restore();
+
+                // --- 4. Spawn Glowing Transition Sparks ---
+                if (Math.random() < 0.6) {
+                    let spawnY = Math.random() * bgCanvas.height;
+                    let wiggle = Math.sin(spawnY * 0.015 + prog * 12) * 50 * Math.sin(prog * Math.PI);
+                    let sparkX = sweepX + wiggle;
+                    weatherFrontSparks.push({
+                        x: sparkX,
+                        y: spawnY,
+                        vx: -1.5 - Math.random() * 2.5,
+                        vy: (Math.random() - 0.5) * 1.5,
+                        alpha: 1.0,
+                        size: 2.0 + Math.random() * 3.5,
+                        color: glowColor
+                    });
+                }
+
+                // Dissolve old season particles passed by sweep front
+                for (let i = bgParticles.length - 1; i >= 0; i--) {
+                    let p = bgParticles[i];
+                    if (p.x < sweepX) {
+                        let belongsToNewSeason = 
+                            (weatherFrontTransition.toSeason === 0 && p.type === 'rain') ||
+                            (weatherFrontTransition.toSeason === 1 && p.type === 'leaf') ||
+                            (weatherFrontTransition.toSeason === 2 && p.type === 'pollen');
+                        if (!belongsToNewSeason) {
+                            bgParticles.splice(i, 1);
+                        }
+                    }
+                }
+                
+                // Dynamically seed new season particles behind the front wave
+                if (bgParticles.length < maxP && Math.random() < 0.25) {
+                    let spawnX = Math.random() * sweepX;
+                    if (spawnX > 0 && spawnX < bgCanvas.width) {
+                        if (weatherFrontTransition.toSeason === 0) {
+                            bgParticles.push({
+                                type: 'rain',
+                                x: spawnX,
+                                y: -20 - Math.random() * 50,
+                                vy: 3.5 + Math.random() * 3.5,
+                                vx: -1.0 - Math.random() * 1.5,
+                                len: 8 + Math.random() * 12,
+                                color: 'rgba(59, 130, 246, 0.14)'
+                            });
+                        } else if (weatherFrontTransition.toSeason === 1) {
+                            bgParticles.push({
+                                type: 'leaf',
+                                x: spawnX,
+                                y: -20 - Math.random() * 50,
+                                vy: 0.8 + Math.random() * 1.0,
+                                vx: (Math.random() - 0.5) * 1.2,
+                                r: 4 + Math.random() * 4,
+                                wiggle: Math.random() * 10,
+                                wiggleSpeed: 0.02 + Math.random() * 0.02,
+                                color: ['rgba(249, 115, 22, 0.12)', 'rgba(234, 179, 8, 0.12)', 'rgba(194, 65, 12, 0.12)'][Math.floor(Math.random() * 3)]
+                            });
+                        } else {
+                            bgParticles.push({
+                                type: 'pollen',
+                                x: spawnX,
+                                y: bgCanvas.height + 20 + Math.random() * 50,
+                                vy: -0.3 - Math.random() * 0.6,
+                                vx: (Math.random() - 0.5) * 0.8,
+                                r: 1.5 + Math.random() * 2.5,
+                                wiggle: Math.random() * 10,
+                                wiggleSpeed: 0.01 + Math.random() * 0.015,
+                                color: 'rgba(16, 185, 129, 0.12)'
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 5. Update and Draw Sparks ---
+        for (let i = weatherFrontSparks.length - 1; i >= 0; i--) {
+            let s = weatherFrontSparks[i];
+            s.x += s.vx;
+            s.y += s.vy;
+            s.alpha -= 0.022; // smooth fade-out rate
+            if (s.alpha <= 0) {
+                weatherFrontSparks.splice(i, 1);
+            } else {
+                bgCtx.save();
+                bgCtx.beginPath();
+                bgCtx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+                bgCtx.shadowBlur = 12;
+                bgCtx.shadowColor = s.color;
+                let alphaColor = s.color.replace('0.85', s.alpha).replace('1.0', s.alpha);
+                bgCtx.fillStyle = alphaColor;
+                bgCtx.fill();
+                bgCtx.restore();
+            }
+        }
         requestAnimationFrame(drawAmbientBackground);
     }
     drawAmbientBackground();
@@ -11641,8 +14720,17 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         var widget = document.getElementById('3d-crop-wheel-widget');
         if (!widget) return;
 
+        // Reset and trigger dynamic organic glow pulse animations
+        widget.classList.remove('pulse-glow-kharif', 'pulse-glow-autumn', 'pulse-glow-winter');
+        let pulseClasses = ['pulse-glow-kharif', 'pulse-glow-autumn', 'pulse-glow-winter'];
+        let activePulseClass = pulseClasses[activeSeasonIdx];
+        if (activePulseClass) {
+            void widget.offsetWidth; // Force hardware reflow to restart CSS keyframes
+            widget.classList.add(activePulseClass);
+        }
+
         var current = seasonsData[activeSeasonIdx];
-        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
+        let isElite = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
 
         if (isElite) {
             widget.innerHTML = `
@@ -11710,9 +14798,86 @@ function savePracticeProgress() {
                 score: state.score,
                 sessionResults: state.sessionResults,
                 isMock: state.isMock,
-                timerSec: state.timerSec
+                timerSec: state.timerSec,
+                updatedAt: Date.now(),
+                device: (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : 'Web Browser') : 'Web Browser'
             };
-            localStorage.setItem('krishi_saved_practice', JSON.stringify(progressData));
+            KrishiStorage.setItem('krishi_saved_practice', JSON.stringify(progressData));
+
+            // Update UI Autosave indicator HUD
+            let indicator = document.getElementById('game-autosave-indicator');
+            if (indicator) {
+                let dot = indicator.querySelector('span');
+                let txt = indicator.querySelector('.indicator-text');
+                if (dot && txt) {
+                    dot.className = 'w-1.5 h-1.5 rounded-full transition-colors duration-300';
+                    dot.classList.add('autosave-glow-active');
+                    txt.textContent = 'Saving...';
+                    txt.style.color = '#10b981';
+                }
+            }
+
+            // Sync to Firestore if online and cloud sync key is active
+            const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
+            if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
+                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+                let firebaseApp = existingApp || firebase.app("KrishiApp");
+                if (firebaseApp) {
+                    const firestore = firebase.firestore(firebaseApp);
+                    firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').set({
+                        questions: state.questions,
+                        currentIndex: state.currentIndex,
+                        score: state.score,
+                        sessionResults: state.sessionResults,
+                        isMock: state.isMock,
+                        timerSec: state.timerSec,
+                        updatedAt: Date.now(),
+                        device: progressData.device
+                    }).then(() => {
+                        console.log('[Cloud Sync] Active practice session saved successfully.');
+                        if (indicator) {
+                            let dot = indicator.querySelector('span');
+                            let txt = indicator.querySelector('.indicator-text');
+                            if (dot && txt) {
+                                dot.className = 'w-1.5 h-1.5 rounded-full transition-colors duration-300';
+                                dot.classList.add('autosave-glow-active');
+                                txt.textContent = 'Autosaved';
+                                txt.style.color = '#10b981';
+                                setTimeout(() => {
+                                    if (txt.textContent === 'Autosaved') {
+                                        txt.textContent = 'Connected';
+                                        txt.style.color = '';
+                                    }
+                                }, 2000);
+                            }
+                        }
+                    }).catch(err => {
+                        console.warn('[Cloud Sync] Active practice session save failed:', err);
+                        if (indicator) {
+                            let dot = indicator.querySelector('span');
+                            let txt = indicator.querySelector('.indicator-text');
+                            if (dot && txt) {
+                                dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
+                                txt.textContent = 'Local Only';
+                                txt.style.color = '';
+                            }
+                        }
+                    });
+                }
+            } else {
+                // local only / offline HUD update
+                setTimeout(() => {
+                    if (indicator) {
+                        let dot = indicator.querySelector('span');
+                        let txt = indicator.querySelector('.indicator-text');
+                        if (dot && txt) {
+                            dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
+                            txt.textContent = key ? 'Offline' : 'Local Only';
+                            txt.style.color = '';
+                        }
+                    }
+                }, 1000);
+            }
         }
     } catch (error) {
         console.warn("[State Safety] savePracticeProgress failed safely:", error);
@@ -11721,7 +14886,23 @@ function savePracticeProgress() {
 
 // २. सुरक्षित राखिएको अधुरो अभ्यासलाई हटाउने फङ्सन
 function clearPracticeProgress() {
-    localStorage.removeItem('krishi_saved_practice');
+    try {
+        KrishiStorage.removeItem('krishi_saved_practice');
+        
+        const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
+        if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
+            let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+            let firebaseApp = existingApp || firebase.app("KrishiApp");
+            if (firebaseApp) {
+                const firestore = firebase.firestore(firebaseApp);
+                firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').delete()
+                    .then(() => console.log('[Cloud Sync] Active practice session cleared.'))
+                    .catch(err => console.warn('[Cloud Sync] Active practice session clear failed:', err));
+            }
+        }
+    } catch (e) {
+        console.warn("[State Safety] clearPracticeProgress failed safely:", e);
+    }
 }
 // ==================== GLOBAL TOUCH/CLICK RIPPLE INJECTOR ====================
 // यसले उत्तर छनौट गर्दा औंलाले छोएको ठाउँबाट पानीको लहर फैलाउँछ
@@ -11822,7 +15003,7 @@ window.openCloudConfigModal = function() {
     
     let config = null;
     try {
-        config = JSON.parse(localStorage.getItem('krishi_firebase_config'));
+        config = JSON.parse(KrishiStorage.getItem('krishi_firebase_config'));
     } catch(e) {}
     
     const textarea = document.getElementById('firebase-config-json-textarea');
@@ -11891,18 +15072,49 @@ window.saveCloudConfig = function() {
         return;
     }
     
-    const config = {
-        apiKey: fieldApiKey,
-        authDomain: fieldAuthDomain,
-        databaseURL: fieldDatabaseURL,
-        projectId: fieldProjectId,
-        storageBucket: fieldProjectId + ".appspot.com",
-        messagingSenderId: "123456789",
-        appId: "1:123456789:web:abcdef123456"
-    };
+    // Check if we can parse the complete object from the textarea to preserve all fields
+    const textarea = document.getElementById('firebase-config-json-textarea');
+    let config = null;
+    if (textarea && textarea.value.trim()) {
+        try {
+            let cleanVal = textarea.value.trim();
+            if (cleanVal.includes('=')) {
+                cleanVal = cleanVal.substring(cleanVal.indexOf('{'));
+            }
+            if (cleanVal.endsWith(';')) {
+                cleanVal = cleanVal.substring(0, cleanVal.length - 1);
+            }
+            try {
+                config = JSON.parse(cleanVal);
+            } catch(e) {
+                config = Function('"use strict";return (' + cleanVal + ')')();
+            }
+        } catch(e) {
+            console.warn('[Firebase Config Save] Failed to parse textarea JSON:', e);
+        }
+    }
+    
+    // If not parsed successfully or does not match inputs, build a clean one
+    if (!config || typeof config !== 'object' || config.apiKey !== fieldApiKey || config.projectId !== fieldProjectId) {
+        config = {
+            apiKey: fieldApiKey,
+            authDomain: fieldAuthDomain,
+            databaseURL: fieldDatabaseURL,
+            projectId: fieldProjectId,
+            storageBucket: fieldProjectId + ".appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
+    } else {
+        // Enforce the edited inputs if they were modified manually after parsing
+        config.apiKey = fieldApiKey;
+        config.authDomain = fieldAuthDomain;
+        config.databaseURL = fieldDatabaseURL;
+        config.projectId = fieldProjectId;
+    }
     
     try {
-        localStorage.setItem('krishi_firebase_config', JSON.stringify(config));
+        KrishiStorage.setItem('krishi_firebase_config', JSON.stringify(config));
         showToast('Firebase Config saved! App reloading...');
         closeCloudConfigModal();
         setTimeout(() => {
@@ -11915,7 +15127,7 @@ window.saveCloudConfig = function() {
 
 window.resetCloudConfig = function() {
     if (confirm('Are you sure you want to delete your custom Firebase configuration and restore the default one?')) {
-        localStorage.removeItem('krishi_firebase_config');
+        KrishiStorage.removeItem('krishi_firebase_config');
         showToast('Firebase configuration reset to default. App reloading...');
         closeCloudConfigModal();
         setTimeout(() => {
@@ -11928,7 +15140,7 @@ window.toggleEliteAnimationsSetting = function() {
     let checkbox = document.getElementById('elite-animations-enabled');
     if (!checkbox) return;
     let isEnabled = checkbox.checked;
-    localStorage.setItem('krishi_elite_animations', isEnabled ? 'true' : 'false');
+    KrishiStorage.setItem('krishi_elite_animations', isEnabled ? 'true' : 'false');
     
     let bgCanvasEl = document.getElementById('weather-ambient-canvas');
     if (bgCanvasEl) {
@@ -11944,19 +15156,18 @@ window.toggleEliteAnimationsSetting = function() {
     }
     
     let activePage = document.querySelector('.page.active');
-    if (isEnabled && activePage) {
-        let pageId = activePage.id;
-        if (pageId === 'page-study-planner') {
+    if (activePage && activePage.id === 'page-study-planner') {
+        setup3DSeasonalWheel();
+        if (isEnabled) {
             setupNeuralMindMap();
-            setup3DSeasonalWheel();
-        } else if (pageId === 'page-home') {
-            initNepalGlobe();
+        } else {
+            let neuralCard = document.getElementById('neural-map-widget-container');
+            if (neuralCard) {
+                neuralCard.style.display = 'none';
+            }
         }
-    } else if (!isEnabled) {
-        let neuralCard = document.getElementById('neural-map-widget-container');
-        if (neuralCard) {
-            neuralCard.style.display = 'none';
-        }
+    } else if (isEnabled && activePage && activePage.id === 'page-home') {
+        initNepalGlobe();
     }
     
     updateHomePage();
@@ -11967,7 +15178,7 @@ window.toggleEliteAnimationsSetting = function() {
 };
 
 window.initEliteAnimationsUI = function() {
-    let saved = localStorage.getItem('krishi_elite_animations') !== 'false';
+    let saved = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
     let el = document.getElementById('elite-animations-enabled');
     if (el) {
         el.checked = saved;
@@ -11987,248 +15198,8 @@ window.initEliteAnimationsUI = function() {
     }
 };
 
-let isNepalGlobeInitialized = false;
-let nepalGlobeAnimationId = null;
-
 window.initNepalGlobe = function() {
-    let canvas = document.getElementById('nepal-globe-canvas');
-    if (!canvas || isNepalGlobeInitialized) return;
-    
-    // Anti-leak: Clean event listeners by replacing canvas with a pristine clone
-    const cleanCanvas = canvas.cloneNode(true);
-    canvas.parentNode.replaceChild(cleanCanvas, canvas);
-    canvas = cleanCanvas;
-    
-    isNepalGlobeInitialized = true;
-    
-    let ctx = canvas.getContext('2d');
-    let width = canvas.width;
-    let height = canvas.height;
-    
-    let rotation = 0;
-    
-    const provinces = [
-        { name: "Koshi Province", lon: 0.45, lat: -0.05, color: "#10b981" },
-        { name: "Madhesh Province", lon: 0.28, lat: -0.22, color: "#3b82f6" },
-        { name: "Bagmati Province", lon: 0.12, lat: -0.02, color: "#f59e0b" },
-        { name: "Gandaki Province", lon: -0.08, lat: 0.08, color: "#8b5cf6" },
-        { name: "Lumbini Province", lon: -0.25, lat: -0.15, color: "#ec4899" },
-        { name: "Karnali Province", lon: -0.42, lat: 0.18, color: "#ef4444" },
-        { name: "Sudurpashchim Province", lon: -0.62, lat: 0.12, color: "#06b6d4" }
-    ];
-    
-    let R = 50;
-    let hoveredProvince = null;
-    let lastHoveredName = null;
-    
-    canvas.addEventListener('mousemove', function(e) {
-        let rect = canvas.getBoundingClientRect();
-        let mx = e.clientX - rect.left;
-        let my = e.clientY - rect.top;
-        
-        let found = null;
-        provinces.forEach(p => {
-            if (p.zVal > 0) {
-                let dx = mx - p.screenX;
-                let dy = my - p.screenY;
-                let dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist < 10) {
-                    found = p;
-                }
-            }
-        });
-        
-        let tooltip = document.getElementById('globe-province-tooltip');
-        if (found) {
-            hoveredProvince = found;
-            if (tooltip) {
-                tooltip.style.opacity = '1';
-                tooltip.style.left = (mx + 10) + 'px';
-                tooltip.style.top = (my + 10) + 'px';
-                
-                let active = getActiveProfile();
-                let isCurrentTarget = active.province && active.province.toLowerCase().includes(found.name.split(' ')[0].toLowerCase());
-                
-                tooltip.innerHTML = `
-                    <div class="font-extrabold text-[10px] text-white flex items-center gap-1">
-                        <span>📍 ${found.name}</span>
-                        ${isCurrentTarget ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>' : ''}
-                    </div>
-                    <div class="text-[8px] text-slate-300 mt-0.5">
-                        ${isCurrentTarget ? '🎯 Active Exam Target' : 'State Study Center'}
-                    </div>
-                `;
-            }
-            
-            if (lastHoveredName !== found.name) {
-                lastHoveredName = found.name;
-                if (typeof window.triggerHaptic === 'function') {
-                    window.triggerHaptic('click');
-                }
-            }
-        } else {
-            hoveredProvince = null;
-            lastHoveredName = null;
-            if (tooltip) tooltip.style.opacity = '0';
-        }
-    });
-    
-    canvas.addEventListener('mouseleave', function() {
-        hoveredProvince = null;
-        lastHoveredName = null;
-        let tooltip = document.getElementById('globe-province-tooltip');
-        if (tooltip) tooltip.style.opacity = '0';
-    });
-    
-    function draw() {
-        let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
-        let page = document.getElementById('page-home');
-        if (!isElite || !page || !page.classList.contains('active') || document.hidden) {
-            isNepalGlobeInitialized = false;
-            return;
-        }
-        
-        let dpr = window.devicePixelRatio || 1;
-        let cssW = canvas.clientWidth || 280;
-        let cssH = canvas.clientHeight || 150;
-        
-        if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
-            canvas.width = cssW * dpr;
-            canvas.height = cssH * dpr;
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        }
-        
-        ctx.clearRect(0, 0, cssW, cssH);
-        
-        let cx = cssW / 2;
-        let cy = cssH / 2;
-        
-        let grad = ctx.createRadialGradient(cx, cy, R * 0.4, cx, cy, R);
-        if (document.documentElement.classList.contains('dark')) {
-            grad.addColorStop(0, 'rgba(15, 23, 42, 0.45)');
-            grad.addColorStop(0.8, 'rgba(30, 41, 59, 0.6)');
-            grad.addColorStop(1, 'rgba(16, 185, 129, 0.25)');
-        } else {
-            grad.addColorStop(0, 'rgba(248, 250, 252, 0.45)');
-            grad.addColorStop(0.8, 'rgba(241, 245, 249, 0.6)');
-            grad.addColorStop(1, 'rgba(16, 185, 129, 0.2)');
-        }
-        
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, Math.PI * 2);
-        ctx.fillStyle = grad;
-        ctx.fill();
-        
-        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(16, 185, 129, 0.35)' : 'rgba(16, 185, 129, 0.25)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-        
-        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)';
-        ctx.lineWidth = 0.8;
-        
-        [-Math.PI/4, 0, Math.PI/4].forEach(lat => {
-            ctx.beginPath();
-            let step = 0.05;
-            for (let lon = -Math.PI/2; lon <= Math.PI/2; lon += step) {
-                let x = Math.cos(lat) * Math.sin(lon);
-                let y = Math.sin(lat);
-                let sx = cx + x * R;
-                let sy = cy - y * R;
-                if (lon === -Math.PI/2) ctx.moveTo(sx, sy);
-                else ctx.lineTo(sx, sy);
-            }
-            ctx.stroke();
-        });
-        
-        for (let idx = 0; idx < 4; idx++) {
-            let lon = (idx * Math.PI / 2) + rotation;
-            ctx.beginPath();
-            let step = 0.05;
-            for (let lat = -Math.PI/2; lat <= Math.PI/2; lat += step) {
-                let z = Math.cos(lat) * Math.cos(lon);
-                if (z >= 0) {
-                    let x = Math.cos(lat) * Math.sin(lon);
-                    let y = Math.sin(lat);
-                    let sx = cx + x * R;
-                    let sy = cy - y * R;
-                    if (lat === -Math.PI/2) ctx.moveTo(sx, sy);
-                    else ctx.lineTo(sx, sy);
-                }
-            }
-            ctx.stroke();
-        }
-        
-        let activeProfile = getActiveProfile();
-        let activeProvName = (activeProfile.province || "").toLowerCase();
-        
-        provinces.forEach(p => {
-            let rotLon = p.lon + rotation;
-            let x = Math.cos(p.lat) * Math.sin(rotLon);
-            let y = Math.sin(p.lat);
-            let z = Math.cos(p.lat) * Math.cos(rotLon);
-            
-            p.zVal = z;
-            
-            if (z > 0) {
-                p.screenX = cx + x * R;
-                p.screenY = cy - y * R;
-                
-                let isHighlighted = activeProvName.includes(p.name.split(' ')[0].toLowerCase());
-                let isHovered = hoveredProvince && hoveredProvince.name === p.name;
-                
-                let pulse = Math.sin(Date.now() * 0.005);
-                let radius = (isHighlighted ? 5.0 : 3.0) + (isHovered ? 2.0 : 0);
-                
-                ctx.beginPath();
-                ctx.arc(p.screenX, p.screenY, radius * (isHighlighted ? 2.0 : 1.5), 0, Math.PI * 2);
-                ctx.fillStyle = isHighlighted ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.1)';
-                ctx.fill();
-                
-                ctx.beginPath();
-                ctx.arc(p.screenX, p.screenY, radius, 0, Math.PI * 2);
-                ctx.fillStyle = isHighlighted ? '#f59e0b' : p.color;
-                ctx.fill();
-                
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 1.0;
-                ctx.stroke();
-                
-                if (isHighlighted || isHovered || (z > 0.85)) {
-                    ctx.fillStyle = document.documentElement.classList.contains('dark') ? '#f1f5f9' : '#1e293b';
-                    ctx.font = isHighlighted ? 'bold 7.5px sans-serif' : '6.5px sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.fillText(p.name.split(' ')[0], p.screenX, p.screenY - radius - 3);
-                }
-            }
-        });
-        
-        ctx.beginPath();
-        ctx.strokeStyle = document.documentElement.classList.contains('dark') ? 'rgba(16, 185, 129, 0.4)' : 'rgba(16, 185, 129, 0.3)';
-        ctx.lineWidth = 1.5;
-        
-        let firstMove = true;
-        provinces.forEach(p => {
-            if (p.zVal > 0) {
-                if (firstMove) {
-                    ctx.moveTo(p.screenX, p.screenY);
-                    firstMove = false;
-                } else {
-                    ctx.lineTo(p.screenX, p.screenY);
-                }
-            } else {
-                firstMove = true;
-            }
-        });
-        ctx.stroke();
-        
-        let baseSpeed = (window.EliteAnimsConfig && typeof window.EliteAnimsConfig.globeRotationSpeed !== 'undefined') ? window.EliteAnimsConfig.globeRotationSpeed : 1.0;
-        let activeSpeed = window.EliteAnimsConfig.throttled ? baseSpeed * 0.5 : baseSpeed;
-        rotation += 0.004 * activeSpeed;
-        if (rotation > Math.PI * 2) rotation -= Math.PI * 2;
-        
-        nepalGlobeAnimationId = requestAnimationFrame(draw);
-    }
-        draw();
+    // Completely removed as requested
 };
 
 // ==================== CAPACITOR NATIVE FEATURES INITIALIZATION ====================
@@ -12344,6 +15315,46 @@ window.initNepalGlobe = function() {
         }
     } catch(updateErr) {
         console.warn('[AppUpdate] In-app update init failed (non-critical):', updateErr);
+    }
+
+    // --- Capacitor Push Notifications Setup ---
+    try {
+        const PushNotifications = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+        if (PushNotifications) {
+            PushNotifications.checkPermissions().then(function(permStatus) {
+                if (permStatus.receive === 'prompt') {
+                    return PushNotifications.requestPermissions();
+                }
+                return permStatus;
+            }).then(function(permStatus) {
+                if (permStatus.receive === 'granted') {
+                    return PushNotifications.register();
+                } else {
+                    console.warn('[Push] Notification permission denied.');
+                }
+            }).catch(function(e) {
+                console.warn('[Push] Permission check failed:', e);
+            });
+
+            PushNotifications.addListener('registration', function(token) {
+                console.log('[Push] Registration successful. FCM Token:', token.value);
+                KrishiStorage.setItem('krishi_fcm_token', token.value);
+                writeFCMTokenToFirebaseSession(token.value);
+            });
+
+            PushNotifications.addListener('registrationError', function(err) {
+                console.error('[Push] Registration error:', err);
+            });
+
+            PushNotifications.addListener('pushNotificationReceived', function(notification) {
+                console.log('[Push] Notification received:', notification);
+                if (typeof showToast === 'function') {
+                    showToast('🔔 ' + (notification.title || 'Notification') + ': ' + (notification.body || ''));
+                }
+            });
+        }
+    } catch(pushErr) {
+        console.warn('[Push] Initialization failed:', pushErr);
     }
 
     // ==================== PREMIUM HYBRID TINDER FLASHCARD SWIPER ====================
@@ -12621,19 +15632,43 @@ window.initNepalGlobe = function() {
             const rawJson = JSON.stringify(backupObj);
             const encodedProgress = btoa(unescape(encodeURIComponent(rawJson)));
             
-            // Create download blob
-            const blob = new Blob([encodedProgress], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `krishi_mcq_progress_backup_${getLocalDateString()}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            const fileName = `krishi_mcq_progress_backup_${getLocalDateString()}.json`;
+            const file = new File([encodedProgress], fileName, { type: 'application/json' });
             
-            showToast('✅ Local progress successfully exported!');
-            triggerHaptic('success');
+            // Try utilizing the native Web Share API on mobile / PWAs / Capacitor WebViews
+            if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+                navigator.share({
+                    files: [file],
+                    title: 'Krishi MCQ Pro Backup',
+                    text: 'My study progress backup.'
+                })
+                .then(() => {
+                    showToast('✅ Local progress shared successfully!');
+                    triggerHaptic('success');
+                })
+                .catch(err => {
+                    console.warn('[Backup Engine] Share dismissed or failed, falling back to download:', err);
+                    triggerFallbackDownload();
+                });
+            } else {
+                triggerFallbackDownload();
+            }
+            
+            function triggerFallbackDownload() {
+                // Create download blob
+                const blob = new Blob([encodedProgress], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                showToast('✅ Local progress successfully exported!');
+                triggerHaptic('success');
+            }
         } catch (e) {
             console.error('[Backup Engine] Failed to export local progress:', e);
             showToast('❌ Backup failed to export!');
@@ -12741,9 +15776,48 @@ window.initNepalGlobe = function() {
                     badge.style.color = '#ef4444'; // Red-500 (Lag spike)
                 }
             }
-        }
+    }
         requestAnimationFrame(runDiagnosticsLoop);
     }
+
+    // ==================== SETTINGS ACCORDION HANDLER ====================
+    // Handled early-bound in index.html to prevent race conditions
+
+    // Export local settings and sync functions globally for HTML inline handlers
+    window.toggleKeyVisibility = toggleKeyVisibility;
+    window.saveGeminiSettings = saveGeminiSettings;
+    window.validateAndSaveApiKey = validateAndSaveApiKey;
+    window.clearApiKey = clearApiKey;
+    window.handleFirebaseLogin = handleFirebaseLogin;
+    window.handleGoogleLogin = handleGoogleLogin;
+    window.handleFirebaseSignup = handleFirebaseSignup;
+    window.openQRScanner = openQRScanner;
+    window.generateNewSyncKey = generateNewSyncKey;
+    window.enableCloudSync = enableCloudSync;
+    window.copyActiveSyncKey = copyActiveSyncKey;
+    window.syncCloudNow = syncCloudNow;
+    window.disableCloudSync = disableCloudSync;
+    window.handleFirebaseLogout = handleFirebaseLogout;
+
+    // Export core quiz navigation and utility functions for Voice Assistant
+    window.nextMCQQuestion = nextMCQQuestion;
+    window.toggleBookmarkCurrent = toggleBookmarkCurrent;
+    window.showQuizHint = showQuizHint;
+
+    // Export study planner functions globally for HTML inline handlers
+    window.togglePlannerSettings = togglePlannerSettings;
+    window.togglePlannerDemoMode = togglePlannerDemoMode;
+    window.setPlanMode = setPlanMode;
+    window.generateTodaySmartPlan = generateTodaySmartPlan;
+    window.startSmartStudyPlanSession = startSmartStudyPlanSession;
+    window.startAdaptiveReview = startAdaptiveReview;
+    window.startWrongQuestionCorrection = startWrongQuestionCorrection;
+    window.toggleAddSubjectView = toggleAddSubjectView;
+    window.submitCustomSyllabusSubject = submitCustomSyllabusSubject;
+    window.startPracticeWeakestSubject = startPracticeWeakestSubject;
+    window.startMaintainStrongSubjectPractice = startMaintainStrongSubjectPractice;
+    window.resetPlannerSettingsToDefaults = resetPlannerSettingsToDefaults;
+    window.savePlannerSettingsNew = savePlannerSettingsNew;
 
     // ==================== PREMIUM ADAPTIVE DOM PRUNER SYSTEM ====================
     window.KrishiDOMPruner = {

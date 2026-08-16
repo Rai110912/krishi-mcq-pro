@@ -5,6 +5,7 @@
             --danger: #dc2626; --danger-light: #fee2e2; --warning: #f59e0b;
             --border: #e2e8f0; --nav-bg: #ffffff; --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --radius: 16px; --radius-sm: 10px;
+            --surface: var(--card);
             /* Performance tuning (defaults = Balanced + Medium animations) */
             --page-anim: 350ms;
             --tap-scale: 0.98;
@@ -22,6 +23,7 @@
             --danger: #ef4444; --danger-light: #450a0a; --warning: #fbbf24;
             --border: #334155; --nav-bg: #1e293b; --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --primary-rgb: 16, 185, 129;
+            --surface: var(--card);
         }
         html {
             font-size: var(--app-font-scale) !important;
@@ -30,7 +32,7 @@
             font-family: var(--app-font-family), 'Inter', sans-serif !important; 
             background-color: var(--bg); color: var(--text);
             transition: all 0.35s; min-height: 100vh;
-            padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+            padding-bottom: 0;
             padding-top: env(safe-area-inset-top); -webkit-tap-highlight-color: transparent;
         }
         body, p, span, li, td, th, input, select, textarea, button {
@@ -163,7 +165,7 @@
             
             /* 2. Main content container bottom padding to avoid bottom navigation overlap */
             main {
-                padding-bottom: calc(6.5rem + env(safe-area-inset-bottom)) !important;
+                padding-bottom: 0 !important;
             }
             
             /* 3. Question Card sizing and autosizing height */
@@ -175,7 +177,10 @@
             
             /* 4. MCQ page spacing adjustments */
             #page-mcq {
-                padding: 0.75rem !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+                padding-top: 0.5rem !important;
+                padding-bottom: 0.5rem !important;
                 gap: 0.5rem !important;
             }
             
@@ -250,85 +255,132 @@
         .dark .ql-container { border-color: #334155 !important; background: #1e293b; }
         .dark .ql-editor { color: #f1f5f9; }
 
-        /* Splash Screen Premium Agriculture Styles */
+        /* Splash Screen Premium Ultra-HD Glassmorphic Agriculture Styles */
         #splash-screen {
             position: fixed; inset: 0; z-index: 99999;
-            background: linear-gradient(135deg, #064e3b 0%, #022c22 100%);
+            background: radial-gradient(circle at 50% 40%, #064e3b 0%, #022c22 65%, #011712 100%);
             display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.5s;
+            transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.6s;
             overflow: hidden;
         }
         #splash-screen.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
         
-        /* Drifting Background Gradients */
+        /* Drifting Ambient Holographic Gradients */
         #splash-screen::before {
-            content: ''; position: absolute; inset: -50%;
-            background: radial-gradient(circle at 30% 30%, rgba(16, 185, 129, 0.12) 0%, transparent 60%),
-                        radial-gradient(circle at 70% 70%, rgba(4, 120, 87, 0.12) 0%, transparent 60%);
-            animation: bgDrift 15s ease-in-out infinite alternate;
+            content: ''; position: absolute; inset: -60%;
+            background: radial-gradient(circle at 35% 35%, rgba(52, 211, 153, 0.18) 0%, transparent 50%),
+                        radial-gradient(circle at 65% 65%, rgba(163, 230, 53, 0.14) 0%, transparent 50%),
+                        radial-gradient(circle at 50% 80%, rgba(5, 150, 105, 0.15) 0%, transparent 60%);
+            animation: bgDrift 14s ease-in-out infinite alternate;
             pointer-events: none;
+            filter: blur(30px);
         }
         @keyframes bgDrift {
             0% { transform: rotate(0deg) scale(1); }
-            100% { transform: rotate(15deg) scale(1.1); }
+            50% { transform: rotate(10deg) scale(1.08); }
+            100% { transform: rotate(-10deg) scale(1.15); }
         }
 
-        /* Subtle Organic Paper Grain / Wave Effect */
+        /* Organic Mesh Grain Grid */
         .splash-bg-grain {
-            position: absolute; inset: 0; opacity: 0.04;
-            background-image: radial-gradient(rgba(255,255,255,0.15) 1px, transparent 0),
-                              radial-gradient(rgba(255,255,255,0.15) 1px, transparent 0);
-            background-size: 8px 8px;
-            background-position: 0 0, 4px 4px;
+            position: absolute; inset: 0; opacity: 0.05;
+            background-image: radial-gradient(rgba(255,255,255,0.2) 1px, transparent 0),
+                              radial-gradient(rgba(255,255,255,0.2) 1px, transparent 0);
+            background-size: 10px 10px;
+            background-position: 0 0, 5px 5px;
             pointer-events: none;
         }
 
-        /* Central Logo Wrapper & Pulse Effects */
+        /* Glassmorphic Central Card Container */
+        .splash-glass-card {
+            position: relative; z-index: 10;
+            background: rgba(6, 78, 59, 0.4);
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(52, 211, 153, 0.28);
+            border-radius: 2rem;
+            padding: 2.5rem 2rem;
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.6),
+                        inset 0 1px 1px rgba(255, 255, 255, 0.25),
+                        0 0 40px rgba(16, 185, 129, 0.15);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            width: 320px;
+        }
+
+        /* Holographic Double Ring Logo Wrapper */
         .logo-wrapper {
-            position: relative; width: 130px; height: 130px;
+            position: relative; width: 120px; height: 120px;
             display: flex; align-items: center; justify-content: center;
+            margin-bottom: 1.5rem;
         }
         .logo-ring-outer {
             position: absolute; inset: 0; border-radius: 50%;
-            border: 2px dashed rgba(52, 211, 153, 0.3);
-            animation: spinRing 8s linear infinite;
+            border: 2px dashed rgba(52, 211, 153, 0.45);
+            box-shadow: 0 0 25px rgba(52, 211, 153, 0.3);
+            animation: spinRing 12s linear infinite;
         }
         .logo-ring-inner {
             position: absolute; inset: 10px; border-radius: 50%;
-            border: 3px solid transparent; border-top-color: #34d399; border-bottom-color: #10b981;
-            animation: spinRing 3s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+            border: 3px solid transparent;
+            border-top-color: #34d399; border-right-color: #a3e635; border-bottom-color: #10b981;
+            box-shadow: 0 0 15px rgba(52, 211, 153, 0.5);
+            animation: spinRingReverse 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+        .logo-ring-glow {
+            position: absolute; inset: 20px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(52, 211, 153, 0.35) 0%, transparent 75%);
+            animation: ringGlowPulse 2.5s ease-in-out infinite alternate;
         }
         .logo-emoji {
             font-size: 3.5rem; z-index: 10;
-            filter: drop-shadow(0 0 15px rgba(52, 211, 153, 0.5));
-            animation: emojiPulse 2.5s ease-in-out infinite alternate;
+            filter: drop-shadow(0 0 18px rgba(52, 211, 153, 0.8));
+            animation: sproutBounce 2.5s ease-in-out infinite alternate;
             user-select: none;
         }
         
         @keyframes spinRing {
             to { transform: rotate(360deg); }
         }
-        @keyframes emojiPulse {
-            0% { transform: scale(0.95); filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.4)); }
-            100% { transform: scale(1.05); filter: drop-shadow(0 0 25px rgba(52, 211, 153, 0.75)); }
+        @keyframes spinRingReverse {
+            to { transform: rotate(-360deg); }
+        }
+        @keyframes ringGlowPulse {
+            0% { transform: scale(0.85); opacity: 0.5; }
+            100% { transform: scale(1.15); opacity: 0.95; }
+        }
+        @keyframes sproutBounce {
+            0% { transform: translateY(0) scale(0.96) rotate(-3deg); filter: drop-shadow(0 0 12px rgba(52, 211, 153, 0.5)); }
+            100% { transform: translateY(-8px) scale(1.08) rotate(3deg); filter: drop-shadow(0 0 30px rgba(163, 230, 53, 0.9)); }
         }
 
-        /* Floating Sparks */
+        /* Animated Progress Bar & Shimmer */
+        #splash-progress {
+            background: linear-gradient(90deg, #34d399 0%, #10b981 33%, #a3e635 66%, #34d399 100%);
+            background-size: 200% 100%;
+            animation: shimmerProgress 2s linear infinite;
+            box-shadow: 0 0 12px #34d399;
+        }
+        @keyframes shimmerProgress {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Floating Light Particles */
         .splash-particle {
-            position: absolute; background: rgba(52, 211, 153, 0.35);
+            position: absolute; background: radial-gradient(circle, rgba(163, 230, 53, 0.7) 0%, rgba(52, 211, 153, 0.3) 70%);
             border-radius: 50%; pointer-events: none;
+            filter: blur(1px);
             animation: floatUp 5s linear infinite;
         }
         @keyframes floatUp {
-            0% { transform: translateY(110vh) translateX(0) scale(1); opacity: 0; }
-            10% { opacity: 0.8; }
-            90% { opacity: 0.8; }
-            100% { transform: translateY(-10vh) translateX(30px) scale(0.5); opacity: 0; }
+            0% { transform: translateY(110vh) translateX(0) scale(0.8); opacity: 0; }
+            15% { opacity: 0.9; }
+            85% { opacity: 0.9; }
+            100% { transform: translateY(-10vh) translateX(40px) scale(1.3); opacity: 0; }
         }
 
         /* Prefers Reduced Motion Accessibility Override */
         @media (prefers-reduced-motion: reduce) {
-            #splash-screen::before, .logo-ring-outer, .logo-ring-inner, .logo-emoji, .splash-particle {
+            #splash-screen::before, .logo-ring-outer, .logo-ring-inner, .logo-emoji, .splash-particle, #splash-progress {
                 animation: none !important;
                 transform: none !important;
             }
@@ -502,14 +554,14 @@
         body.theme-minimal {
             background-color: #fafafa !important;
             --bg: #fafafa;
-            --card: #ffffff;
-            --border: #e4e4e7;
+            --card: rgba(255, 255, 255, var(--app-card-opacity, 1));
+            --border: rgba(228, 228, 231, var(--app-card-opacity, 1));
         }
         .dark.theme-minimal {
             background-color: #09090b !important;
             --bg: #09090b;
-            --card: #18181b;
-            --border: #27272a;
+            --card: rgba(24, 24, 27, var(--app-card-opacity, 1));
+            --border: rgba(39, 39, 42, var(--app-card-opacity, 1));
         }
         body.theme-minimal .hover-card-trigger:hover {
             transform: none !important;
@@ -527,14 +579,16 @@
         }
         body.theme-pro .hover-card-trigger {
             backdrop-filter: blur(12px) !important;
-            background: rgba(255, 255, 255, 0.82) !important;
-            border-color: rgba(16, 185, 129, 0.15) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+            background: rgba(255, 255, 255, var(--app-card-opacity, 0.82)) !important;
+            border-color: rgba(16, 185, 129, calc(var(--app-card-opacity, 0.82) * 0.18)) !important;
             box-shadow: 0 4px 20px -2px rgba(5, 150, 105, 0.05) !important;
         }
         .dark.theme-pro .hover-card-trigger {
             backdrop-filter: blur(12px) !important;
-            background: rgba(30, 41, 59, 0.75) !important;
-            border-color: rgba(52, 211, 153, 0.1) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+            background: rgba(30, 41, 59, var(--app-card-opacity, 0.75)) !important;
+            border-color: rgba(52, 211, 153, calc(var(--app-card-opacity, 0.75) * 0.13)) !important;
             box-shadow: 0 4px 25px -2px rgba(0, 0, 0, 0.3) !important;
         }
 
@@ -542,14 +596,14 @@
         body.theme-focus {
             background-color: #fafaf9 !important;
             --bg: #fafaf9;
-            --card: #f5f5f4;
-            --border: #e7e5e4;
+            --card: rgba(245, 245, 244, var(--app-card-opacity, 1));
+            --border: rgba(231, 229, 228, var(--app-card-opacity, 1));
         }
         .dark.theme-focus {
             background-color: #0c0a09 !important;
             --bg: #0c0a09;
-            --card: #1c1917;
-            --border: #2e2a24;
+            --card: rgba(28, 25, 23, var(--app-card-opacity, 1));
+            --border: rgba(46, 42, 36, var(--app-card-opacity, 1));
         }
         body.theme-focus .page:not(.active) {
             filter: blur(8px) opacity(0.3);
@@ -713,7 +767,7 @@
 }
 
 /* GPU Isolation for Butterworth Smooth Rendering */
-.hover-card-trigger, .page, #mcq-card-container, .option-btn {
+.hover-card-trigger, .page, #mcq-card-container, .option-btn, #mobile-bottom-nav, .modal-card-content {
     will-change: transform, opacity;
     transform-style: preserve-3d;
     backface-visibility: hidden;
@@ -916,9 +970,9 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 0;
+    z-index: 30;
     pointer-events: none;
-    opacity: 0.6;
+    opacity: 0.65;
 }
 
 /* ५. कन्सेप्ट स्क्यान लेजर बीम */
@@ -957,6 +1011,33 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 12px;
+    transition: box-shadow 0.4s ease, border-color 0.4s ease;
+}
+
+@keyframes pulse-glow-blue {
+    0% { box-shadow: 0 0 0px rgba(59, 130, 246, 0); border-color: var(--border); }
+    30% { box-shadow: 0 0 25px rgba(59, 130, 246, 0.4); border-color: rgba(59, 130, 246, 0.45); }
+    100% { box-shadow: 0 0 0px rgba(59, 130, 246, 0); border-color: var(--border); }
+}
+@keyframes pulse-glow-amber {
+    0% { box-shadow: 0 0 0px rgba(245, 158, 11, 0); border-color: var(--border); }
+    30% { box-shadow: 0 0 25px rgba(245, 158, 11, 0.4); border-color: rgba(245, 158, 11, 0.45); }
+    100% { box-shadow: 0 0 0px rgba(245, 158, 11, 0); border-color: var(--border); }
+}
+@keyframes pulse-glow-green {
+    0% { box-shadow: 0 0 0px rgba(16, 185, 129, 0); border-color: var(--border); }
+    30% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.4); border-color: rgba(16, 185, 129, 0.45); }
+    100% { box-shadow: 0 0 0px rgba(16, 185, 129, 0); border-color: var(--border); }
+}
+
+.pulse-glow-kharif {
+    animation: pulse-glow-blue 1.2s ease-out;
+}
+.pulse-glow-autumn {
+    animation: pulse-glow-amber 1.2s ease-out;
+}
+.pulse-glow-winter {
+    animation: pulse-glow-green 1.2s ease-out;
 }
 .crop-wheel-3d-wrapper {
     perspective: 1000px;
@@ -1291,7 +1372,7 @@ button, a, input, select, textarea {
 
     /* 3. Ensure all pages have comfortable bottom padding to prevent content cutoff */
     .page {
-        padding-bottom: 85px !important;
+        padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 12px)) !important;
     }
 }
 
@@ -1315,12 +1396,12 @@ button, a, input, select, textarea {
 /* ==================== ADVANCED MOBILE LAYOUT OPTIMIZATIONS ==================== */
 /* 1. Glassmorphism & Safe Area Utilities */
 .glass-nav {
-    background: rgba(255, 255, 255, 0.85) !important;
+    background: rgba(255, 255, 255, var(--app-card-opacity, 0.85)) !important;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
 }
 .dark .glass-nav {
-    background: rgba(30, 41, 59, 0.85) !important;
+    background: rgba(30, 41, 59, var(--app-card-opacity, 0.85)) !important;
 }
 .safe-pt { padding-top: env(safe-area-inset-top) !important; }
 .safe-pb { padding-bottom: env(safe-area-inset-bottom) !important; }
@@ -1333,7 +1414,169 @@ button, a, input, select, textarea {
     transform: translateY(-100%);
 }
 .bottom-nav-hide {
-    transform: translateY(100%);
+    transform: translateX(-50%) translateY(140%) !important;
+}
+
+/* macOS-style Floating Zoom Dock */
+@media (max-width: 1023px) {
+    #mobile-bottom-nav {
+        left: 50% !important;
+        right: auto !important;
+        transform: translateX(-50%) translateY(0);
+        width: auto !important;
+        max-width: 90vw;
+        padding: 6px 14px !important;
+        border-radius: 9999px !important;
+        border: 1px solid var(--border) !important;
+        background: rgba(255, 255, 255, calc(var(--app-card-opacity, 0.7) * 0.9)) !important;
+        backdrop-filter: blur(25px) saturate(180%) !important;
+        -webkit-backdrop-filter: blur(25px) saturate(180%) !important;
+        display: flex;
+        justify-content: center;
+        align-items: flex-end;
+        gap: 10px !important;
+        bottom: calc(12px + env(safe-area-inset-bottom, 12px)) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important;
+        height: 52px !important;
+        overflow: visible !important;
+        transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    /* Elegant physical lift & neon glow on zoom interaction */
+    #mobile-bottom-nav.dock-zooming {
+        background: rgba(255, 255, 255, var(--app-card-opacity, 0.82)) !important;
+        border-color: rgba(16, 185, 129, 0.45) !important;
+        box-shadow: 0 15px 35px rgba(16, 185, 129, 0.24) !important;
+        transform: translateX(-50%) translateY(-2px) scale(1.02);
+    }
+
+    .dark #mobile-bottom-nav {
+        background: rgba(15, 23, 42, calc(var(--app-card-opacity, 0.7) * 0.9)) !important;
+        border-color: rgba(255, 255, 255, 0.08) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
+    }
+
+    .dark #mobile-bottom-nav.dock-zooming {
+        background: rgba(15, 23, 42, var(--app-card-opacity, 0.82)) !important;
+        border-color: rgba(16, 185, 129, 0.45) !important;
+        box-shadow: 0 15px 35px rgba(16, 185, 129, 0.35) !important;
+    }
+}
+
+@media (min-width: 1024px) {
+    #mobile-bottom-nav {
+        display: none !important;
+    }
+}
+
+.dock-item {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    position: relative;
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 50% !important;
+    background: rgba(0, 0, 0, 0.04) !important;
+    border: none !important;
+    /* Ultra-smooth hardware accelerated transitions running at 60fps/120Hz */
+    transition: width 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                padding 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                background-color 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                border-radius 0.35s cubic-bezier(0.25, 0.8, 0.25, 1),
+                transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    cursor: pointer;
+    overflow: hidden !important; /* Hide overflowing text label during width transitions */
+    padding: 0 9px !important;
+    min-height: auto !important;
+}
+
+.dark .dock-item {
+    background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.dock-item.dock-active {
+    width: 96px !important;
+    border-radius: 9999px !important;
+    background: rgba(16, 185, 129, 0.15) !important;
+    border: 1px solid rgba(16, 185, 129, 0.25) !important;
+    padding: 0 12px !important;
+}
+
+.dark .dock-item.dock-active {
+    background: rgba(16, 185, 129, 0.2) !important;
+    border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+.dock-text {
+    display: none;
+    opacity: 0;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-left: 6px;
+    color: var(--primary);
+    white-space: nowrap;
+    transition: opacity 0.2s ease 0.08s;
+}
+
+.dock-item.dock-active .dock-text {
+    display: inline-block !important;
+    opacity: 1 !important;
+}
+
+.dock-item .text-base {
+    font-size: 20px;
+    transition: transform 0.15s ease;
+}
+
+.dock-item::after {
+    content: '';
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: transparent;
+    transition: background 0.3s ease, transform 0.3s ease;
+}
+
+.dock-item.dock-active::after {
+    display: none !important;
+}
+
+.dock-tooltip {
+    position: absolute;
+    top: -38px;
+    left: 50%;
+    transform: translateX(-50%) scale(0.85);
+    opacity: 0;
+    pointer-events: none;
+    background: rgba(15, 23, 42, 0.85);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: opacity 0.18s cubic-bezier(0.25, 0.8, 0.25, 1), transform 0.18s cubic-bezier(0.25, 0.8, 0.25, 1);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+.dark .dock-tooltip {
+    background: rgba(255, 255, 255, 0.95);
+    color: #0f172a;
+}
+
+.dock-item:hover .dock-tooltip,
+.dock-item.dock-touch-active .dock-tooltip {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
 }
 
 /* 3. Touch Targets & Active States */
@@ -1360,6 +1603,8 @@ button, a, input, select, textarea {
         margin: 0 !important;
         border-bottom-left-radius: 0 !important;
         border-bottom-right-radius: 0 !important;
+        max-height: 82vh !important;
+        overflow-y: auto !important;
         animation: slideUpSheet 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.1) forwards;
     }
     
@@ -1371,6 +1616,45 @@ button, a, input, select, textarea {
     .page.active {
         padding-left: 0.75rem !important;
         padding-right: 0.75rem !important;
+    }
+
+    /* 2x2 grid container for short MCQ options */
+    .options-container-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 8px !important;
+    }
+    .options-container-grid > button {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+
+    /* Clean Mobile Header Spacing and Tactile Tap Feedback */
+    #mobile-header {
+        padding: 12px 16px !important;
+    }
+    #mobile-header button {
+        min-width: 48px !important;
+        min-height: 48px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 12px !important;
+        transition: background-color 0.2s, transform 0.15s !important;
+    }
+    #mobile-header button:active {
+        transform: scale(0.95) !important;
+        background-color: rgba(0, 0, 0, 0.05) !important;
+    }
+    .dark #mobile-header button:active {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    /* Limit long question text heights to prevent vertical overflow */
+    #q-text {
+        max-height: 20vh !important;
+        overflow-y: auto !important;
+        padding-right: 4px !important;
     }
 }
 
@@ -1893,4 +2177,336 @@ button, a, input, select, textarea {
     font-weight: 900;
     color: var(--text);
 }
+
+/* ── Premium Bi-directional Page Slide Transitions & Active Streak Flame ── */
+.streak-on-fire {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #f97316 !important;
+    text-shadow: 0 0 8px rgba(249, 115, 22, 0.65), 0 0 16px rgba(239, 68, 68, 0.4) !important;
+    animation: flamePulse 1.2s infinite ease-in-out alternate;
+}
+.streak-on-fire::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(253,186,116,0.25) 0%, rgba(239,68,68,0) 70%);
+    z-index: -1;
+    animation: flameGlow 2s infinite linear;
+    pointer-events: none;
+}
+
+@keyframes flamePulse {
+    0% { transform: scale(1); filter: drop-shadow(0 0 2px #f97316); }
+    100% { transform: scale(1.12); filter: drop-shadow(0 0 7px #ef4444) saturate(1.4); }
+}
+@keyframes flameGlow {
+    0% { transform: rotate(0deg) scale(0.9); opacity: 0.5; }
+    50% { transform: rotate(180deg) scale(1.2); opacity: 0.8; }
+    100% { transform: rotate(360deg) scale(0.9); opacity: 0.5; }
+}
+
+.slide-in-right {
+    animation: slideInRight 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    will-change: transform, opacity;
+}
+.slide-in-left {
+    animation: slideInLeft 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    will-change: transform, opacity;
+}
+
+@keyframes slideInRight {
+    from { transform: translateX(45px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideInLeft {
+    from { transform: translateX(-45px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+.fade-in-transition {
+    animation: fadeInTransition 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    will-change: opacity;
+}
+@keyframes fadeInTransition {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.zoom-in-transition {
+    animation: zoomInTransition 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    will-change: transform, opacity;
+}
+@keyframes zoomInTransition {
+    from { transform: scale(0.96); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+.no-transition {
+    animation: none !important;
+}
+
+/* Automatically hide the main header inside page-practice when gameplay or result screen is active to maximize viewport budget on mobile */
+@media (max-width: 1023px) {
+    #page-practice:has(#page-mcq:not(.hidden)) h2:first-of-type,
+    #page-practice:has(#practice-result-panel:not(.hidden)) h2:first-of-type {
+        display: none !important;
+    }
+}
+
+/* ==================== 2026 ULTRA-PREMIUM GLASSMORPHIC OPACITY ENGINE OVERRIDES ==================== */
+/* Ensure all hover cards and containers across all themes get high-fidelity frosted glass backdrop blur */
+.hover-card-trigger {
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+}
+
+/* Apply premium frosted glass blur on sidebars & modal overlay panels */
+aside {
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    background: var(--nav-bg) !important;
+}
+
+/* Force high-specificity card opacity override on Tailwind solid white/slate elements */
+#mcq-card-container,
+#result-card-container,
+#home-nepal-globe-card,
+#hybrid-exams-shortcut-card,
+#page-practice .grid > div {
+    background: var(--card) !important;
+    border-color: var(--border) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+}
+
+/* 
+   Overlay Settings & Modal Dialog sheets:
+   We enforce a highly opaque background (0.98) to completely block the underlying 
+   page text from bleeding through. We use a heavier backdrop blur and shadow to isolate 
+   the controls perfectly, resolving the layout overlap issue cleanly.
+   We redefine --bg to a subtle semi-transparent background inside overlays so all inputs 
+   and buttons inherit a cohesive, elegant styling automatically.
+*/
+#planner-settings-panel,
+.modal-bottom-sheet > div {
+    background: rgba(255, 255, 255, 0.98) !important;
+    border-color: var(--border) !important;
+    backdrop-filter: blur(24px) saturate(190%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(190%) !important;
+    box-shadow: 0 25px 60px -10px rgba(0, 0, 0, 0.25) !important;
+    --bg: rgba(0, 0, 0, 0.035) !important;
+}
+.dark #planner-settings-panel,
+.dark .modal-bottom-sheet > div {
+    background: rgba(15, 23, 42, 0.98) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 25px 65px -10px rgba(0, 0, 0, 0.6) !important;
+    --bg: rgba(255, 255, 255, 0.045) !important;
+}
+
+/* Increase the blur on the backdrop overlay when planner settings are active */
+#planner-settings-overlay {
+    backdrop-filter: blur(6px) !important;
+    -webkit-backdrop-filter: blur(6px) !important;
+    background: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* 
+   Refined Settings Input Controls:
+   Inside overlays, we replace harsh solid green/grey backgrounds with a subtle, 
+   modern semi-transparent layer, custom rounded borders, and transition focus glows.
+*/
+#planner-settings-panel input,
+#planner-settings-panel select,
+#planner-settings-panel textarea,
+.modal-bottom-sheet input,
+.modal-bottom-sheet select,
+.modal-bottom-sheet textarea,
+#planner-settings-panel button[id^="intensity-"],
+#planner-settings-panel label[class*="select-none"],
+#planner-settings-panel button[id^="rest-day-"] {
+    background: var(--bg) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+    border-radius: 12px !important;
+    color: var(--text) !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.dark #planner-settings-panel input,
+.dark #planner-settings-panel select,
+.dark #planner-settings-panel textarea,
+.dark .modal-bottom-sheet input,
+.dark .modal-bottom-sheet select,
+.dark .modal-bottom-sheet textarea,
+.dark #planner-settings-panel button[id^="intensity-"],
+.dark #planner-settings-panel label[class*="select-none"],
+.dark #planner-settings-panel button[id^="rest-day-"] {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+#planner-settings-panel input:focus,
+#planner-settings-panel select:focus,
+#planner-settings-panel textarea:focus,
+.modal-bottom-sheet input:focus,
+.modal-bottom-sheet select:focus,
+.modal-bottom-sheet textarea:focus {
+    border-color: var(--primary) !important;
+    background: rgba(16, 185, 129, 0.04) !important;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12) !important;
+}
+
+/* GPU Optimization: Automatically disable heavy backdrop filters on low-end or struggling devices */
+.fps-throttled *,
+.fps-throttled *::before,
+.fps-throttled *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+}
+
+/* ==================== PREMIUM GLASSMORPHIC RESTORATION MODAL ==================== */
+#custom-confirm-modal-overlay {
+    background: rgba(8, 12, 24, 0.48) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+}
+
+.confirm-glass-card {
+    background: rgba(255, 255, 255, 0.78) !important;
+    border: 1px solid rgba(255, 255, 255, 0.6) !important;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.08), 
+                inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    backdrop-filter: blur(24px) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+}
+
+.dark .confirm-glass-card {
+    background: rgba(15, 23, 42, 0.78) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35), 
+                inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+.study-target-glow {
+    position: relative;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(245, 158, 11, 0.15) 100%) !important;
+    color: #f59e0b !important;
+    animation: targetPulse 2.5s infinite ease-in-out;
+}
+
+.dark .study-target-glow {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(245, 158, 11, 0.2) 100%) !important;
+}
+
+@keyframes targetPulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+    }
+    50% {
+        transform: scale(1.06);
+        box-shadow: 0 0 15px 4px rgba(245, 158, 11, 0.2);
+    }
+}
+
+#custom-confirm-ok-btn {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3) !important;
+    color: #ffffff !important;
+    border: none !important;
+    transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+#custom-confirm-ok-btn:active {
+    transform: scale(0.94) !important;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.15) !important;
+}
+
+#custom-confirm-cancel-btn {
+    background: rgba(241, 245, 249, 0.85) !important;
+    border: 1px solid rgba(226, 232, 240, 0.85) !important;
+    color: #475569 !important;
+    transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.dark #custom-confirm-cancel-btn {
+    background: rgba(30, 41, 59, 0.85) !important;
+    border: 1px solid rgba(51, 65, 85, 0.85) !important;
+    color: #94a3b8 !important;
+}
+
+#custom-confirm-cancel-btn:active {
+    transform: scale(0.94) !important;
+}
+
+/* ==================== REAL-TIME AUTOSAVE HUD & PROGRESS DASHBOARD ==================== */
+@keyframes autosavePulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 8px 3px rgba(16, 185, 129, 0.2);
+    }
+}
+
+.autosave-glow-active {
+    background-color: #10b981 !important;
+    animation: autosavePulse 1.8s infinite ease-in-out !important;
+}
+
+@keyframes autosaveSyncPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 8px 3px rgba(59, 130, 246, 0.2);
+    }
+}
+
+.autosave-glow-syncing {
+    background-color: #3b82f6 !important;
+    animation: autosaveSyncPulse 1.2s infinite ease-in-out !important;
+}
+
+.modal-stats-dashboard {
+    background: rgba(15, 23, 42, 0.03) !important;
+    border: 1px solid rgba(0, 0, 0, 0.04) !important;
+    border-radius: 18px !important;
+    padding: 12px 14px !important;
+    text-align: left !important;
+}
+
+.dark .modal-stats-dashboard {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.modal-progress-bar-container {
+    height: 6px !important;
+    background: rgba(0, 0, 0, 0.05) !important;
+    border-radius: 10px !important;
+    overflow: hidden !important;
+    position: relative !important;
+}
+
+.dark .modal-progress-bar-container {
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.modal-progress-bar-fill {
+    height: 100% !important;
+    background: linear-gradient(90deg, #10b981, #14b8a6) !important;
+    border-radius: 10px !important;
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+
+
+
 

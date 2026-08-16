@@ -1,0 +1,64 @@
+Created At: 2026-08-06T16:42:06+05:45
+Completed At: 2026-08-06T16:42:06+05:45
+File Path: `file:///d:/Downloads/test%20file%20of%20Mcq%20pro/js/app.js`
+Total Lines: 15420
+Total Bytes: 734430
+Showing lines 2025 to 2080
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+2025:     }
+2026: 
+2027:     async function handleGoogleLogin() {
+2028:         try {
+2029:             showToast('⏳ Opening Google Sign-in...');
+2030:             
+2031:             // Initialize auth synchronously to preserve browser user gesture context (PC Fallback)
+2032:             const auth = getSafeFirebaseApp().auth();
+2033:             const provider = new firebase.auth.GoogleAuthProvider();
+2034:             
+2035:             // Check if running in a native Capacitor shell
+2036:             const isNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+2037:             
+2038:             if (isNative) {
+2039:                 const GoogleAuthPlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GoogleAuth;
+2040:                 if (!GoogleAuthPlugin) {
+2041:                     throw new Error("Native Google Auth plugin is not initialized.");
+2042:                 }
+2043:                 
+2044:                 showToast('🔄 Opening Native Google Sign-In...');
+2045:                 try {
+2046:                     await GoogleAuthPlugin.initialize();
+2047:                 } catch (initErr) {
+2048:                     console.warn("GoogleAuthPlugin already initialized or failed to initialize:", initErr);
+2049:                 }
+2050:                 const result = await GoogleAuthPlugin.signIn();
+2051:                 
+2052:                 if (result && result.idToken) {
+2053:                     showToast('🔐 Exchanging tokens with server...');
+2054:                     const credential = firebase.auth.GoogleAuthProvider.credential(result.idToken);
+2055:                     await auth.signInWithCredential(credential);
+2056:                     showToast('✅ Logged in successfully with Google!');
+2057:                     try {
+2058:                         if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+2059:                     } catch(e) {}
+2060:                 } else {
+2061:                     throw new Error("Failed to retrieve Google token from device.");
+2062:                 }
+2063:             } else {
+2064:                 // Clear One Tap suppression flag on manual login attempt!
+2065:                 localStorage.removeItem('krishi_one_tap_disabled');
+2066:                 // Trigger popup instantly on Web / PWA
+2067:                 await auth.signInWithPopup(provider);
+2068:                 showToast('✅ Logged in successfully with Google!');
+2069:                 try {
+2070:                     if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
+2071:                 } catch(e) {}
+2072:             }
+2073:         } catch (error) {
+2074:             console.error("Google login error:", error);
+2075:             showToast('❌ Google Sign-in failed: ' + (error.message || error));
+2076:         }
+2077:     }
+2078: 
+2079:     function initGoogleOneTap() {
+2080:         const isCapacitorNative = window.Capacitor &&
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

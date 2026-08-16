@@ -9,7 +9,8 @@
         laserSignalFrequency: 1.0,
         hapticIntensity: 'medium',
         fpsAutoThrottle: true,
-        appCardOpacity: 100
+        appCardOpacity: 100,
+        pageTransitionStyle: 'slide'
     };
     
     // Load config from LocalStorage safely
@@ -92,10 +93,15 @@
                 laserSignalFrequency: parseFloat(window.EliteAnimsConfig.laserSignalFrequency),
                 hapticIntensity: window.EliteAnimsConfig.hapticIntensity,
                 fpsAutoThrottle: window.EliteAnimsConfig.fpsAutoThrottle === true,
-                appCardOpacity: parseInt(window.EliteAnimsConfig.appCardOpacity !== undefined ? window.EliteAnimsConfig.appCardOpacity : 100, 10)
+                appCardOpacity: parseInt(window.EliteAnimsConfig.appCardOpacity !== undefined ? window.EliteAnimsConfig.appCardOpacity : 100, 10),
+                pageTransitionStyle: window.EliteAnimsConfig.pageTransitionStyle || 'slide'
             }));
             
             applyAppOpacity();
+            
+            if (typeof window.syncSettingsToCloud === 'function') {
+                window.syncSettingsToCloud('Visual parameters updated');
+            }
             
             // Dispatch dynamic update event so visual engines react instantly
             window.dispatchEvent(new CustomEvent('elite-animations-config-updated'));
@@ -153,8 +159,23 @@
         let throttleEl = document.getElementById('toggle-fps-throttle');
         if (throttleEl) throttleEl.checked = c.fpsAutoThrottle;
         
+        let autoAdvanceEl = document.getElementById('toggle-auto-advance');
+        if (autoAdvanceEl) autoAdvanceEl.checked = localStorage.getItem('krishi_auto_advance') === 'true';
+        
+        let transitionEl = document.getElementById('select-page-transition');
+        if (transitionEl) transitionEl.value = c.pageTransitionStyle || 'slide';
+        
         updateIndicators();
     }
+
+    window.handleAutoAdvanceToggle = function(element) {
+        localStorage.setItem('krishi_auto_advance', element.checked ? 'true' : 'false');
+        if (typeof window.playSound === 'function') window.playSound('click');
+        if (typeof window.triggerHaptic === 'function') window.triggerHaptic('click');
+        if (typeof window.syncSettingsToCloud === 'function') {
+            window.syncSettingsToCloud('Auto-advance toggled');
+        }
+    };
     
     function updateIndicators() {
         const c = window.EliteAnimsConfig;
@@ -244,11 +265,13 @@
                 if (lowFpsCount >= 4 && !window.EliteAnimsConfig.throttled) {
                     window.EliteAnimsConfig.throttled = true;
                     console.log('[FPS Engine] Framerate dropped below budget. Throttling active animations...');
+                    document.documentElement.classList.add('fps-throttled');
                     let throttleIndicator = document.getElementById('fps-throttle-alert');
                     if (throttleIndicator) throttleIndicator.classList.remove('hidden');
                 } else if (fpsHistory.every(f => f >= 58) && window.EliteAnimsConfig.throttled) {
                     window.EliteAnimsConfig.throttled = false;
                     console.log('[FPS Engine] Framerate recovered. Restoring full animations...');
+                    document.documentElement.classList.remove('fps-throttled');
                     let throttleIndicator = document.getElementById('fps-throttle-alert');
                     if (throttleIndicator) throttleIndicator.classList.add('hidden');
                 }
@@ -309,6 +332,10 @@
         }
     };
 
+
+    document.addEventListener('DOMContentLoaded', () => {
+        syncTuningPanelUI();
+    });
 
     console.log('[Advanced Animations Controller] Initialized successfully with 0.0% risk!');
 })();

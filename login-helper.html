@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Krishi MCQ Pro - Secure Google Authentication</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase Compatibility SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    
+    <style>
+        :root {
+            --bg: #0a1628;
+            --card: #112240;
+            --primary: #4ade80;
+            --text: #e2e8f0;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--bg);
+            font-family: 'Outfit', sans-serif;
+            color: var(--text);
+            overflow: hidden;
+        }
+
+        .auth-container {
+            background-color: var(--card);
+            padding: 40px;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            max-width: 400px;
+            width: 85%;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #4ade80 0%, #2bd5b4 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+        }
+
+        .spinner {
+            width: 64px;
+            height: 64px;
+            border: 4px solid rgba(74, 222, 128, 0.1);
+            border-left-color: var(--primary);
+            border-radius: 50%;
+            margin: 0 auto 32px auto;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-message {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .status-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+
+        .btn-action {
+            display: inline-block;
+            margin-top: 24px;
+            background: linear-gradient(135deg, #4ade80 0%, #2bd5b4 100%);
+            color: #051d0d;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 15px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px rgba(74, 222, 128, 0.2);
+            width: 100%;
+        }
+
+        .btn-action:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(74, 222, 128, 0.4);
+        }
+
+        .btn-action:active {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="auth-container">
+        <div class="logo">Krishi MCQ Pro</div>
+        <div class="subtitle">Secure Google Authentication Assistant</div>
+        
+        <div class="spinner" id="auth-spinner"></div>
+        
+        <div class="status-message" id="status-msg">Initiating Secure Authentication</div>
+        <div class="status-desc" id="status-desc">Please wait while we connect to Google...</div>
+        
+        <button class="btn-action" id="btn-action" style="display: none;">Sign In with Google</button>
+    </div>
+
+    <script>
+        // Eagerly initialize Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyBOyKUK4nIUCp4gF3aiJyOt6OyHhYz10bA",
+            authDomain: "krishi-mcq-pro.firebaseapp.com",
+            projectId: "krishi-mcq-pro",
+            storageBucket: "krishi-mcq-pro.firebasestorage.app",
+            messagingSenderId: "39741021868",
+            appId: "1:39741021868:web:c838ca32f5aaeb41720909",
+            measurementId: "G-MHX05SE7WB",
+            databaseURL: "https://krishi-mcq-pro-default-rtdb.asia-southeast1.firebasedatabase.app"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+
+        const statusMsg = document.getElementById('status-msg');
+        const statusDesc = document.getElementById('status-desc');
+        const spinner = document.getElementById('auth-spinner');
+        const btnAction = document.getElementById('btn-action');
+
+        function updateStatus(title, desc, isError = false, isLoading = false) {
+            statusMsg.textContent = title;
+            statusDesc.textContent = desc;
+            if (isError) {
+                statusMsg.style.color = '#ef4444';
+                spinner.style.display = 'none';
+                btnAction.style.display = 'inline-block';
+                btnAction.textContent = "Retry Sign-In";
+            } else if (isLoading) {
+                statusMsg.style.color = 'var(--text)';
+                spinner.style.display = 'block';
+                btnAction.style.display = 'none';
+            } else {
+                statusMsg.style.color = 'var(--text)';
+                spinner.style.display = 'none';
+                btnAction.style.display = 'inline-block';
+            }
+        }
+
+        // Show spinner on start
+        updateStatus("Connecting to Google", "Connecting to secure Google Sign-In...", false, true);
+
+        // Check if returning with direct Google OAuth parameters in URL hash
+        const hash = window.location.hash;
+        if (hash && hash.includes('id_token=')) {
+            try {
+                // Extract parameters from hash manually (URLSearchParams expects query string format)
+                const hashStr = hash.startsWith('#') ? hash.substring(1) : hash;
+                const params = new URLSearchParams(hashStr);
+                const googleIdToken = params.get('id_token');
+                const sessionId = params.get('state');
+
+                if (googleIdToken && sessionId) {
+                    updateStatus("Linking to App", "Authenticating your mobile app... Please wait.", false, true);
+                    
+                    // Directly write the token to Firestore secure handshake document
+                    const firestore = firebase.firestore();
+                    firestore.collection('login_handshakes').doc(sessionId).set({
+                        token: googleIdToken,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    }).then(() => {
+                        updateStatus("Login Successful", "You have been successfully signed in! You can now close this browser window and return to the app.", false, false);
+                        spinner.style.display = 'none';
+                        btnAction.style.display = 'none';
+                    }).catch((err) => {
+                        console.error("Firestore handshake write error:", err);
+                        updateStatus("Handshake Error", "Failed to securely link session to the app. Please retry.", true);
+                        btnAction.onclick = () => startDirectOAuth(sessionId);
+                    });
+                } else {
+                    updateStatus("Authentication Failed", "OAuth response was missing critical parameters. Please try again.", true);
+                    btnAction.onclick = () => {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        startDirectOAuth(urlParams.get('session'));
+                    };
+                }
+            } catch (err) {
+                console.error("Hash parsing error:", err);
+                updateStatus("Authentication Failed", "Failed to process Google sign-in response.", true);
+            }
+        } else {
+            // Initial load - redirect immediately to Google OAuth for a frictionless experience
+            const urlParams = new URLSearchParams(window.location.search);
+            const sessionId = urlParams.get('session');
+            if (sessionId) {
+                startDirectOAuth(sessionId);
+            } else {
+                updateStatus("Configuration Mismatch", "Invalid auth session. Please launch the login from the app.", true);
+                btnAction.style.display = 'none';
+            }
+        }
+
+        function startDirectOAuth(sessionId) {
+            updateStatus("Redirecting to Google", "Opening secure Google Sign-in...", false, true);
+            
+            // Web Client ID from google-services.json (client_type = 3)
+            const clientId = "39741021868-ig8gckot7movhre5pqr5j15jnc2mis8t.apps.googleusercontent.com";
+            const redirectUri = "https://krishi-mcq-pro.web.app/login-helper.html";
+            
+            // Build absolute direct Google OAuth 2.0 URL
+            // This is completely independent of cookies, sessionStorage, or Firebase SDK internals!
+            const googleOAuthUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+                "client_id=" + encodeURIComponent(clientId) + "&" +
+                "redirect_uri=" + encodeURIComponent(redirectUri) + "&" +
+                "response_type=id_token&" +
+                "scope=" + encodeURIComponent("openid email profile") + "&" +
+                "nonce=" + encodeURIComponent("krishimcqnonce" + Date.now()) + "&" +
+                "state=" + encodeURIComponent(sessionId);
+            
+            window.location.href = googleOAuthUrl;
+        }
+    </script>
+</body>
+</html>

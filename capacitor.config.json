@@ -2,13 +2,13 @@
   "appId": "com.krishimcqpro.app",
   "appName": "Krishi MCQ Pro",
   "webDir": "www",
+
   "server": {
     "androidScheme": "https",
     "url": "https://krishi-mcq-pro.web.app",
-    "allowNavigation": [
-      "krishi-mcq-pro.web.app"
-    ]
+    "cleartext": true
   },
+
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 2500,
@@ -31,6 +31,12 @@
     },
     "PushNotifications": {
       "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "GoogleAuth": {
+      "scopes": ["profile", "email"],
+      "clientId": "39741021868-ig8gckot7movhre5pqr5j15jnc2mis8t.apps.googleusercontent.com",
+      "serverClientId": "39741021868-ig8gckot7movhre5pqr5j15jnc2mis8t.apps.googleusercontent.com",
+      "forceCodeForRefreshToken": true
     }
   }
 }

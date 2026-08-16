@@ -1,3 +1,68 @@
+function initLiveOTAUpdateEngine() {
+    let isApplyingOTA = false;
+
+    async function checkOTAPush() {
+        if (isApplyingOTA) return;
+
+        // Active Quiz Guard: Do not interrupt ongoing quizzes
+        const mcqPage = document.getElementById('page-mcq');
+        if (window.__krishiQuizActive__ || (mcqPage && !mcqPage.classList.contains('hidden'))) {
+            console.log('[OTA Engine] Quiz in progress. Postponing OTA live update check.');
+            return;
+        }
+
+        try {
+            const versionUrl = './version.json?t=' + Date.now();
+            const res = await fetch(versionUrl, { cache: 'no-store' });
+            if (!res.ok) return;
+
+            const meta = await res.json();
+            if (!meta || !meta.cacheName) return;
+
+            const activeCache = localStorage.getItem('krishi_active_cache_name');
+            if (!activeCache) {
+                localStorage.setItem('krishi_active_cache_name', meta.cacheName);
+                return;
+            }
+
+            if (activeCache !== meta.cacheName) {
+                isApplyingOTA = true;
+                console.log(`[OTA Engine] New live version detected! Current: ${activeCache} -> New: ${meta.cacheName}`);
+
+                if (typeof showUpdateProgressHUD === 'function') {
+                    showUpdateProgressHUD('⚡ Instant OTA Update: नयाँ प्रश्न तथा फिचरहरू उपलब्ध भए!', 'success', 3500);
+                } else if (typeof showToast === 'function') {
+                    showToast('⚡ Instant OTA Update: New questions & features active!', 4000);
+                }
+
+                localStorage.setItem('krishi_active_cache_name', meta.cacheName);
+
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistrations().then(regs => {
+                        regs.forEach(reg => {
+                            try { reg.update(); } catch (e) {}
+                        });
+                    });
+                }
+
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1200);
+            }
+        } catch (err) {
+            console.warn('[OTA Engine] Check skipped:', err);
+        }
+    }
+
+    setTimeout(checkOTAPush, 2500);
+    setInterval(checkOTAPush, 5 * 60 * 1000);
+
+    window.addEventListener('focus', checkOTAPush);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) checkOTAPush();
+    });
+}
+
 function initAutoUpdateChecker() {
         let currentLastModified = null;
         let currentContentLength = null;
@@ -286,3 +351,444 @@ function newfeat_showNotification(message, type) {
             }
         }, 4000);
     }
+
+async function checkAndSyncDeltaQuestions() {
+    try {
+        const deltaUrl = './delta_questions.json?t=' + Date.now();
+        const res = await fetch(deltaUrl, { cache: 'no-store' });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (!data || !data.added_questions || !Array.isArray(data.added_questions) || data.added_questions.length === 0) return;
+
+        const lastSyncedTime = parseInt(localStorage.getItem('krishi_last_delta_sync_time') || '0', 10);
+        if (data.timestamp && data.timestamp <= lastSyncedTime) {
+            console.log('[DeltaSync] No new delta questions available. Current timestamp:', lastSyncedTime);
+            return;
+        }
+
+        if (typeof showUpdateProgressHUD === 'function') {
+            showUpdateProgressHUD(`⚡ पृष्ठभूमिमा ${data.added_questions.length} वटा नयाँ कृषि प्रश्नहरू सिङ्क हुँदैछन्...`, 'syncing', 0);
+        }
+
+        if (!Array.isArray(window.allQuestions)) {
+            window.allQuestions = [];
+        }
+
+        const existingMap = new Set(window.allQuestions.map(q => q.id || q.q));
+        const newItemsToInsert = [];
+
+        data.added_questions.forEach(newQ => {
+            const qKey = newQ.id || newQ.q;
+            if (!existingMap.has(qKey)) {
+                window.allQuestions.push(newQ);
+                newItemsToInsert.push(newQ);
+                existingMap.add(qKey);
+            }
+        });
+
+        if (newItemsToInsert.length > 0) {
+            console.log(`[DeltaSync] Successfully merged ${newItemsToInsert.length} new questions into active memory.`);
+
+            // Priority Tier 1: Immediate High-Speed Text Persistence into SQLite / LocalStorage
+            if (window.KrishiPreCachePriorityManager) {
+                await window.KrishiPreCachePriorityManager.processHighPriorityTextSync(newItemsToInsert);
+            } else if (window.KrishiSQLite && typeof window.KrishiSQLite.saveQuestions === 'function') {
+                try { await window.KrishiSQLite.saveQuestions(newItemsToInsert); } catch(e) {}
+            }
+
+            // Priority Tier 2: Defer Non-Essential Media & Diagram Pre-Caching to Network Idle
+            const deferredMediaUrls = [];
+            newItemsToInsert.forEach(q => {
+                if (q.image || q.img) deferredMediaUrls.push(q.image || q.img);
+                if (q.diagram) deferredMediaUrls.push(q.diagram);
+            });
+            if (deferredMediaUrls.length > 0 && window.KrishiPreCachePriorityManager) {
+                window.KrishiPreCachePriorityManager.scheduleDeferredMediaCache(deferredMediaUrls);
+            }
+
+            if (data.timestamp) {
+                localStorage.setItem('krishi_last_delta_sync_time', String(data.timestamp));
+            }
+
+            const successMsg = `✅ ${newItemsToInsert.length} वटा नयाँ प्रश्नहरू स्वतः जोडिए! (जम्मा: ${window.allQuestions.length})`;
+
+            if (typeof showUpdateProgressHUD === 'function') {
+                showUpdateProgressHUD(successMsg, 'success', 4000);
+            } else if (typeof showToast === 'function') {
+                showToast(successMsg, 4500);
+            }
+
+            window.dispatchEvent(new CustomEvent('krishi-delta-questions-synced', {
+                detail: { addedCount: newItemsToInsert.length, totalCount: window.allQuestions.length }
+            }));
+        }
+    } catch(err) {
+        console.warn('[DeltaSync] Sync bypass:', err);
+    }
+}
+
+let _hudDismissTimer = null;
+
+function showUpdateProgressHUD(message, type = 'syncing', duration = 3500) {
+    let hud = document.getElementById('krishi-update-progress-hud');
+    if (!hud) {
+        hud = document.createElement('div');
+        hud.id = 'krishi-update-progress-hud';
+        hud.setAttribute('style', `
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(180%);
+            z-index: 99999; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            background: rgba(15, 23, 42, 0.88); color: #ffffff; padding: 10px 20px;
+            border-radius: 50px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.4); display: flex; align-items: center; gap: 10px;
+            font-size: 12px; font-weight: 600; font-family: system-ui, -apple-system, sans-serif;
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+            pointer-events: auto; max-width: 90vw; text-align: center;
+        `);
+        document.body.appendChild(hud);
+    }
+
+    if (_hudDismissTimer) {
+        clearTimeout(_hudDismissTimer);
+        _hudDismissTimer = null;
+    }
+
+    let iconHtml = '⚡';
+    if (type === 'syncing') {
+        iconHtml = '<span class="w-2 h-2 rounded-full bg-emerald-400 inline-block mr-1 animate-pulse"></span>⚡';
+        hud.style.borderColor = 'rgba(16, 185, 129, 0.5)';
+    } else if (type === 'success') {
+        iconHtml = '✅';
+        hud.style.borderColor = 'rgba(16, 185, 129, 0.8)';
+    } else if (type === 'error') {
+        iconHtml = '⚠️';
+        hud.style.borderColor = 'rgba(239, 68, 68, 0.6)';
+    }
+
+    hud.innerHTML = `<span style="font-size:14px; display:inline-flex; align-items:center;">${iconHtml}</span><span>${message}</span>`;
+
+    hud.style.opacity = '1';
+    hud.style.transform = 'translateX(-50%) translateY(0)';
+
+    if (duration > 0) {
+        _hudDismissTimer = setTimeout(() => {
+            hud.style.transform = 'translateX(-50%) translateY(180%)';
+            hud.style.opacity = '0';
+        }, duration);
+    }
+}
+
+class KrishiPreCachePriorityManager {
+    static getNetworkQuality() {
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (!conn) return 'fast';
+        if (conn.saveData) return 'slow';
+        const type = conn.effectiveType || '';
+        if (type === '2g' || type === 'slow-2g' || type === '3g') return 'slow';
+        return 'fast';
+    }
+
+    static async processHighPriorityTextSync(questions) {
+        if (!Array.isArray(questions) || questions.length === 0) return 0;
+
+        let count = 0;
+        if (window.KrishiSQLite && typeof window.KrishiSQLite.saveQuestions === 'function') {
+            try {
+                await window.KrishiSQLite.saveQuestions(questions);
+                count = questions.length;
+                console.log(`[PriorityManager] Tier 1 High-Priority Text: Saved ${count} questions to SQLite.`);
+            } catch(e) {
+                console.warn('[PriorityManager] SQLite save bypass:', e);
+            }
+        }
+        return count;
+    }
+
+    static scheduleDeferredMediaCache(mediaUrls) {
+        if (!Array.isArray(mediaUrls) || mediaUrls.length === 0) return;
+
+        const scheduleTask = window.requestIdleCallback || ((fn) => setTimeout(fn, 2500));
+
+        scheduleTask(() => {
+            mediaUrls.forEach(url => {
+                if (!url) return;
+                fetch(url, { mode: 'no-cors', priority: 'low' }).catch(() => {});
+            });
+            console.log(`[PriorityManager] Tier 2 Deferred Media: ${mediaUrls.length} assets background fetched.`);
+        });
+    }
+}
+
+window.KrishiPreCachePriorityManager = KrishiPreCachePriorityManager;
+
+class KrishiSM2Engine {
+    static STORAGE_KEY = 'krishi_sm2';
+
+    static _getData() {
+        try {
+            const raw = localStorage.getItem(this.STORAGE_KEY);
+            return raw ? JSON.parse(raw) : {};
+        } catch(e) {
+            return {};
+        }
+    }
+
+    static _saveData(data) {
+        try {
+            localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+        } catch(e) {}
+    }
+
+    static recordAnswer(questionId, isCorrect, timeSpentSec = 10) {
+        if (!questionId) return;
+        const data = this._getData();
+        const now = Date.now();
+        const existing = data[questionId] || { reviews: 0, interval: 0, easeFactor: 2.5, lapses: 0, status: 'new' };
+
+        // --- FSRS Migration ---
+        if (typeof existing.difficulty === 'undefined') {
+            let d = 11 - ((existing.easeFactor || 2.5) - 1.3) * 5.29;
+            existing.difficulty = Math.max(1, Math.min(10, Math.round(d * 10) / 10));
+        }
+        if (typeof existing.stability === 'undefined') {
+            existing.stability = existing.interval || (existing.reviews > 0 ? 1 : 0.5);
+        }
+        if (typeof existing.lapses === 'undefined') existing.lapses = 0;
+
+        let grade = 0; // 0=Fail, 1=Hard, 2=Good, 3=Easy
+        let feedback = "";
+        let status = 'scheduled';
+        let suspendUntil = null;
+
+        if (!isCorrect) {
+            grade = 0;
+            existing.lapses += 1;
+            if (existing.lapses >= 4) {
+                status = 'suspended';
+                suspendUntil = now + (3 * 24 * 3600 * 1000); // 3 days penalty
+                feedback = "❌ Leech (Suspended)";
+            } else {
+                status = 'due';
+                feedback = "❌ Hard (Fail)";
+            }
+        } else {
+            existing.lapses = 0;
+            if (timeSpentSec <= 5) { grade = 3; feedback = "🚀 Easy"; }
+            else if (timeSpentSec <= 15) { grade = 2; feedback = "✅ Good"; }
+            else { grade = 1; feedback = "⏳ Hard"; }
+        }
+
+        // --- FSRS DSR Math ---
+        let elapsedDays = existing.lastAnswered ? (now - existing.lastAnswered) / (24 * 3600 * 1000) : 0;
+        elapsedDays = Math.max(0, elapsedDays);
+        let R = Math.pow(0.9, elapsedDays / Math.max(0.1, existing.stability));
+
+        // Difficulty Update
+        let D = existing.difficulty - (grade - 2.5); // good/easy drops difficulty, hard/fail increases it
+        D = Math.max(1, Math.min(10, D));
+
+        // Stability Update
+        let S = existing.stability;
+        if (grade === 0) {
+            S = Math.max(0.1, S * 0.2); // Fail drops stability
+        } else {
+            let factor = (grade === 3) ? 1.5 : (grade === 2) ? 1.0 : 0.5;
+            let multiplier = Math.max(1, 1 + factor * (11 - D) * (1 - R));
+            S = Math.max(1, S * multiplier); 
+        }
+
+        let nextInterval = Math.max(1, Math.round(S));
+        let reviews = existing.reviews + 1;
+
+        if (nextInterval >= 21 && reviews >= 4 && status === 'scheduled') {
+            status = 'mastered';
+            feedback = "🎓 Mastered!";
+        }
+
+        data[questionId] = {
+            reviews: reviews,
+            interval: nextInterval, // Legacy support
+            difficulty: parseFloat(D.toFixed(2)),
+            stability: parseFloat(S.toFixed(2)),
+            retrievability: parseFloat(R.toFixed(3)),
+            easeFactor: existing.easeFactor,
+            lapses: existing.lapses,
+            lastAnswered: now,
+            nextReview: status === 'suspended' ? suspendUntil : now + (nextInterval * 24 * 3600 * 1000),
+            status: status === 'suspended' ? 'suspended' : (reviews >= 4 && nextInterval >= 21 ? 'mastered' : status)
+        };
+
+        this._saveData(data);
+        this.updateHUDStats();
+        if (typeof this.recordDailyReview === 'function') {
+            this.recordDailyReview(isCorrect);
+        }
+
+        console.log(`[FSRS] Q:${questionId} D:${D.toFixed(1)} S:${S.toFixed(1)} R:${(R*100).toFixed(1)}% Int:${nextInterval}d Grade:${feedback}`);
+        return feedback;
+    }
+
+    static getDueQuestions(allQuestions) {
+        if (!Array.isArray(allQuestions) || allQuestions.length === 0) return [];
+        const data = this._getData();
+        const qIdSet = new Set(allQuestions.map(q => String(q.id || q.q)));
+        let cleaned = false;
+        Object.keys(data).forEach(id => {
+            if (!qIdSet.has(String(id))) {
+                delete data[id];
+                cleaned = true;
+            }
+        });
+        if (cleaned) this._saveData(data);
+
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        const now = todayEnd.getTime();
+
+        return allQuestions.filter(q => {
+            const qId = q.id || q.q;
+            const rec = data[qId];
+            if (!rec) return false;
+            return rec.status === 'due' || (rec.nextReview && rec.nextReview <= now && rec.status !== 'mastered');
+        });
+    }
+
+    static getStats() {
+        const data = this._getData();
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        const now = todayEnd.getTime();
+        let dueCount = 0;
+        let masteredCount = 0;
+        let totalTracked = Object.keys(data).length;
+
+        Object.values(data).forEach(rec => {
+            if (rec.status === 'mastered') masteredCount++;
+            else if (rec.status === 'due' || (rec.nextReview && rec.nextReview <= now)) dueCount++;
+        });
+
+        return { dueCount, masteredCount, totalTracked };
+    }
+
+    static updateHUDStats() {
+        const stats = this.getStats();
+        const badgeEl = document.getElementById('sm2-due-badge-count');
+        const masteredEl = document.getElementById('sm2-mastered-badge-count');
+        if (badgeEl) badgeEl.textContent = stats.dueCount;
+        if (masteredEl) masteredEl.textContent = stats.masteredCount;
+    }
+
+    static recordDailyReview(isCorrect = null) {
+        let log = {};
+        try {
+            log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
+        } catch(e) {}
+        
+        const dateStr = new Date().toISOString().split('T')[0];
+        if (!log[dateStr]) log[dateStr] = { total: 0, correct: 0 };
+        
+        // If we are just recording a review attempt
+        if (isCorrect !== null) {
+            log[dateStr].total += 1;
+            if (isCorrect) log[dateStr].correct += 1;
+        }
+        
+        try {
+            localStorage.setItem('krishi_sm2_daily_log', JSON.stringify(log));
+        } catch(e) {}
+    }
+
+    static getRetentionRate() {
+        try {
+            let log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
+            const dateStr = new Date().toISOString().split('T')[0];
+            let today = log[dateStr];
+            if (!today || today.total === 0) return 0;
+            return Math.round((today.correct / today.total) * 100);
+        } catch(e) {
+            return 0;
+        }
+    }
+}
+
+window.KrishiSM2Engine = KrishiSM2Engine;
+
+class KrishiE2EEEngine {
+    static async _getKey(passphrase) {
+        const enc = new TextEncoder();
+        const keyMaterial = await window.crypto.subtle.importKey(
+            'raw',
+            enc.encode(passphrase || 'KRISHI-DEFAULT-PASSPHRASE'),
+            { name: 'PBKDF2' },
+            false,
+            ['deriveKey']
+        );
+        return window.crypto.subtle.deriveKey(
+            {
+                name: 'PBKDF2',
+                salt: enc.encode('krishi-mcq-pro-salt-2026'),
+                iterations: 10000,
+                hash: 'SHA-256'
+            },
+            keyMaterial,
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['encrypt', 'decrypt']
+        );
+    }
+
+    static async encryptPayload(payloadObj, passphrase) {
+        if (!window.crypto || !window.crypto.subtle) return payloadObj;
+        try {
+            const key = await this._getKey(passphrase);
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const jsonStr = JSON.stringify(payloadObj);
+            const encoded = new TextEncoder().encode(jsonStr);
+            const cipher = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+
+            const cipherB64 = btoa(String.fromCharCode(...new Uint8Array(cipher)));
+            const ivB64 = btoa(String.fromCharCode(...iv));
+
+            return { __e2ee__: true, v: 1, cipher: cipherB64, iv: ivB64, updatedAt: payloadObj.updatedAt || Date.now() };
+        } catch(e) {
+            console.warn('[E2EE] Encryption fallback:', e);
+            return payloadObj;
+        }
+    }
+
+    static async decryptPayload(envelopeObj, passphrase) {
+        if (!envelopeObj || !envelopeObj.__e2ee__ || !envelopeObj.cipher || !envelopeObj.iv) {
+            return envelopeObj;
+        }
+        if (!window.crypto || !window.crypto.subtle) return envelopeObj;
+
+        try {
+            const key = await this._getKey(passphrase);
+            const cipherBytes = Uint8Array.from(atob(envelopeObj.cipher), c => c.charCodeAt(0));
+            const ivBytes = Uint8Array.from(atob(envelopeObj.iv), c => c.charCodeAt(0));
+
+            const decryptedBuffer = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, cipherBytes);
+            const jsonStr = new TextDecoder().decode(decryptedBuffer);
+            return JSON.parse(jsonStr);
+        } catch(e) {
+            console.warn('[E2EE] Decryption bypass:', e);
+            return envelopeObj;
+        }
+    }
+}
+
+function generatePairingPin() {
+    if (typeof window.generatePairingPin === 'function' && window.generatePairingPin !== generatePairingPin) {
+        return window.generatePairingPin();
+    }
+}
+
+function pairWithPin(pinInput) {
+    if (typeof window.pairWithPin === 'function' && window.pairWithPin !== pairWithPin) {
+        return window.pairWithPin(pinInput);
+    }
+}
+
+window.KrishiE2EEEngine = KrishiE2EEEngine;
+window.showUpdateProgressHUD = showUpdateProgressHUD;
+window.checkAndSyncDeltaQuestions = checkAndSyncDeltaQuestions;

@@ -518,7 +518,7 @@
         let customs = _loadCustomSounds();
         const newId = 'custom_' + Date.now();
         customs.push({ id: newId, label: '🎵 ' + name, url, color: '#a78bfa' });
-        localStorage.setItem('krishi_ambient_custom', JSON.stringify(customs));
+        KrishiStorage.setItem('krishi_ambient_custom', JSON.stringify(customs));
         nameEl.value = '';
         urlEl.value = '';
         window.ambientRenderGrid();
@@ -528,13 +528,13 @@
     window.ambientRemoveCustomSound = function(id) {
         let customs = _loadCustomSounds();
         customs = customs.filter(s => s.id !== id);
-        localStorage.setItem('krishi_ambient_custom', JSON.stringify(customs));
+        KrishiStorage.setItem('krishi_ambient_custom', JSON.stringify(customs));
         window.ambientStop(id);
         window.ambientRenderGrid();
     };
 
     function _loadCustomSounds() {
-        try { return JSON.parse(localStorage.getItem('krishi_ambient_custom') || '[]'); } catch { return []; }
+        try { return JSON.parse(KrishiStorage.getItem('krishi_ambient_custom') || '[]'); } catch { return []; }
     }
 
     // ─── PERSISTENT STATE ────────────────────────────────────────────────────
@@ -543,7 +543,7 @@
         Object.keys(activeSources).forEach(id => {
             state[id] = activeSources[id].gainNode.gain.value;
         });
-        localStorage.setItem('krishi_ambient_state', JSON.stringify(state));
+        KrishiStorage.setItem('krishi_ambient_state', JSON.stringify(state));
     }
 
     // ─── DRAWER RENDERER (now exposed as ambientRenderGrid for settings tab) ──────────────────────────────────────────

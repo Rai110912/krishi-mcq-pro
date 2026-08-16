@@ -767,7 +767,7 @@
 }
 
 /* GPU Isolation for Butterworth Smooth Rendering */
-.hover-card-trigger, .page, #mcq-card-container, .option-btn, #mobile-bottom-nav, .modal-card-content {
+.hover-card-trigger, .page, #mcq-card-container, .option-btn, .modal-card-content {
     will-change: transform, opacity;
     transform-style: preserve-3d;
     backface-visibility: hidden;
@@ -837,10 +837,7 @@
     transition: width 0.1s ease-out;
 }
 
-/* 3D Container setup */
-body {
-    perspective: 1200px;
-}
+/* 3D Container setup moved to specific elements to avoid breaking fixed positioning */
 /* ==================== 2026 SIX FUTURISTIC ANIMATIONS STYLES ==================== */
 
 /* १. बायो-मिमेटिक बाली वृद्धि एनिमेसनको बक्स */

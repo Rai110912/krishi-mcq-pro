@@ -1444,10 +1444,10 @@ button, a, input, select, textarea {
     background: rgba(0, 0, 0, 0.04) !important;
     border: none !important;
     /* Ultra-smooth hardware accelerated transitions running at 60fps/120Hz */
-    transition: width 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
-                padding 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
-                background-color 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), 
-                border-radius 0.35s cubic-bezier(0.25, 0.8, 0.25, 1),
+    transition: width 0.2s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                padding 0.2s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                background-color 0.2s cubic-bezier(0.25, 0.8, 0.25, 1), 
+                border-radius 0.2s cubic-bezier(0.25, 0.8, 0.25, 1),
                 transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
     cursor: pointer;
     overflow: hidden !important; /* Hide overflowing text label during width transitions */
@@ -1457,6 +1457,10 @@ button, a, input, select, textarea {
 
 .dark .dock-item {
     background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.dock-item:active {
+    transform: scale(0.85) !important;
 }
 
 .dock-item.dock-active {

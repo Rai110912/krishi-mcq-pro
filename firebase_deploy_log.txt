@@ -4,13 +4,21 @@
 [36m[1mi [22m[39m deploying [1mhosting[22m
 [36m[1mi  hosting[krishi-mcq-pro]:[22m[39m beginning deploy...
 [36m[1mi  hosting[krishi-mcq-pro]:[22m[39m found 35 files in [1mwww[22m
-[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m file upload complete
-[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m finalizing version...
-[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m version finalized
-[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m releasing new version...
-[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m release complete
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [0/5] ([1m[32m0%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [1/5] ([1m[32m20%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [1/5] ([1m[32m20%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [1/5] ([1m[32m20%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [1/5] ([1m[32m20%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [4/5] ([1m[32m80%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [4/5] ([1m[32m80%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [4/5] ([1m[32m80%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [4/5] ([1m[32m80%[39m[22m)
+[36m[1mi  hosting:[22m[39m uploading new files [5/5] ([1m[32m100%[39m[22m)
 
-[32m[1m+ [22m[39m [1m[4mDeploy complete![24m[22m
-
-[1mProject Console:[22m https://console.firebase.google.com/project/krishi-mcq-pro/overview
-[1mHosting URL:[22m https://krishi-mcq-pro.web.app
+[1m[31mError:[39m[22m Task 70c3975a068684786e9c486913e213e5a67089b62fe8bebc616d978b4eb893fc failed: retries exhausted after 6 attempts, with error: Unexpected error while uploading file: Couldn't process request (status=400): content hash doesn't match content

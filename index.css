@@ -1413,9 +1413,7 @@ button, a, input, select, textarea {
 .header-hide {
     transform: translateY(-100%);
 }
-#nav-btn-2:not([style*="var(--primary)"]) {
-    color: #e2e8f0 !important;
-}
+
 
 .bottom-nav-hide {
     transform: translateY(140%) !important;
@@ -1424,6 +1422,11 @@ button, a, input, select, textarea {
 /* macOS-style Floating Zoom Dock */
 @media (max-width: 1023px) {
 /* Removed mobile-bottom-nav floating dock styles to restore the original full-width bar */
+}
+
+/* Center FAB inactive state (stays white/slate-200 until active) */
+#nav-btn-2:not(.dock-active) {
+    color: #e2e8f0 !important;
 }
 
 @media (min-width: 1024px) {

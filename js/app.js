@@ -4624,6 +4624,10 @@ function loadData(){
             }
         }
 
+        if (window.KrishiSM2Engine && !state.isMock) {
+            window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
+        }
+
         // Standard statistics logger (Timeout counts as an attempted/solved question)
         localData.stats.totalSolved++;
         if(!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub]={solved:0, correct:0};
@@ -4993,7 +4997,7 @@ function loadData(){
             detail: { isCorrect: isCorrect, correctOptionText: correctOptionText } 
         }));
 
-        if (window.KrishiSM2Engine) {
+        if (window.KrishiSM2Engine && !state.isMock) {
             window.KrishiSM2Engine.recordAnswer(q.id || q.q, isCorrect, secondsSpent);
         }
 
@@ -5032,7 +5036,8 @@ function loadData(){
 
         // Auto-Advance Questions (1.5 seconds delay after submit)
         if (KrishiStorage.getItem('krishi_auto_advance') === 'true') {
-            setTimeout(() => {
+            if (state.autoAdvanceTimer) clearTimeout(state.autoAdvanceTimer);
+            state.autoAdvanceTimer = setTimeout(() => {
                 let mcqPage = document.getElementById('page-mcq');
                 if (mcqPage && !mcqPage.classList.contains('hidden') && state.answered) {
                     if (state.currentIndex < state.totalQuestions - 1) {
@@ -5092,6 +5097,10 @@ function loadData(){
     }
 
     function nextMCQQuestion(){
+        if (state.autoAdvanceTimer) {
+            clearTimeout(state.autoAdvanceTimer);
+            state.autoAdvanceTimer = null;
+        }
         if (state.isTransitioning) return;
         state.isTransitioning = true;
         animateQuestionTransition(() => {
@@ -5122,6 +5131,10 @@ function loadData(){
             // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
             if (!state.activeConfig?.isSpacedReview) {
                 if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
+            }
+
+            if (window.KrishiSM2Engine && !state.isMock) {
+                window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
             }
             
             state.currentIndex++;
@@ -5413,6 +5426,16 @@ function loadData(){
         let wrongIds = state.sessionResults.filter(r=>!r.correct && r.id).map(r=>r.id);
         let pool = getAllQuestions().filter(q => wrongIds.includes(q.id));
         if(pool.length===0){ showToast('No corrections needed!'); return; }
+        
+        // Prevent previous session config (e.g. Mock Exam 'end' feedback) from bleeding into retry loop
+        state.activeConfig = { 
+            subject: 'Retry', topic: 'all', difficulty: 'all', 
+            count: pool.length, timer: 'off', timerMin: 0, 
+            perQTimer: 'off', perQSec: 0, negativeMarking: 'off', 
+            feedback: 'immediate', shuffleQs: false, shuffleOpts: true, 
+            isMock: false, isSpacedReview: false 
+        };
+        
         transitionResultToMcq(pool, false, 0);
     }
 
@@ -15472,7 +15495,8 @@ window.initNepalGlobe = function() {
     window.swiperState = {
         cards: [],
         index: 0,
-        listenersAttached: false
+        listenersAttached: false,
+        isAnimating: false
     };
 
     window.startFlashcardSwiper = function() {
@@ -15539,6 +15563,10 @@ window.initNepalGlobe = function() {
         card.style.transition = 'none';
         card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
         card.style.opacity = '1';
+        card.style.pointerEvents = 'auto'; // ensure clickable
+        window.swiperState.isAnimating = false; // unlock interaction
+        window.swiperState.cardStartTime = Date.now(); // track time spent
+        questionStartTime = window.swiperState.cardStartTime; // sync global timer for session history
 
         // Reset indicators
         const indRight = document.getElementById('tinder-indicator-right');
@@ -15586,8 +15614,16 @@ window.initNepalGlobe = function() {
 
     window.swipeFlashcardLeft = function() {
         if (window.swiperState.index >= window.swiperState.cards.length) return;
+        if (window.swiperState.isAnimating) return;
+        window.swiperState.isAnimating = true;
+
         const card = document.getElementById('tinder-card');
-        if (!card) return;
+        if (!card) {
+            window.swiperState.isAnimating = false;
+            return;
+        }
+
+        card.style.pointerEvents = 'none'; // disable pointer events during animation
 
         card.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.35s ease';
         card.style.transform = 'translate3d(-500px, 0px, 0) rotate(-30deg)';
@@ -15595,10 +15631,39 @@ window.initNepalGlobe = function() {
 
         let q = window.swiperState.cards[window.swiperState.index];
         if (q) {
+            if (!localData.wrong) localData.wrong = [];
             if (localData && localData.wrong && !localData.wrong.includes(q.id)) {
                 localData.wrong.push(q.id);
-                saveData();
+                // saveData() is called below
             }
+            
+            let secondsSpent = Math.max(1, Math.round((Date.now() - (window.swiperState.cardStartTime || Date.now())) / 1000));
+            
+            // FSRS
+            if (window.KrishiSM2Engine) {
+                window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
+            }
+
+            // Session History
+            if (typeof recordQuestionTime === 'function') {
+                recordQuestionTime(q.id, q.sub, q.difficulty || 'Medium', false);
+            }
+
+            // Stats & Streak
+            if (!localData.stats) localData.stats = {totalSolved:0, totalCorrect:0, subjectStats:{}};
+            if (!localData.stats.subjectStats) localData.stats.subjectStats = {};
+            
+            localData.stats.totalSolved++;
+            if (!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub] = {solved:0, correct:0};
+            localData.stats.subjectStats[q.sub].solved++;
+
+            let today = getLocalDateString();
+            if (!localData.streak) localData.streak = {};
+            if (!localData.streak[today]) localData.streak[today] = {solved:0, correct:0};
+            localData.streak[today].solved++;
+
+            saveData();
+            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
         }
 
         playSound('wrong');
@@ -15612,8 +15677,16 @@ window.initNepalGlobe = function() {
 
     window.swipeFlashcardRight = function() {
         if (window.swiperState.index >= window.swiperState.cards.length) return;
+        if (window.swiperState.isAnimating) return;
+        window.swiperState.isAnimating = true;
+
         const card = document.getElementById('tinder-card');
-        if (!card) return;
+        if (!card) {
+            window.swiperState.isAnimating = false;
+            return;
+        }
+
+        card.style.pointerEvents = 'none'; // disable pointer events during animation
 
         card.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.35s ease';
         card.style.transform = 'translate3d(500px, 0px, 0) rotate(30deg)';
@@ -15621,13 +15694,44 @@ window.initNepalGlobe = function() {
 
         let q = window.swiperState.cards[window.swiperState.index];
         if (q) {
+            if (!localData.wrong) localData.wrong = [];
             if (localData && localData.wrong && localData.wrong.includes(q.id)) {
                 localData.wrong = localData.wrong.filter(id => id !== q.id);
                 if (!localData.wrongLog) localData.wrongLog = {};
                 let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
                 localData.wrongLog[q.id] = { action: 'remove', timestamp: Date.now(), _rev: rev + 1 };
-                saveData();
             }
+
+            let secondsSpent = Math.max(1, Math.round((Date.now() - (window.swiperState.cardStartTime || Date.now())) / 1000));
+            
+            // FSRS
+            if (window.KrishiSM2Engine) {
+                window.KrishiSM2Engine.recordAnswer(q.id || q.q, true, secondsSpent);
+            }
+
+            // Session History
+            if (typeof recordQuestionTime === 'function') {
+                recordQuestionTime(q.id, q.sub, q.difficulty || 'Medium', true);
+            }
+
+            // Stats & Streak
+            if (!localData.stats) localData.stats = {totalSolved:0, totalCorrect:0, subjectStats:{}};
+            if (!localData.stats.subjectStats) localData.stats.subjectStats = {};
+            
+            localData.stats.totalSolved++;
+            localData.stats.totalCorrect++;
+            if (!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub] = {solved:0, correct:0};
+            localData.stats.subjectStats[q.sub].solved++;
+            localData.stats.subjectStats[q.sub].correct++;
+
+            let today = getLocalDateString();
+            if (!localData.streak) localData.streak = {};
+            if (!localData.streak[today]) localData.streak[today] = {solved:0, correct:0};
+            localData.streak[today].solved++;
+            localData.streak[today].correct++;
+
+            saveData();
+            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
         }
 
         playSound('correct');
@@ -15657,6 +15761,7 @@ window.initNepalGlobe = function() {
 
         card.addEventListener('pointerdown', function(e) {
             if (window.swiperState.index >= window.swiperState.cards.length) return;
+            if (window.swiperState.isAnimating) return;
             isDragging = true;
             startX = e.clientX;
             startY = e.clientY;
@@ -15715,6 +15820,7 @@ window.initNepalGlobe = function() {
 
         // Also add click event to show answer on tap without drag
         card.addEventListener('click', function(e) {
+            if (window.swiperState.isAnimating) return;
             // Guard against click triggering after drag
             if (Math.abs(deltaX) < 8 && Math.abs(deltaY) < 8) {
                 window.revealFlashcardAnswer();

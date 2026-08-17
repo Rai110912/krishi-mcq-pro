@@ -4098,9 +4098,13 @@ function loadData(){
 
     // ==================== PRACTICE / EXAMS SETUP ====================
     function startPractice(sub, cnt){
+        if (isTransitioning) return;
+        isTransitioning = true;
+        setTimeout(() => isTransitioning = false, 1000);
+        
         stopTimer();
         let pool = getAllQuestions();
-        if(sub!=='all') pool = pool.filter(q=>q.sub===sub);
+        if(sub!=='all') pool = pool.filter(q=>(q.sub || "").trim().toLowerCase() === (sub || "").trim().toLowerCase());
         pool = shuffle(pool).slice(0, Math.min(cnt, pool.length));
         if(pool.length===0){ showToast('No questions available in this category!'); return; }
         
@@ -4127,7 +4131,7 @@ function loadData(){
         let mins = parseInt(document.getElementById('mock-time').value)||30;
         let sub = document.getElementById('mock-subject').value;
         let pool = getAllQuestions();
-        if(sub!=='all') pool=pool.filter(q=>q.sub===sub);
+        if(sub!=='all') pool=pool.filter(q=>(q.sub || "").trim().toLowerCase() === (sub || "").trim().toLowerCase());
         pool = shuffle(pool).slice(0, Math.min(cnt, pool.length));
         if(pool.length===0){ showToast('No questions matched filters!'); return; }
         state.activeConfig = { subject: sub, topic: 'all', difficulty: 'all', count: cnt, timer: 'on', timerMin: mins, perQTimer: 'off', perQSec: 0, negativeMarking: 'on', feedback: 'end', shuffleQs: true, shuffleOpts: true, isMock: true };
@@ -4156,14 +4160,14 @@ function loadData(){
         onPracticeSubjectChanged(preSelectedTopic);
         
         // Load configurations
+        // Load configurations
         let rawLast = KrishiStorage.getItem('krishi_last_practice_config');
-        if (rawLast) {
+        if (rawLast && preSelectedSubject === 'all') {
             try {
                 let conf = JSON.parse(rawLast);
-                if (preSelectedSubject === 'all') {
-                    subSel.value = conf.subject || 'all';
-                    onPracticeSubjectChanged(conf.topic || 'all');
-                }
+                subSel.value = conf.subject || 'all';
+                onPracticeSubjectChanged(conf.topic || 'all');
+                
                 document.getElementById('prac-cfg-difficulty').value = conf.difficulty || 'all';
                 document.getElementById('prac-cfg-count').value = conf.count || 20;
                 document.getElementById('prac-cfg-count').dispatchEvent(new Event('input'));
@@ -4183,6 +4187,23 @@ function loadData(){
             } catch(ex) {
                 console.warn("Failed restoring practice configurations", ex);
             }
+        } else {
+            // Explicitly reset filters so previous state does not leak into a new subject selection
+            document.getElementById('prac-cfg-difficulty').value = 'all';
+            document.getElementById('prac-cfg-count').value = 20;
+            document.getElementById('prac-cfg-count').dispatchEvent(new Event('input'));
+            document.getElementById('prac-cfg-timer').value = 'off';
+            document.getElementById('prac-cfg-timer-min').value = 20;
+            document.getElementById('prac-cfg-per-q-timer').value = 'off';
+            document.getElementById('prac-cfg-per-q-sec').value = 30;
+            document.getElementById('prac-cfg-neg-marking').value = 'off';
+            document.getElementById('prac-cfg-feedback').value = 'immediate';
+            document.getElementById('prac-cfg-shuffle-qs').checked = true;
+            document.getElementById('prac-cfg-shuffle-opts').checked = true;
+            document.getElementById('prac-cfg-inc-wrong').checked = true;
+            document.getElementById('prac-cfg-inc-bookmarks').checked = true;
+            document.getElementById('prac-cfg-inc-unattempted').checked = true;
+            document.getElementById('prac-cfg-inc-custom').checked = true;
         }
         
         toggleConfigTimerFields();
@@ -4209,7 +4230,7 @@ function loadData(){
         let allQ = getAllQuestions();
         let uniqueTopics = new Set();
         allQ.forEach(q => {
-            if ((sub === 'all' || q.sub === sub) && q.topic) {
+            if ((sub === 'all' || (q.sub || "").trim().toLowerCase() === (sub || "").trim().toLowerCase()) && q.topic) {
                 uniqueTopics.add(q.topic.trim());
             }
         });
@@ -4273,8 +4294,8 @@ function loadData(){
 
         allQuestions.forEach(q => {
             // Apply category and difficulty gates
-            if (subject !== 'all' && q.sub !== subject) return;
-            if (topic !== 'all' && q.topic !== topic) return;
+            if (subject !== 'all' && (q.sub || "").trim().toLowerCase() !== (subject || "").trim().toLowerCase()) return;
+            if (topic !== 'all' && (q.topic || "").trim().toLowerCase() !== (topic || "").trim().toLowerCase()) return;
             if (difficulty !== 'all' && q.difficulty !== difficulty) return;
             
             // Check filters inclusions
@@ -4335,29 +4356,11 @@ function loadData(){
             config.count = 10;
         } 
         else if (mode === 'weak') {
-            // Find lowest accuracy topic or subject
-            let statsMap = {};
-            timingLog.forEach(log => {
-                let key = log.sub || 'General';
-                if (!statsMap[key]) statsMap[key] = { tried: 0, correct: 0 };
-                statsMap[key].tried++;
-                if (log.correct) statsMap[key].correct++;
-            });
-
-            let weakestSub = 'all';
-            let minAccuracy = 1.0;
-            Object.keys(statsMap).forEach(sub => {
-                let acc = statsMap[sub].correct / statsMap[sub].tried;
-                if (acc < minAccuracy && statsMap[sub].tried >= 2) {
-                    minAccuracy = acc;
-                    weakestSub = sub;
-                }
-            });
-
-            if (weakestSub !== 'all') {
-                pool = allQ.filter(q => q.sub === weakestSub);
-                config.subject = weakestSub;
-                showToast(`Weak Topic Focus: targeting ${weakestSub}!`);
+            let weakInfo = getWeakestSubject();
+            if (weakInfo.hasData && weakInfo.subject && weakInfo.subject !== 'all') {
+                pool = allQ.filter(q => (q.sub || "").trim().toLowerCase() === (weakInfo.subject || "").trim().toLowerCase());
+                config.subject = weakInfo.subject;
+                showToast(`Weak Topic Focus: targeting ${weakInfo.subject}!`);
             } else {
                 pool = allQ;
                 showToast("Not enough stats found yet. Practices launched!");
@@ -4618,9 +4621,20 @@ function loadData(){
                 if (!localData.wrongLog) localData.wrongLog = {};
                 let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
                 localData.wrongLog[q.id] = { action: 'add', timestamp: Date.now(), _rev: rev + 1 };
-                saveData();
             }
         }
+
+        // Standard statistics logger (Timeout counts as an attempted/solved question)
+        localData.stats.totalSolved++;
+        if(!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub]={solved:0, correct:0};
+        localData.stats.subjectStats[q.sub].solved++;
+
+        let today = getLocalDateString();
+        if(!localData.streak[today]) localData.streak[today]={solved:0, correct:0};
+        localData.streak[today].solved++;
+        
+        saveData();
+        if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
         
         // Decrement hearts in Premium Hybrid mode
         const hybridEnabled = KrishiStorage.getItem('krishi_premium_hybrid') !== 'false';
@@ -5115,9 +5129,17 @@ function loadData(){
             state.answered = false;
             
             let today = getLocalDateString();
+            
+            // Standard statistics logger (Skip counts as an attempted/solved question)
+            localData.stats.totalSolved++;
+            if(!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub]={solved:0, correct:0};
+            localData.stats.subjectStats[q.sub].solved++;
+
             if(!localData.streak[today]) localData.streak[today]={solved:0, correct:0};
             localData.streak[today].solved++;
+            
             saveData();
+            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
             savePracticeProgress()
 
             renderMCQ();
@@ -5128,6 +5150,7 @@ function loadData(){
     function finishSession(){
        if (state.isFinishing) return;
        state.isFinishing = true;
+       activePlanSequenceHTML = ''; // Clear stale recommendation plan
        clearPracticeProgress();
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
@@ -5448,7 +5471,13 @@ function loadData(){
             KrishiStorage.removeItem('krishi_custom_subjects');
             custom = [];
         }
-        return [...defaultSubjects, ...custom];
+        
+        let dynamicSubjects = [];
+        if (typeof getAllQuestions === 'function') {
+            dynamicSubjects = getAllQuestions().map(q => q.sub).filter(s => s && typeof s === 'string');
+        }
+
+        return [...new Set([...defaultSubjects, ...custom, ...dynamicSubjects])];
     }
 
     function renderSubjectList(){
@@ -7409,7 +7438,7 @@ function openEditImportModal(idx) {
             manageListState.rendered = 0;
 
             let filtered = all;
-            if (sub && sub !== 'all') filtered = filtered.filter(q => (q.sub || 'General') === sub);
+            if (sub && sub !== 'all') filtered = filtered.filter(q => (q.sub || 'General').trim().toLowerCase() === sub.trim().toLowerCase());
             if (search) {
                 filtered = filtered.filter(q => {
                     const id = q.id;
@@ -10909,23 +10938,9 @@ document.querySelectorAll('button').forEach(btn => {
         }
 
         // Smart Analytics: Analyze weakness for Recommended Practice Banner
-        let statsMap = {};
-        timingLog.forEach(log => {
-            let key = log.sub || 'General';
-            if (!statsMap[key]) statsMap[key] = { tried: 0, correct: 0 };
-            statsMap[key].tried++;
-            if (log.correct) statsMap[key].correct++;
-        });
-
-        let weakestSub = 'all';
-        let minRatio = 1.0;
-        Object.keys(statsMap).forEach(sub => {
-            let r = statsMap[sub].correct / statsMap[sub].tried;
-            if (r < minRatio && statsMap[sub].tried >= 2) {
-                minRatio = r;
-                weakestSub = sub;
-            }
-        });
+        let weakInfo = getWeakestSubject();
+        let weakestSub = weakInfo.hasData ? weakInfo.subject : 'all';
+        let minRatio = weakInfo.hasData ? (weakInfo.accuracy / 100) : 1.0;
 
         let bannerText = document.getElementById('recommended-text-insight');
         if (bannerText) {
@@ -10933,12 +10948,12 @@ document.querySelectorAll('button').forEach(btn => {
                 bannerText.textContent = `Focus recommended for "${weakestSub}" (Accuracy: ${Math.round(minRatio*100)}%). Tap here to configure focused practice!`;
                 bannerText.dataset.sub = weakestSub;
             } else {
-                // Pick any random subject with questions
+                // Pick the first subject deterministically for fallback
                 let subjects = getAllSubjects();
                 if (subjects.length > 0) {
-                    let randomSub = subjects[Math.floor(Math.random() * subjects.length)];
-                    bannerText.textContent = `Ready to level up? Tap here to start customized Practice for "${randomSub}" of your syllabus!`;
-                    bannerText.dataset.sub = randomSub;
+                    let deterministicSub = subjects[0];
+                    bannerText.textContent = `Ready to level up? Tap here to start customized Practice for "${deterministicSub}" of your syllabus!`;
+                    bannerText.dataset.sub = deterministicSub;
                 } else {
                     bannerText.textContent = "Welcome to MCQ Suite! Import or add study materials inside syllabus creator to activate recommendations.";
                     bannerText.dataset.sub = 'all';
@@ -11856,7 +11871,7 @@ document.querySelectorAll('button').forEach(btn => {
         let sInfo = calculateSyllabusPercentages();
         let subjects = getAllSubjects();
         
-        let weakestSub = sInfo.list[0] ? sInfo.list[0].subject : "Agronomy";
+        let weakestSub = sInfo.list[0] ? sInfo.list[0].subject : "Fundamentals";
         let weakestAccuracy = 100;
 
         // Apply Focus Subject Lock dynamically if active (Bug 3)
@@ -11873,12 +11888,12 @@ document.querySelectorAll('button').forEach(btn => {
             }
         }
 
-        let recommendedTopic = "Cereal crop pest cycles";
+        let recommendedTopic = weakestSub + " Comprehensive Review";
         let subjectData = sInfo.list.find(s => s.subject.includes(weakestSub) || weakestSub.includes(s.subject));
         if (subjectData && subjectData.topics.length > 0) {
             let incomplete = subjectData.topics.find(t => t.status !== 'Completed' && t.status !== 'Mastered');
             if (incomplete) recommendedTopic = incomplete.name;
-            else recommendedTopic = subjectData.topics[0].name;
+            else recommendedTopic = "Comprehensive Core Review";
         }
 
         let mcqTarget = 30;
@@ -12818,7 +12833,7 @@ document.querySelectorAll('button').forEach(btn => {
                 if (recMockEl) recMockEl.textContent = 'Take a dedicated Soil Chemistry Mock Test';
             } else {
                 let weakInfo = getWeakestSubject();
-                let weakSub = weakInfo.hasData ? weakInfo.subject : 'Soil Science';
+                let weakSub = weakInfo.hasData ? weakInfo.subject : 'Fundamentals';
                 let leastAcc = weakInfo.hasData ? weakInfo.accuracy : 100;
 
                 if (recSubEl) recSubEl.textContent = weakSub;
@@ -13856,22 +13871,14 @@ function updatePracticePage() {
     }
 
     // ३. विषयगत एक्युरेसी (Subject Accuracy) हिसाव गर्ने
-    let subStats = {};
-    if (Array.isArray(timingLog)) {
-        timingLog.forEach(log => {
-            let s = log.subject || log.sub || 'General';
-            if (!subStats[s]) subStats[s] = { tried: 0, correct: 0 };
-            subStats[s].tried++;
-            if (log.correct) subStats[s].correct++;
-        });
-    }
+    let subStats = (localData && localData.stats && localData.stats.subjectStats) ? localData.stats.subjectStats : {};
 
     container.innerHTML = '';
     subjects.forEach(sub => {
-        let count = all.filter(q => q.sub === sub).length;
-        let stats = subStats[sub] || { tried: 0, correct: 0 };
-        let accuracyText = stats.tried > 0 ? `${Math.round((stats.correct / stats.tried) * 100)}% accuracy` : 'Not practiced';
-        let accuracyColor = stats.tried > 0 ? (stats.correct / stats.tried >= 0.8 ? 'text-emerald-500' : stats.correct / stats.tried >= 0.5 ? 'text-amber-500' : 'text-rose-500') : 'text-slate-400 dark:text-slate-500';
+        let count = all.filter(q => (q.sub || "").trim().toLowerCase() === (sub || "").trim().toLowerCase()).length;
+        let stats = subStats[sub] || { solved: 0, correct: 0 };
+        let accuracyText = stats.solved > 0 ? `${Math.round((stats.correct / stats.solved) * 100)}% accuracy` : 'Not practiced';
+        let accuracyColor = stats.solved > 0 ? (stats.correct / stats.solved >= 0.8 ? 'text-emerald-500' : stats.correct / stats.solved >= 0.5 ? 'text-amber-500' : 'text-rose-500') : 'text-slate-400 dark:text-slate-500';
 
         container.innerHTML += `
             <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all active:scale-95 group flex flex-col justify-between" style="border-color:var(--border);">

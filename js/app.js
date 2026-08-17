@@ -1206,7 +1206,7 @@ function loadData(){
             }
         });
         Object.entries(bmLog).forEach(([qid, info]) => {
-            if (info.action === 'add' && !currentBms.includes(qid)) {
+            if (info.action === 'add' && !currentBms.includes(qid) && !currentBms.includes(Number(qid))) {
                 bmLog[qid] = { action: 'remove', timestamp: now };
             }
         });
@@ -1221,7 +1221,7 @@ function loadData(){
             }
         });
         Object.entries(wrLog).forEach(([qid, info]) => {
-            if (info.action === 'add' && !currentWrongs.includes(qid)) {
+            if (info.action === 'add' && !currentWrongs.includes(qid) && !currentWrongs.includes(Number(qid))) {
                 wrLog[qid] = { action: 'remove', timestamp: now };
             }
         });
@@ -2264,7 +2264,34 @@ function loadData(){
                 'krishi_planner_settings',
                 'krishi_syllabus_custom',
                 'krishi_custom_subjects',
-                'krishi_last_sync_time'
+                'krishi_last_sync_time',
+                'krishi_appearance_settings',
+                'krishi_custom_appearance_settings',
+                'krishi_sound_enabled',
+                'krishi_sound_muted',
+                'krishi_sound_volume',
+                'krishi_dark',
+                'krishi_battery_saver',
+                'krishi_elite_animations',
+                'krishi_haptic_enabled',
+                'krishi_username',
+                'krishi_custom_device_name',
+                'krishi_layout_backups',
+                'krishi_stats_baseline',
+                'krishi_last_updated_at',
+                'krishi_goal_settings',
+                'krishi_last_practice_config',
+                'krishi_saved_practice',
+                'krishi_intensity_mode',
+                'krishi_difficulty_bias',
+                'krishi_retry_delay',
+                'krishi_active_plan_mode',
+                'krishi_sync_pending',
+                'krishi_sync_pending_count',
+                'krishi_sync_status',
+                'krishi_gemini_key',
+                'krishi_gemini_model',
+                'krishi_gemini_temp'
             ];
             keysToWipe.forEach(k => KrishiStorage.removeItem(k));
             
@@ -3139,6 +3166,12 @@ function loadData(){
         const allQ = getAllQuestions();
         const validIds = new Set(allQ.map(q => q.id));
         return localData.wrong.filter(id => validIds.has(id)).length;
+    }
+    function getValidBookmarkedCount() {
+        if (!localData || !localData.bookmarked) return 0;
+        const allQ = getAllQuestions();
+        const validIds = new Set(allQ.map(q => q.id));
+        return localData.bookmarked.filter(id => validIds.has(id)).length;
     }
     function getPromoDueCount() {
         return window.KrishiSM2Engine ? window.KrishiSM2Engine.getStats().dueCount : 0;
@@ -4416,6 +4449,7 @@ function loadData(){
         state.questions = questions;
         state.currentIndex = 0;
         state.score = 0;
+        state.isFinishing = false;
         state.selectedOption = null;
         state.answered = false;
         state.sessionResults = [];
@@ -4931,7 +4965,7 @@ function loadData(){
             detail: { isCorrect: isCorrect, correctOptionText: correctOptionText } 
         }));
 
-        if (window.KrishiSM2Engine && state.activeConfig?.isSpacedReview) {
+        if (window.KrishiSM2Engine) {
             window.KrishiSM2Engine.recordAnswer(q.id || q.q, isCorrect, secondsSpent);
         }
 
@@ -5053,9 +5087,6 @@ function loadData(){
             // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
             if (!state.activeConfig?.isSpacedReview) {
                 if(!localData.wrong.includes(q.id)) { localData.wrong.push(q.id); saveData(); }
-            } else if (window.KrishiSM2Engine) {
-                // If skipped in Spaced Review, count it as a fail
-                window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
             }
             
             state.currentIndex++;
@@ -5073,6 +5104,7 @@ function loadData(){
     }
 
     function finishSession(){
+       if (state.isFinishing) return;
        state.isFinishing = true;
        clearPracticeProgress();
         if (state.perQuestionTimerInterval) {
@@ -5202,7 +5234,8 @@ function loadData(){
         document.getElementById('res-mistake-pattern').textContent = patternText;
 
         let recommendationModeText = "Subject Practice Mode focus.";
-        if (acc < 50) {
+        let dynamicWeakThreshold = getPlannerSettings().weakThreshold || 60;
+        if (acc < dynamicWeakThreshold) {
             recommendationModeText = `Spaced review and Mistakes Review for ${lowestAccSub || 'entire modules'}`;
         } else if (avgSeconds > 35) {
             recommendationModeText = "Attempting Speed Practice sprint modes";
@@ -5213,7 +5246,9 @@ function loadData(){
 
         // Save session history
         let recentItem = {
-            date: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            id: 'sess_' + Date.now(),
+            date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            timestamp: Date.now(),
             accuracy: acc,
             correct: correct,
             total: total,
@@ -7529,7 +7564,7 @@ function openEditImportModal(idx) {
     function getWeakestSubject() {
         let subjects = getAllSubjects();
         let weakestSub = subjects[0] || "Agronomy (कृषि विकास)";
-        let weakestAccuracy = 100;
+        let weakestAccuracy = Infinity;
         let hasData = false;
         
         subjects.forEach(s => {
@@ -7545,7 +7580,7 @@ function openEditImportModal(idx) {
         });
         return { 
             subject: weakestSub, 
-            accuracy: Math.round(weakestAccuracy === 100 ? 0 : weakestAccuracy),
+            accuracy: Math.round(hasData ? weakestAccuracy : 100),
             hasData: hasData
         };
     }
@@ -9997,7 +10032,7 @@ document.querySelectorAll('button').forEach(btn => {
             recommendationIcon = "🎯";
             recommendationAction = "general";
             explanation = `Resolve ${target - solvedToday} additional agricultural questions today to secure your consistency metrics.`;
-        } else if (weakInfo.hasData && weakInfo.accuracy < 65) {
+        } else if (weakInfo.hasData && weakInfo.accuracy < (getPlannerSettings().weakThreshold || 60)) {
             recommendationText = `Improving performance in ${weakInfo.subject.split('(')[0]}`;
             recommendationIcon = "⚡";
             recommendationAction = "subject";
@@ -10516,7 +10551,7 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function renderWidgetBookmarks(compact) {
-        let count = localData.bookmarked ? localData.bookmarked.length : 0;
+        let count = getValidBookmarkedCount();
         return `
             <div class="p-3.5 rounded-xl border flex items-center justify-between hover-card-trigger cursor-pointer" style="background:var(--card); border-color:var(--border);" onclick="navigate('page-planner')">
                 <div class="flex items-center gap-2.5">
@@ -10793,7 +10828,7 @@ document.querySelectorAll('button').forEach(btn => {
             let elAcc = document.getElementById('accuracy-display');
             if (elAcc) elAcc.textContent = localData.stats.totalSolved > 0 ? Math.round((localData.stats.totalCorrect/localData.stats.totalSolved)*100)+'%' : '--%';
             let elBk = document.getElementById('bookmark-count-display');
-            if (elBk) elBk.textContent = localData.bookmarked ? localData.bookmarked.length : 0;
+            if (elBk) elBk.textContent = getValidBookmarkedCount();
             let dueCount = getPromoDueCount();
             let elSpaced = document.getElementById('spaced-count');
             if (elSpaced) elSpaced.textContent = '(' + dueCount + ' due)';
@@ -10811,7 +10846,7 @@ document.querySelectorAll('button').forEach(btn => {
         // Update general dashboard counts
         let customCount = getCustomQuestions().length;
         let wrongCount = getValidWrongCount();
-        let bookmarkedCount = (localData.bookmarked || []).length;
+        let bookmarkedCount = getValidBookmarkedCount();
         let totalCount = all.length;
         
         // Toggle empty state vs active modules
@@ -11122,22 +11157,30 @@ document.querySelectorAll('button').forEach(btn => {
             pool = window.KrishiSM2Engine.getDueQuestions(allQ);
         }
         
+        let data = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+        let newQs = allQ.filter(q => {
+            let id = String(q.id || q.q);
+            let isWrong = localData.wrong && localData.wrong.some(wid => String(wid) === id);
+            return (!data[id] || data[id].status === 'new') && !isWrong;
+        });
+
+        if (typeof shuffle === 'function') {
+            pool = shuffle(pool);
+            newQs = shuffle(newQs);
+        }
+
+        // Cap due questions to 15 to prevent fatigue
+        pool = pool.slice(0, 15);
+
+        // Blend in up to 5 new questions
+        if (newQs.length > 0) {
+            pool = pool.concat(newQs.slice(0, 5));
+            if (typeof shuffle === 'function') pool = shuffle(pool); // Interleave new and due
+        }
+
         if (pool.length === 0) {
-            let data = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
-            let newQs = allQ.filter(q => {
-                let id = String(q.id || q.q);
-                let isWrong = localData.wrong && localData.wrong.some(wid => String(wid) === id);
-                return (!data[id] || data[id].status === 'new') && !isWrong;
-            });
-            if (newQs.length > 0) {
-                pool = typeof shuffle === 'function' ? shuffle(newQs).slice(0, 10) : newQs.slice(0, 10);
-                showToast('No due reviews! Starting 10 new questions instead.');
-            } else {
-                showToast('🎉 No spaced review items pending!'); 
-                return;
-            }
-        } else {
-            if (typeof shuffle === 'function') pool = shuffle(pool);
+            showToast('🎉 No spaced review items pending!'); 
+            return;
         }
         
         // Isolating Spaced Review config to prevent leakage from other practice modes
@@ -11801,16 +11844,11 @@ document.querySelectorAll('button').forEach(btn => {
             weakestSub = "Soil Science (माटो विज्ञान)";
             weakestAccuracy = 42;
         } else {
-            subjects.forEach(s => {
-                let stats = localData.stats.subjectStats[s] || {solved:0, correct:0};
-                if(stats.solved > 5) {
-                    let acc = (stats.correct / stats.solved) * 100;
-                    if(acc < weakestAccuracy) {
-                        weakestAccuracy = acc;
-                        weakestSub = s;
-                    }
-                }
-            });
+            let weakInfo = getWeakestSubject();
+            if (weakInfo.hasData) {
+                weakestSub = weakInfo.subject;
+                weakestAccuracy = weakInfo.accuracy;
+            }
         }
 
         let recommendedTopic = "Cereal crop pest cycles";
@@ -11980,20 +12018,8 @@ document.querySelectorAll('button').forEach(btn => {
 
     function startPracticeWeakestSubject(){
         let pool = getAllQuestions();
-        let subjects = getAllSubjects();
-        let weakestSub = "Agronomy";
-        let weakestAccuracy = 100;
-
-        subjects.forEach(s => {
-            let stats = localData.stats.subjectStats[s] || {solved:0, correct:0};
-            if(stats.solved > 0) {
-                let acc = (stats.correct/stats.solved)*100;
-                if(acc < weakestAccuracy) {
-                    weakestAccuracy = acc;
-                    weakestSub = s;
-                }
-            }
-        });
+        let weakInfo = getWeakestSubject();
+        let weakestSub = weakInfo.hasData ? weakInfo.subject : "Agronomy";
 
         let targetPool = pool.filter(q => q.sub && q.sub.toLowerCase() === weakestSub.toLowerCase());
         if(targetPool.length === 0) targetPool = pool.filter(q => q.sub && q.sub.toLowerCase().includes(weakestSub.toLowerCase()));
@@ -12769,19 +12795,9 @@ document.querySelectorAll('button').forEach(btn => {
                 if (recPracticeEl) recPracticeEl.textContent = 'Practice 15 specialized MCQs';
                 if (recMockEl) recMockEl.textContent = 'Take a dedicated Soil Chemistry Mock Test';
             } else {
-                let subjects = getAllSubjects();
-                let weakSub = 'Soil Science';
-                let leastAcc = 100;
-                subjects.forEach(sub => {
-                    let s = localData.stats.subjectStats[sub];
-                    if (s && s.solved > 0) {
-                        let a = (s.correct / s.solved) * 100;
-                        if (a < leastAcc) {
-                            leastAcc = a;
-                            weakSub = sub;
-                        }
-                    }
-                });
+                let weakInfo = getWeakestSubject();
+                let weakSub = weakInfo.hasData ? weakInfo.subject : 'Soil Science';
+                let leastAcc = weakInfo.hasData ? weakInfo.accuracy : 100;
 
                 if (recSubEl) recSubEl.textContent = weakSub;
                 if (recTopicEl) recTopicEl.textContent = `Revise core concepts of ${weakSub} structures`;
@@ -12812,7 +12828,8 @@ document.querySelectorAll('button').forEach(btn => {
                 let s = localData.stats.subjectStats[sub] || {solved:0, correct:0};
                 if (s.solved > 0) {
                     let acc = Math.round((s.correct / s.solved) * 100);
-                    if (acc < 50) {
+                    let dynamicWeakThreshold = getPlannerSettings().weakThreshold || 60;
+                    if (acc < dynamicWeakThreshold) {
                         weakList.push({sub: sub, acc: acc, solved: s.solved});
                     } else if (acc >= 75) {
                         strongList.push({sub: sub, acc: acc, solved: s.solved});
@@ -13262,7 +13279,11 @@ ${text}`;
         
         if (syncSelectiveLogs) {
             if (data.streak && typeof data.streak === 'object') { localData.streak = data.streak; changed = true; }
-            if (data.stats && typeof data.stats === 'object') { localData.stats = data.stats; changed = true; }
+            if (data.stats && typeof data.stats === 'object') { 
+                localData.stats = data.stats; 
+                KrishiStorage.setItem('krishi_stats_baseline', JSON.stringify(data.stats));
+                changed = true; 
+            }
             if (Array.isArray(data.achievements)) { localData.achievements = data.achievements; changed = true; }
             
             if (data.sm2 && typeof data.sm2 === 'object') {
@@ -13370,8 +13391,9 @@ ${text}`;
         const rawBms = new Set([...(local.bookmarked || []), ...(cloud.bookmarked || [])]);
         const mergedBmLog = mergeCRDTLogs(local.bookmarkedLog, cloud.bookmarkedLog);
         Object.entries(mergedBmLog).forEach(([qid, info]) => {
-            if (info && info.action === 'add') rawBms.add(qid);
-            else if (info && info.action === 'remove') rawBms.delete(qid);
+            const typedId = isNaN(Number(qid)) ? qid : Number(qid);
+            if (info && info.action === 'add') rawBms.add(typedId);
+            else if (info && info.action === 'remove') rawBms.delete(typedId);
         });
         merged.bookmarkedLog = mergedBmLog;
         merged.bookmarked = Array.from(rawBms);
@@ -13380,13 +13402,34 @@ ${text}`;
         const rawWrongs = new Set([...(local.wrong || []), ...(cloud.wrong || [])]);
         const mergedWrLog = mergeCRDTLogs(local.wrongLog, cloud.wrongLog);
         Object.entries(mergedWrLog).forEach(([qid, info]) => {
-            if (info && info.action === 'add') rawWrongs.add(qid);
-            else if (info && info.action === 'remove') rawWrongs.delete(qid);
+            const typedId = isNaN(Number(qid)) ? qid : Number(qid);
+            if (info && info.action === 'add') rawWrongs.add(typedId);
+            else if (info && info.action === 'remove') rawWrongs.delete(typedId);
         });
         merged.wrongLog = mergedWrLog;
         merged.wrong = Array.from(rawWrongs);
 
         merged.achievements = Array.from(new Set([...(local.achievements || []), ...(cloud.achievements || [])]));
+
+        // Merge Stats using Delta Counters to prevent Offline Data Loss
+        let baselineStats = {};
+        try { baselineStats = JSON.parse(KrishiStorage.getItem('krishi_stats_baseline') || '{}'); } catch(e){}
+        merged.stats = {
+            totalSolved: (cloud.stats?.totalSolved || 0) + Math.max(0, (local.stats?.totalSolved || 0) - (baselineStats.totalSolved || 0)),
+            totalCorrect: (cloud.stats?.totalCorrect || 0) + Math.max(0, (local.stats?.totalCorrect || 0) - (baselineStats.totalCorrect || 0)),
+            streakDays: Math.max(local.stats?.streakDays || 0, cloud.stats?.streakDays || 0),
+            subjectStats: {}
+        };
+        let allSubjects = new Set([...Object.keys(local.stats?.subjectStats || {}), ...Object.keys(cloud.stats?.subjectStats || {})]);
+        allSubjects.forEach(sub => {
+            let lSub = (local.stats?.subjectStats || {})[sub] || {solved:0, correct:0};
+            let cSub = (cloud.stats?.subjectStats || {})[sub] || {solved:0, correct:0};
+            let bSub = (baselineStats.subjectStats || {})[sub] || {solved:0, correct:0};
+            merged.stats.subjectStats[sub] = {
+                solved: cSub.solved + Math.max(0, lSub.solved - bSub.solved),
+                correct: cSub.correct + Math.max(0, lSub.correct - bSub.correct)
+            };
+        });
 
         // 🧠 Helper function for Deep Field-Level Merging of Custom Questions (Feature 3)
         function deepMergeCustomQuestion(localQ, cloudQ) {
@@ -13438,14 +13481,26 @@ ${text}`;
             let cVal = cloud.sm2?.[key];
             let lVal = local.sm2?.[key];
             if (cVal && lVal) {
-                sm2Map[key] = (cVal.interval >= lVal.interval) ? cVal : lVal;
+                sm2Map[key] = ((cVal.lastAnswered || 0) >= (lVal.lastAnswered || 0)) ? cVal : lVal;
             }
         });
         merged.sm2 = sm2Map;
 
-        // Custom Exam profiles & custom syllabus merging
-        merged.examProfiles = Array.from(new Set([...(local.examProfiles || []), ...(cloud.examProfiles || [])]));
-        merged.syllabusCustom = Array.from(new Set([...(local.syllabusCustom || []), ...(cloud.syllabusCustom || [])]));
+        // Custom Exam profiles merging - Unique by id
+        let localProfiles = local.examProfiles || [];
+        let cloudProfiles = cloud.examProfiles || [];
+        let profileMap = new Map();
+        cloudProfiles.forEach(p => { if (p) profileMap.set(p.id, p); });
+        localProfiles.forEach(p => { if (p) profileMap.set(p.id, p); });
+        merged.examProfiles = Array.from(profileMap.values());
+
+        // Custom syllabus merging - Unique by subject
+        let localSyllabus = local.syllabusCustom || [];
+        let cloudSyllabus = cloud.syllabusCustom || [];
+        let syllabusMap = new Map();
+        cloudSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
+        localSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
+        merged.syllabusCustom = Array.from(syllabusMap.values());
         
         // Study Logs (timingLog) merging - Unique by timestamp/date
         let localTimeLog = local.timingLog || [];
@@ -13453,7 +13508,27 @@ ${text}`;
         let logMap = new Map();
         cloudTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
         localTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
-        merged.timingLog = Array.from(logMap.values());
+        merged.timingLog = Array.from(logMap.values())
+            .sort((a,b) => (b.timestamp||b.date||0) - (a.timestamp||a.date||0))
+            .slice(0, 2000); // Prevent unbounded growth in Firebase 1MB doc
+
+        // Mock Scores merging - Unique by id/timestamp
+        let localMockScores = local.mockScores || [];
+        let cloudMockScores = cloud.mockScores || [];
+        let mockMap = new Map();
+        cloudMockScores.forEach(score => { if (score) mockMap.set(score.id || score.timestamp, score); });
+        localMockScores.forEach(score => { if (score) mockMap.set(score.id || score.timestamp, score); });
+        merged.mockScores = Array.from(mockMap.values())
+            .sort((a,b) => (b.timestamp||0) - (a.timestamp||0))
+            .slice(0, 20); // Cap to latest 20 mock scores
+
+        // Practice Recent merging - Unique by timestamp, sorted, keep latest 50
+        let localPracticeRecent = local.practiceRecent || [];
+        let cloudPracticeRecent = cloud.practiceRecent || [];
+        let recentMap = new Map();
+        cloudPracticeRecent.forEach(item => { if (item) recentMap.set(item.id || item.timestamp, item); });
+        localPracticeRecent.forEach(item => { if (item) recentMap.set(item.id || item.timestamp, item); });
+        merged.practiceRecent = Array.from(recentMap.values()).sort((a,b) => (b.timestamp||0) - (a.timestamp||0)).slice(0, 50);
 
         // For audio and interface configs, use Last Write Wins
         const cloudUpdatedAt = cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function'
@@ -13464,7 +13539,6 @@ ${text}`;
         merged.appearanceSettings = useCloud ? (cloud.appearanceSettings || local.appearanceSettings) : (local.appearanceSettings || cloud.appearanceSettings);
         merged.customAppearanceSettings = useCloud ? (cloud.customAppearanceSettings || local.customAppearanceSettings) : (local.customAppearanceSettings || cloud.customAppearanceSettings);
         merged.plannerSettings = useCloud ? (cloud.plannerSettings || local.plannerSettings) : (local.plannerSettings || cloud.plannerSettings);
-        merged.mockScores = useCloud ? (cloud.mockScores || local.mockScores) : (local.mockScores || cloud.mockScores);
         
         merged.soundEnabled = useCloud ? (cloud.soundEnabled ?? local.soundEnabled) : (local.soundEnabled ?? cloud.soundEnabled);
         merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
@@ -15712,6 +15786,9 @@ window.initNepalGlobe = function() {
                         localData[k] = imported.localData[k];
                     }
                 });
+                if (imported.localData.stats) {
+                    KrishiStorage.setItem('krishi_stats_baseline', JSON.stringify(imported.localData.stats));
+                }
                 
                 // Apply sm2Data safely
                 if (imported.sm2Data && window.KrishiSM2Engine) {

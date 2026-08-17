@@ -630,12 +630,19 @@ class KrishiSM2Engine {
         let R = Math.pow(0.9, elapsedDays / Math.max(0.1, existing.stability));
 
         // Difficulty Update
-        let D = existing.difficulty - (grade - 2.5); // good/easy drops difficulty, hard/fail increases it
+        let D = existing.difficulty - (grade - 2); // Easy (-1), Good (0), Hard (+1), Fail (+2)
         D = Math.max(1, Math.min(10, D));
 
         // Stability Update
         let S = existing.stability;
-        if (grade === 0) {
+        if (existing.reviews === 0) {
+            // FIX: Initialize stability for new questions. 
+            // Previously, R=1 caused the multiplier to be exactly 1, freezing S at 0.5 (Interval 1 day) for all passing grades.
+            if (grade === 0) S = 0.4;
+            else if (grade === 1) S = 0.6;
+            else if (grade === 2) S = 2.4;
+            else if (grade === 3) S = 5.8;
+        } else if (grade === 0) {
             S = Math.max(0.1, S * 0.2); // Fail drops stability
         } else {
             let factor = (grade === 3) ? 1.5 : (grade === 2) ? 1.0 : 0.5;

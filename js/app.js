@@ -790,6 +790,8 @@ async function loadStaticQuestions() {
                     state.currentIndex = session.currentIndex;
                     state.score = session.score;
                     state.sessionResults = session.sessionResults;
+                    if (session.timeSpentArray) state.timeSpentArray = session.timeSpentArray;
+                    if (session.totalTimeSpent) state.totalTimeSpent = session.totalTimeSpent;
                     renderMCQ();
                     window.resumePromptShown = false;
                 },
@@ -4515,8 +4517,10 @@ function loadData(){
     function startTimer(){
         stopTimer();
         updateTimerDisplay();
+        let expectedEndTime = Date.now() + (state.timerSec * 1000);
         state.timerInterval = setInterval(()=>{
-            state.timerSec--;
+            let remainingMs = expectedEndTime - Date.now();
+            state.timerSec = Math.max(0, Math.ceil(remainingMs / 1000));
             updateTimerDisplay();
             if(state.timerSec <= 0){
                 stopTimer();
@@ -4552,13 +4556,15 @@ function loadData(){
         let perQIndicator = document.getElementById('per-q-timer-display');
         if (state.activeConfig && state.activeConfig.perQTimer === 'on') {
             state.perQuestionTimerSec = state.activeConfig.perQSec || 30;
+            let expectedEndTime = Date.now() + (state.perQuestionTimerSec * 1000);
             perQIndicator.classList.remove('hidden');
             perQIndicator.style.display = 'inline-block';
             perQIndicator.textContent = `⏱ Q: ${state.perQuestionTimerSec}s`;
             perQIndicator.classList.remove('timer-pulse');
 
             state.perQuestionTimerInterval = setInterval(() => {
-                state.perQuestionTimerSec--;
+                let remainingMs = expectedEndTime - Date.now();
+                state.perQuestionTimerSec = Math.max(0, Math.ceil(remainingMs / 1000));
                 perQIndicator.textContent = `⏱ Q: ${state.perQuestionTimerSec}s`;
                 
                 if (state.perQuestionTimerSec <= 5) {
@@ -4654,6 +4660,7 @@ function loadData(){
             document.getElementById('next-btn').classList.remove('hidden');
         } else {
             document.getElementById('finish-btn').classList.remove('hidden');
+            if (typeof stopTimer === 'function') stopTimer();
         }
     }
 
@@ -4842,6 +4849,10 @@ function loadData(){
 
     function reviewLaterQuestion() {
         if (state.answered) { nextMCQQuestion(); return; }
+        if (state.isTransitioning) return;
+        state.isTransitioning = true;
+        state.answered = true; // Prevents timer race condition
+        
         // Push currently skipped/later queue
         let q = state.questions[state.currentIndex];
         showToast("🕒 Review Later: skipped!");
@@ -4849,10 +4860,13 @@ function loadData(){
         state.sessionResults.push({ id: q.id, correct: false, userAns: -1, skipped: true, later: true });
         
         // Proceed next
-        state.currentIndex++;
-        state.selectedOption = null;
-        state.answered = false;
-        renderMCQ();
+        animateQuestionTransition(() => {
+            state.currentIndex++;
+            state.selectedOption = null;
+            state.answered = false;
+            renderMCQ();
+            state.isTransitioning = false;
+        });
     }
 
     function submitMCQAnswer(){
@@ -4982,6 +4996,7 @@ function loadData(){
             document.getElementById('next-btn').classList.remove('hidden');
         } else {
             document.getElementById('finish-btn').classList.remove('hidden');
+            if (typeof stopTimer === 'function') stopTimer();
         }
 
         // Standard statistics logger
@@ -5063,16 +5078,22 @@ function loadData(){
     }
 
     function nextMCQQuestion(){
+        if (state.isTransitioning) return;
+        state.isTransitioning = true;
         animateQuestionTransition(() => {
             state.currentIndex++;
             state.selectedOption = null;
             state.answered = false;
             renderMCQ();
+            state.isTransitioning = false;
         });
     }
 
     function skipQuestion(){
         if (state.answered) { nextMCQQuestion(); return; }
+        if (state.isTransitioning) return;
+        state.isTransitioning = true;
+        state.answered = true; // Prevents timer race condition
         
         animateQuestionTransition(() => {
             let q = state.questions[state.currentIndex];
@@ -5100,6 +5121,7 @@ function loadData(){
             savePracticeProgress()
 
             renderMCQ();
+            state.isTransitioning = false;
         });
     }
 
@@ -14879,6 +14901,8 @@ function savePracticeProgress() {
                 sessionResults: state.sessionResults,
                 isMock: state.isMock,
                 timerSec: state.timerSec,
+                timeSpentArray: state.timeSpentArray,
+                totalTimeSpent: state.totalTimeSpent,
                 updatedAt: Date.now(),
                 device: (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : 'Web Browser') : 'Web Browser'
             };

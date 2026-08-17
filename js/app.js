@@ -4277,7 +4277,7 @@ function loadData(){
 
         // Start session config
         state.activeConfig = configObj;
-        setupMCQSession(pool, timer === 'on', timer === 'on' ? timerMin * 60 : 0);
+        setupMCQSession(pool, false, timer === 'on' ? timerMin * 60 : 0);
     }
 
     // ==================== SMART MODES ENGINE ====================
@@ -4389,7 +4389,7 @@ function loadData(){
         }
 
         state.activeConfig = config;
-        setupMCQSession(pool, config.timer === 'on', config.timer === 'on' ? config.timerMin * 60 : 0);
+        setupMCQSession(pool, mode === 'simulation', config.timer === 'on' ? config.timerMin * 60 : 0);
     }
 
     // Helper counts for Home statistics
@@ -5081,11 +5081,15 @@ function loadData(){
         }
         stopTimer();
 
-        let total = state.sessionResults.length;
+        let total = state.questions.length;
+        if (total === 0) return;
+
         let correct = state.sessionResults.filter(r=>r.correct).length;
         let acc = total > 0 ? Math.round((correct/total)*100) : 0;
         
-        let skipped = state.sessionResults.filter(r=>r.skipped).length;
+        let explicitlySkipped = state.sessionResults.filter(r=>r.skipped).length;
+        let unanswered = total - state.sessionResults.length;
+        let skipped = explicitlySkipped + unanswered;
         let wrongsCount = total - correct - skipped;
 
         let totalSeconds = state.totalTimeSpent || 0;

@@ -4928,7 +4928,9 @@ function loadData(){
                 playSound('correct');
                 triggerHaptic('correct');
                 showFeedbackSpeechTag("🎯 Correct answer!");
-                if (window.LottieAdapter) {
+                if (window.AnimationOrchestrator) {
+                    window.AnimationOrchestrator.dispatch('animation.correct', { targetEl: selectedBtnNode });
+                } else if (window.LottieAdapter) {
                     window.LottieAdapter.play('lottie.feedback.correct').then(success => {
                         if (!success && selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
                     });
@@ -4954,7 +4956,9 @@ function loadData(){
                 triggerHaptic('wrong');
                 showFeedbackSpeechTag("❌ Incorrect!");
                 if (correctBtnNode) correctBtnNode.classList.add('glow-correct'); // Always show the correct answer natively
-                if (window.LottieAdapter) {
+                if (window.AnimationOrchestrator) {
+                    window.AnimationOrchestrator.dispatch('animation.wrong', { targetEl: selectedBtnNode });
+                } else if (window.LottieAdapter) {
                     window.LottieAdapter.play('lottie.feedback.wrong').then(success => {
                         if (!success && selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
                     });
@@ -5194,13 +5198,16 @@ function loadData(){
     };
 
     window.triggerLevelUpCelebration = function(newLevel) {
-        // Duplicate protection lifecycle flag
+        if (window.AnimationOrchestrator) {
+            window.AnimationOrchestrator.dispatch('animation.levelUp', { level: newLevel });
+            return;
+        }
+        // Original fallback when orchestrator is not loaded
         if (window._isLevelUpPlaying === newLevel) return;
         window._isLevelUpPlaying = newLevel;
 
         const ps = window.getPerfSettings ? window.getPerfSettings() : {};
         if (ps.perfMode === 'battery' || ps.animIntensity === 'off' || ps.reduceMotion) {
-            // Accessible / Fallback behavior: static UI
             if (typeof showToast === 'function') {
                 showToast(`🎉 LEVEL ${newLevel} - Level Up!`);
             }
@@ -5221,6 +5228,8 @@ function loadData(){
             playCSSLevelUp(newLevel);
         }
     };
+    // Orchestrator hook: expose CSS Level-Up fallback for delegation
+    window._orchestratorPlayCSSLevelUp = playCSSLevelUp;
 
     function playCSSLevelUp(newLevel) {
         const existing = document.getElementById('css-levelup-overlay');
@@ -5320,6 +5329,8 @@ function loadData(){
             if (xpLabel.parentNode) xpLabel.parentNode.removeChild(xpLabel);
         }, ps.reduceMotion ? 600 : 800);
     }
+    // Orchestrator hook: expose XP micro-animation for delegation
+    window._orchestratorShowXPMicro = showXPMicroAnimation;
 
     function showFeedbackSpeechTag(txt) {
         let container = document.getElementById('float-feedback-container');
@@ -5561,7 +5572,11 @@ function loadData(){
         // Celebration actions
         if (acc >= 80) {
             playSound('celebrate');
-            showInteractiveCelebrationFireworks();
+            if (window.AnimationOrchestrator) {
+                window.AnimationOrchestrator.dispatch('animation.sessionComplete', { accuracy: acc });
+            } else {
+                showInteractiveCelebrationFireworks();
+            }
         }
 
         // Setup practice weak subject button action binding
@@ -5647,6 +5662,8 @@ function loadData(){
             setTimeout(() => fw.remove(), 1050);
         }, 1200);
     }
+    // Orchestrator hook: expose session celebration for delegation
+    window._orchestratorShowCelebration = showInteractiveCelebrationFireworks;
 
     function checkIfDailyTargetMetJustNow() {
         let target = getDailyTarget() || 50;
@@ -8200,13 +8217,16 @@ function openEditImportModal(idx) {
     })();
 
     function triggerConfetti() {
+        if (window.AnimationOrchestrator) {
+            window.AnimationOrchestrator.dispatch('animation.achievement', {});
+            return;
+        }
+        // Original fallback when orchestrator is not loaded
         const ps = getPerfSettings();
         if (ps.perfMode === 'battery' || ps.reduceMotion || ps.animIntensity === 'off') return;
         
-        // Use new Lottie Adapter
         if (window.LottieAdapter) {
             window.LottieAdapter.play('lottie.reward.achievement').then(lottieSuccess => {
-                // Fallback or old engine is Disabled during safe transition
                 if (!lottieSuccess) {
                     // Disabled old engine safely:
                     // ConfettiEngine.trigger(ps.perfMode === 'smooth120' ? 110 : 90);
@@ -8496,11 +8516,11 @@ function openEditImportModal(idx) {
             const targetIcon = (event && event.currentTarget) || (event && event.target) || document.querySelector('.planner-streak-fire-icon');
 
             // 3. Trigger visual effects (shockwave, sparks, and fall cascade) via RAF canvas
-            if (window.LottieAdapter) {
+            if (window.AnimationOrchestrator) {
+                window.AnimationOrchestrator.dispatch('animation.streak', { targetEl: targetIcon });
+            } else if (window.LottieAdapter) {
                 window.LottieAdapter.play('lottie.reward.streak').then(lottieSuccess => {
                     if (!lottieSuccess) {
-                        // Disabled old engine safely:
-                        // triggerVisuals(clientX, clientY, targetIcon);
                         if (targetIcon) {
                             targetIcon.classList.add('fire-sparked');
                             setTimeout(() => { targetIcon.classList.remove('fire-sparked'); }, 750);

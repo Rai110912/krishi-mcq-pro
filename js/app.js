@@ -8273,12 +8273,6 @@ function openEditImportModal(idx) {
                 }
             }
 
-            // 4. Toast feedback
-            if (isAutoTrigger) {
-                showToast('🏆 Magnificent! Daily Target exactly achieved! Dynamic Fire ignited! 🔥');
-            } else {
-                showToast('⚡ Fueling the flame! Target met and streak is blazing! Keep it up!');
-            }
         }
 
         return {

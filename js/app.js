@@ -4927,7 +4927,13 @@ function loadData(){
                 playSound('correct');
                 triggerHaptic('correct');
                 showFeedbackSpeechTag("🎯 Correct answer!");
-                if (selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
+                if (window.LottieAdapter) {
+                    window.LottieAdapter.play('lottie.mcq.correct').then(success => {
+                        if (!success && selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
+                    });
+                } else {
+                    if (selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
+                }
             }
             state.score++;
             // मिलाएको प्रश्नलाई गल्तीहरूको सूचीबाट स्वतः हटाउने
@@ -4942,8 +4948,14 @@ function loadData(){
                 playSound('wrong');
                 triggerHaptic('wrong');
                 showFeedbackSpeechTag("❌ Incorrect!");
-                if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
-                if (correctBtnNode) correctBtnNode.classList.add('glow-correct');
+                if (correctBtnNode) correctBtnNode.classList.add('glow-correct'); // Always show the correct answer natively
+                if (window.LottieAdapter) {
+                    window.LottieAdapter.play('lottie.mcq.wrong').then(success => {
+                        if (!success && selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
+                    });
+                } else {
+                    if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
+                }
             }
             // Isolation: Do not mix SM-2 Spaced Review mistakes with regular Mistakes Mode
             if (!state.activeConfig?.isSpacedReview) {

@@ -72,13 +72,29 @@ window.LottieAdapter = (function() {
             }
 
             initContainer();
+            // Clear any lingering DOM nodes
+            container.innerHTML = '';
+
+            // Create a dedicated wrapper with explicit dimensions so flexbox doesn't shrink it to 0x0
+            const wrapper = document.createElement('div');
+            // Scale dynamically but keep a minimum footprint so it's always visible
+            wrapper.style.width = '100%';
+            wrapper.style.height = '100%';
+            wrapper.style.maxWidth = '600px';
+            wrapper.style.maxHeight = '600px';
+            wrapper.style.flexShrink = '0';
+            
+            container.appendChild(wrapper);
 
             currentAnim = lottie.loadAnimation({
-                container: container,
+                container: wrapper,
                 renderer: 'svg',
                 loop: false,
                 autoplay: true,
-                animationData: json // Provide parsed validated data instead of path
+                animationData: json,
+                rendererSettings: {
+                    preserveAspectRatio: 'xMidYMid meet'
+                }
             });
             
             // Handle runtime failure gracefully

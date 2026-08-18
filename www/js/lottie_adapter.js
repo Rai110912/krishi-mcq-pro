@@ -11,8 +11,8 @@ window.LottieAdapter = (function() {
     const assets = {
         'lottie.reward.achievement': './assets/lottie/achievement.json',
         'lottie.reward.streak': './assets/lottie/streak.json',
-        'lottie.mcq.correct': './assets/lottie/correct.json',
-        'lottie.mcq.wrong': './assets/lottie/wrong.json'
+        'lottie.feedback.correct': './assets/lottie/correct.json',
+        'lottie.feedback.wrong': './assets/lottie/wrong.json'
     };
 
     function initContainer() {

@@ -4928,7 +4928,7 @@ function loadData(){
                 triggerHaptic('correct');
                 showFeedbackSpeechTag("🎯 Correct answer!");
                 if (window.LottieAdapter) {
-                    window.LottieAdapter.play('lottie.mcq.correct').then(success => {
+                    window.LottieAdapter.play('lottie.feedback.correct').then(success => {
                         if (!success && selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
                     });
                 } else {
@@ -4950,7 +4950,7 @@ function loadData(){
                 showFeedbackSpeechTag("❌ Incorrect!");
                 if (correctBtnNode) correctBtnNode.classList.add('glow-correct'); // Always show the correct answer natively
                 if (window.LottieAdapter) {
-                    window.LottieAdapter.play('lottie.mcq.wrong').then(success => {
+                    window.LottieAdapter.play('lottie.feedback.wrong').then(success => {
                         if (!success && selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
                     });
                 } else {

@@ -130,7 +130,7 @@ async function loadStaticQuestions() {
 
     let localData={
         bookmarked:[], wrong:[], bookmarkedLog:{}, wrongLog:{}, customQuestions:[], streak:{},
-        stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[]
+        stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[], progression:{xp:0}
     };
     // Removed legacy sm2Data variable
     let tempBatch=[];
@@ -1189,7 +1189,7 @@ function loadData(){
         syncSelectiveCustom = KrishiStorage.getItem('krishi_sync_sel_custom') !== 'false';
         syncSelectiveLogs = KrishiStorage.getItem('krishi_sync_sel_logs') !== 'false';
         activePlanMode = KrishiStorage.getItem('krishi_active_plan_mode') || 'normal';
-        ['bookmarked','wrong','streak','stats','achievements'].forEach(k=>{
+        ['bookmarked','wrong','streak','stats','achievements','progression'].forEach(k=>{
             const v = Storage.getJSON('krishi_'+k, null);
             if (v !== null && v !== undefined) localData[k] = v;
         });
@@ -4936,6 +4936,10 @@ function loadData(){
                 }
             }
             state.score++;
+            
+            // Award XP (silently if it's a mock exam with showAnswersEnd)
+            awardXP(XP_REWARDS.correctAnswer, 'correct_answer', selectedBtnNode, showAnswersEnd);
+            
             // मिलाएको प्रश्नलाई गल्तीहरूको सूचीबाट स्वतः हटाउने
             if (localData.wrong && localData.wrong.includes(q.id)) {
                 localData.wrong = localData.wrong.filter(id => id !== q.id);
@@ -5090,6 +5094,96 @@ function loadData(){
             container.appendChild(el);
             setTimeout(() => el.remove(), 700);
         }
+    }
+
+    // ==================== XP SYSTEM ARCHITECTURE ====================
+    const XP_REWARDS = {
+        correctAnswer: 10,
+        streakBonus: 5,
+        achievement: 50,
+        dailyTarget: 20
+    };
+
+    function awardXP(amount, reason, targetElement, silent = false) {
+        if (!amount || amount <= 0) return;
+        
+        // Update XP Source of Truth
+        if (!localData.progression || typeof localData.progression !== 'object') {
+            localData.progression = { xp: 0 };
+        }
+        if (typeof localData.progression.xp !== 'number' || isNaN(localData.progression.xp)) {
+            localData.progression.xp = 0;
+        }
+        
+        localData.progression.xp += amount;
+        saveData(); // Persist immediately
+        
+        // Emit visual event (optional visual)
+        if (!silent) {
+            showXPMicroAnimation(amount, targetElement);
+        }
+    }
+
+    function getLevelFromXP(xp) {
+        // Simple predictable progression formula: Level = floor(sqrt(xp / 100)) + 1
+        // Level 1: 0 XP
+        // Level 2: 100 XP
+        // Level 3: 400 XP
+        return Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1;
+    }
+
+    function getXPForNextLevel(currentLevel) {
+        return Math.pow(currentLevel, 2) * 100;
+    }
+
+    function getLevelProgress(xp) {
+        const currentLevel = getLevelFromXP(xp);
+        const nextLevelXP = getXPForNextLevel(currentLevel);
+        const prevLevelXP = currentLevel > 1 ? getXPForNextLevel(currentLevel - 1) : 0;
+        
+        const xpInCurrentLevel = xp - prevLevelXP;
+        const xpNeededForLevel = nextLevelXP - prevLevelXP;
+        
+        const percentage = Math.min(100, Math.max(0, (xpInCurrentLevel / xpNeededForLevel) * 100));
+        
+        return {
+            level: currentLevel,
+            currentLevelXP: xpInCurrentLevel,
+            nextLevelTotalXP: nextLevelXP,
+            xpNeededForLevel: xpNeededForLevel,
+            percentage: percentage
+        };
+    }
+
+    function showXPMicroAnimation(amount, targetElement) {
+        const ps = typeof getPerfSettings === 'function' ? getPerfSettings() : {};
+        if (ps.perfMode === 'battery' || ps.animIntensity === 'off') return;
+
+        const xpLabel = document.createElement('div');
+        xpLabel.className = 'xp-micro-anim';
+        xpLabel.textContent = '+' + amount + ' XP';
+        
+        if (targetElement) {
+            const rect = targetElement.getBoundingClientRect();
+            xpLabel.style.left = (rect.left + rect.width / 2) + 'px';
+            xpLabel.style.top = rect.top + 'px';
+        } else {
+            xpLabel.style.left = '50%';
+            xpLabel.style.top = '50%';
+        }
+
+        if (ps.reduceMotion) {
+            xpLabel.style.animation = 'none';
+            xpLabel.style.opacity = '1';
+            xpLabel.style.transform = 'translate(-50%, -100%)';
+            setTimeout(() => { xpLabel.style.opacity = '0'; }, 500);
+        }
+
+        document.body.appendChild(xpLabel);
+
+        setTimeout(() => {
+            if (xpLabel.parentNode) xpLabel.parentNode.removeChild(xpLabel);
+        }, ps.reduceMotion ? 600 : 800);
     }
 
     function showFeedbackSpeechTag(txt) {

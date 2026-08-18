@@ -2477,3 +2477,37 @@ aside {
 
 
 
+/* XP MICRO-ANIMATION */
+.xp-micro-anim {
+    position: absolute;
+    color: #10b981; /* Emerald 500 */
+    font-weight: 900;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 999999;
+    text-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+    animation: xpPopFloat 700ms cubic-bezier(0.12, 0.82, 0.15, 1) forwards;
+    transform: translate(-50%, -50%);
+}
+
+@keyframes xpPopFloat {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.5);
+    }
+    15% {
+        opacity: 1;
+        transform: translate(-50%, -65%) scale(1.2);
+    }
+    30% {
+        transform: translate(-50%, -75%) scale(1);
+    }
+    80% {
+        opacity: 1;
+        transform: translate(-50%, -100%) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -120%) scale(0.9);
+    }
+}

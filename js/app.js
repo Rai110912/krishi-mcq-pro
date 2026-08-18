@@ -3439,6 +3439,7 @@ function loadData(){
 
     // ==================== UNIFIED SHELL: STATS RIBBON ====================
     window.updateStatsRibbon = function() {
+        if (typeof window.updateProgressionUI === 'function') window.updateProgressionUI();
         try {
             const today = getLocalDateString();
             const todayData = (localData.streak && localData.streak[today]) || {};
@@ -5118,6 +5119,8 @@ function loadData(){
         localData.progression.xp += amount;
         saveData(); // Persist immediately
         
+        if (typeof window.updateProgressionUI === 'function') window.updateProgressionUI();
+        
         // Emit visual event (optional visual)
         if (!silent) {
             showXPMicroAnimation(amount, targetElement);
@@ -5154,6 +5157,31 @@ function loadData(){
             percentage: percentage
         };
     }
+    
+    window.updateProgressionUI = function() {
+        if (!localData.progression) return;
+        const xp = (typeof localData.progression.xp === 'number' && !isNaN(localData.progression.xp)) ? localData.progression.xp : 0;
+        const progress = getLevelProgress(xp);
+        
+        const level = progress.level;
+        const currentLevelXP = progress.currentLevelXP;
+        const xpNeededForLevel = progress.xpNeededForLevel;
+        const remainingXP = progress.xpNeededForLevel - progress.currentLevelXP;
+        const percentage = progress.percentage;
+        const nextLevel = level + 1;
+        
+        const a11yString = `Level ${level}, ${currentLevelXP} of ${xpNeededForLevel} XP, ${remainingXP} XP remaining to Level ${nextLevel}`;
+        
+        document.querySelectorAll('.prog-level-text').forEach(el => el.textContent = 'LEVEL ' + level);
+        document.querySelectorAll('.prog-xp-text').forEach(el => el.textContent = `${currentLevelXP} / ${xpNeededForLevel} XP`);
+        document.querySelectorAll('.prog-bar-fill').forEach(el => el.style.width = percentage + '%');
+        document.querySelectorAll('.prog-remaining-text').forEach(el => el.textContent = `${remainingXP} XP to Level ${nextLevel}`);
+        document.querySelectorAll('.prog-container-a11y').forEach(el => {
+            el.setAttribute('aria-label', a11yString);
+            el.setAttribute('aria-valuenow', currentLevelXP);
+            el.setAttribute('aria-valuemax', xpNeededForLevel);
+        });
+    };
 
     function showXPMicroAnimation(amount, targetElement) {
         const ps = typeof getPerfSettings === 'function' ? getPerfSettings() : {};

@@ -7961,7 +7961,19 @@ function openEditImportModal(idx) {
     function triggerConfetti() {
         const ps = getPerfSettings();
         if (ps.perfMode === 'battery' || ps.reduceMotion || ps.animIntensity === 'off') return;
-        ConfettiEngine.trigger(ps.perfMode === 'smooth120' ? 110 : 90);
+        
+        // Use new Lottie Adapter
+        if (window.LottieAdapter) {
+            window.LottieAdapter.play('lottie.reward.achievement').then(lottieSuccess => {
+                // Fallback or old engine is Disabled during safe transition
+                if (!lottieSuccess) {
+                    // Disabled old engine safely:
+                    // ConfettiEngine.trigger(ps.perfMode === 'smooth120' ? 110 : 90);
+                }
+            });
+        } else {
+            // ConfettiEngine.trigger(ps.perfMode === 'smooth120' ? 110 : 90);
+        }
     }
 
     // ==================== FIRE CELEBRATION MODULE ====================
@@ -8243,7 +8255,23 @@ function openEditImportModal(idx) {
             const targetIcon = (event && event.currentTarget) || (event && event.target) || document.querySelector('.planner-streak-fire-icon');
 
             // 3. Trigger visual effects (shockwave, sparks, and fall cascade) via RAF canvas
-            triggerVisuals(clientX, clientY, targetIcon);
+            if (window.LottieAdapter) {
+                window.LottieAdapter.play('lottie.reward.streak').then(lottieSuccess => {
+                    if (!lottieSuccess) {
+                        // Disabled old engine safely:
+                        // triggerVisuals(clientX, clientY, targetIcon);
+                        if (targetIcon) {
+                            targetIcon.classList.add('fire-sparked');
+                            setTimeout(() => { targetIcon.classList.remove('fire-sparked'); }, 750);
+                        }
+                    }
+                });
+            } else {
+                if (targetIcon) {
+                    targetIcon.classList.add('fire-sparked');
+                    setTimeout(() => { targetIcon.classList.remove('fire-sparked'); }, 750);
+                }
+            }
 
             // 4. Toast feedback
             if (isAutoTrigger) {

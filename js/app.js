@@ -5234,7 +5234,7 @@ function loadData(){
             <div class="levelup-card relative flex flex-col items-center justify-center transform scale-50 opacity-0 transition-all duration-[600ms] ease-[cubic-bezier(0.175,0.885,0.32,1.275)]">
                 <div class="absolute inset-0 bg-emerald-400/20 blur-3xl rounded-full pointer-events-none"></div>
                 <div class="relative z-10 text-center">
-                    <span class="block text-3xl animate-bounce drop-shadow-md">✨</span>
+                    <span class="block text-3xl drop-shadow-md" style="animation: oneShot-bounce 0.9s cubic-bezier(0.36,0.07,0.19,0.97) 1 forwards;">✨</span>
                     <h2 class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-br from-emerald-300 to-emerald-600 tracking-widest uppercase drop-shadow-[0_0_15px_rgba(52,211,153,0.8)] leading-tight">LEVEL UP</h2>
                     <div class="mt-2 text-[5rem] font-black text-white drop-shadow-[0_0_20px_rgba(52,211,153,0.9)] leading-none" style="-webkit-text-stroke: 2px #059669;">${newLevel}</div>
                 </div>

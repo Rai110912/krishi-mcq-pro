@@ -545,9 +545,9 @@
             --ani-duration: 0.35s;
         }
 
-        /* Transition variables override */
-        *, *::before, *::after {
-            transition-duration: var(--ani-duration) !important;
+        /* Transition variables override — scoped to active theme presets only */
+        body.theme-minimal *, body.theme-pro *, body.theme-focus *, body.theme-classic * {
+            transition-duration: var(--ani-duration);
         }
 
         /* 1. MINIMALIST THEME STYLE */
@@ -1316,7 +1316,8 @@ button, a, input, select, textarea {
     background-color: rgba(16, 185, 129, 0.08) !important;
     color: #065f46 !important;
     box-shadow: 0 2px 8px 0 rgba(16, 185, 129, 0.3) !important;
-    animation: hybridCorrectPulse 1.2s infinite alternate !important;
+    /* Play once — no perpetual loop on answered state */
+    animation: hybridCorrectPulse 0.7s cubic-bezier(0.16, 1, 0.3, 1) 1 forwards !important;
 }
 .premium-hybrid-active.dark .option-btn.glow-correct {
     color: #34d399 !important;
@@ -1337,7 +1338,8 @@ button, a, input, select, textarea {
 /* Animations Keyframes */
 @keyframes hybridCorrectPulse {
     0% { transform: scale(1); }
-    100% { transform: scale(1.015); box-shadow: 0 2px 14px 0 rgba(16, 185, 129, 0.45) !important; }
+    60% { transform: scale(1.015); box-shadow: 0 2px 14px 0 rgba(16, 185, 129, 0.45) !important; }
+    100% { transform: scale(1.01); box-shadow: 0 2px 10px 0 rgba(16, 185, 129, 0.3) !important; }
 }
 
 @keyframes hybridWrongShake {
@@ -2479,35 +2481,47 @@ aside {
 
 /* XP MICRO-ANIMATION */
 .xp-micro-anim {
-    position: absolute;
+    position: fixed;  /* fixed so it's never clipped by a parent overflow:hidden */
     color: #10b981; /* Emerald 500 */
     font-weight: 900;
     font-size: 14px;
+    letter-spacing: 0.03em;
     pointer-events: none;
     z-index: 999999;
-    text-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
-    animation: xpPopFloat 700ms cubic-bezier(0.12, 0.82, 0.15, 1) forwards;
+    text-shadow: 0 0 12px rgba(16, 185, 129, 0.55), 0 2px 8px rgba(16, 185, 129, 0.3);
+    animation: xpPopFloat 720ms cubic-bezier(0.12, 0.82, 0.15, 1) forwards;
     transform: translate(-50%, -50%);
+    will-change: transform, opacity;
 }
 
 @keyframes xpPopFloat {
     0% {
         opacity: 0;
-        transform: translate(-50%, -50%) scale(0.5);
+        transform: translate(-50%, -50%) scale(0.4);
     }
-    15% {
+    12% {
         opacity: 1;
-        transform: translate(-50%, -65%) scale(1.2);
+        transform: translate(-50%, -62%) scale(1.25);
     }
-    30% {
-        transform: translate(-50%, -75%) scale(1);
+    28% {
+        transform: translate(-50%, -72%) scale(1.0);
     }
-    80% {
+    78% {
         opacity: 1;
-        transform: translate(-50%, -100%) scale(1);
+        transform: translate(-50%, -105%) scale(1.0);
     }
     100% {
         opacity: 0;
-        transform: translate(-50%, -120%) scale(0.9);
+        transform: translate(-50%, -122%) scale(0.88);
     }
+}
+
+/* ONE-SHOT BOUNCE — for Level-Up emoji, no infinite loop */
+@keyframes oneShot-bounce {
+    0%   { transform: translateY(0); }
+    30%  { transform: translateY(-10px); }
+    55%  { transform: translateY(-4px); }
+    75%  { transform: translateY(-7px); }
+    90%  { transform: translateY(-2px); }
+    100% { transform: translateY(0); }
 }

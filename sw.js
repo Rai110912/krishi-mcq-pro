@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v108-pvxhgq1';
+const CACHE_NAME = 'krishi-mcq-v109-nuopj35';
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
@@ -11,19 +11,19 @@ self.addEventListener('install', event => {
           fetch('./index.html', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.html', r); }),
           fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
           fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
-          fetch('./index.css?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=pvxhgq1', r); }),
+          fetch('./index.css?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=nuopj35', r); }),
           fetch('./questions.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./questions.json', r); }),
           fetch('./js/libs/tailwindcss.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/tailwindcss.js', r); }),
           fetch('./js/libs/lucide.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lucide.js', r); }),
-          fetch('./js/canvas_charts.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=pvxhgq1', r); }),
+          fetch('./js/canvas_charts.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=nuopj35', r); }),
 
-          fetch('./js/pwa_helpers.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=pvxhgq1', r); }),
-          fetch('./js/app.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=pvxhgq1', r); }),
-          fetch('./js/elite_animations_controller.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=pvxhgq1', r); }),
-          fetch('./js/elite_3d_engine.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=pvxhgq1', r); }),
+          fetch('./js/pwa_helpers.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=nuopj35', r); }),
+          fetch('./js/app.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=nuopj35', r); }),
+          fetch('./js/elite_animations_controller.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=nuopj35', r); }),
+          fetch('./js/elite_3d_engine.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=nuopj35', r); }),
           fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
           fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); }),
-          fetch('./js/sqlite_db.js?v=pvxhgq1', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=pvxhgq1', r); }),
+          fetch('./js/sqlite_db.js?v=nuopj35', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=nuopj35', r); }),
           fetch('./js/ambient_player.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/ambient_player.js', r); }),
           fetch('./js/firebase-firestore-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-firestore-compat.js', r); }),
           fetch('./js/libs/qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/qrcode.min.js', r); }),

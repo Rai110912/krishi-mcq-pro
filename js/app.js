@@ -5116,10 +5116,20 @@ function loadData(){
             localData.progression.xp = 0;
         }
         
+        const previousLevel = getLevelFromXP(localData.progression.xp);
+        
         localData.progression.xp += amount;
         saveData(); // Persist immediately
         
+        const currentLevel = getLevelFromXP(localData.progression.xp);
+        
         if (typeof window.updateProgressionUI === 'function') window.updateProgressionUI();
+        
+        if (previousLevel < currentLevel && !silent) {
+            if (typeof window.triggerLevelUpCelebration === 'function') {
+                window.triggerLevelUpCelebration(currentLevel);
+            }
+        }
         
         // Emit visual event (optional visual)
         if (!silent) {
@@ -5182,6 +5192,103 @@ function loadData(){
             el.setAttribute('aria-valuemax', xpNeededForLevel);
         });
     };
+
+    window.triggerLevelUpCelebration = function(newLevel) {
+        // Duplicate protection lifecycle flag
+        if (window._isLevelUpPlaying === newLevel) return;
+        window._isLevelUpPlaying = newLevel;
+
+        const ps = window.getPerfSettings ? window.getPerfSettings() : {};
+        if (ps.perfMode === 'battery' || ps.animIntensity === 'off' || ps.reduceMotion) {
+            // Accessible / Fallback behavior: static UI
+            if (typeof showToast === 'function') {
+                showToast(`🎉 LEVEL ${newLevel} - Level Up!`);
+            }
+            setTimeout(() => { window._isLevelUpPlaying = false; }, 2000);
+            return;
+        }
+
+        if (window.LottieAdapter && typeof window.LottieAdapter.play === 'function') {
+            window.LottieAdapter.play('lottie.reward.levelUp').then(success => {
+                if (success) {
+                    if (typeof showToast === 'function') showToast(`✨ LEVEL ${newLevel} - Level Up!`);
+                    setTimeout(() => { window._isLevelUpPlaying = false; }, 2000);
+                } else {
+                    playCSSLevelUp(newLevel);
+                }
+            });
+        } else {
+            playCSSLevelUp(newLevel);
+        }
+    };
+
+    function playCSSLevelUp(newLevel) {
+        const existing = document.getElementById('css-levelup-overlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'css-levelup-overlay';
+        overlay.className = 'fixed inset-0 z-[999999] pointer-events-none flex items-center justify-center';
+        
+        overlay.innerHTML = `
+            <div class="levelup-card relative flex flex-col items-center justify-center transform scale-50 opacity-0 transition-all duration-[600ms] ease-[cubic-bezier(0.175,0.885,0.32,1.275)]">
+                <div class="absolute inset-0 bg-emerald-400/20 blur-3xl rounded-full pointer-events-none"></div>
+                <div class="relative z-10 text-center">
+                    <span class="block text-3xl animate-bounce drop-shadow-md">✨</span>
+                    <h2 class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-br from-emerald-300 to-emerald-600 tracking-widest uppercase drop-shadow-[0_0_15px_rgba(52,211,153,0.8)] leading-tight">LEVEL UP</h2>
+                    <div class="mt-2 text-[5rem] font-black text-white drop-shadow-[0_0_20px_rgba(52,211,153,0.9)] leading-none" style="-webkit-text-stroke: 2px #059669;">${newLevel}</div>
+                </div>
+                
+                <div class="absolute inset-0 overflow-visible pointer-events-none">
+                    ${Array.from({length: 14}).map((_, i) => {
+                        const angle = (i * (360 / 14)) * (Math.PI / 180);
+                        const distance = 100 + Math.random() * 60;
+                        const tx = Math.cos(angle) * distance;
+                        const ty = Math.sin(angle) * distance;
+                        const delay = Math.random() * 0.15;
+                        return `<div class="absolute top-1/2 left-1/2 w-2.5 h-2.5 bg-emerald-300 rounded-full shadow-[0_0_8px_#6ee7b7]" style="--tx: ${tx}px; --ty: ${ty}px; animation: levelupParticle 0.8s ease-out ${delay}s forwards;"></div>`;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        if (!document.getElementById('levelup-styles')) {
+            const style = document.createElement('style');
+            style.id = 'levelup-styles';
+            style.textContent = `
+                @keyframes levelupParticle {
+                    0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+                    100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(0); opacity: 0; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const card = overlay.querySelector('.levelup-card');
+                if (card) {
+                    card.style.transform = 'scale(1)';
+                    card.style.opacity = '1';
+                }
+            });
+        });
+
+        setTimeout(() => {
+            const card = overlay.querySelector('.levelup-card');
+            if (card) {
+                card.style.transition = 'all 0.4s ease-in';
+                card.style.transform = 'scale(1.1)';
+                card.style.opacity = '0';
+            }
+            setTimeout(() => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                window._isLevelUpPlaying = false;
+            }, 400);
+        }, 1400);
+    }
 
     function showXPMicroAnimation(amount, targetElement) {
         const ps = typeof getPerfSettings === 'function' ? getPerfSettings() : {};
@@ -13455,6 +13562,7 @@ ${text}`;
             payload.streak = localData.streak || {};
             payload.stats = localData.stats || {};
             payload.achievements = localData.achievements || [];
+            payload.progression = localData.progression || { xp: 0 };
             payload.sm2 = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
             
             // config data packs
@@ -13501,6 +13609,7 @@ ${text}`;
                 changed = true; 
             }
             if (Array.isArray(data.achievements)) { localData.achievements = data.achievements; changed = true; }
+            if (data.progression && typeof data.progression === 'object') { localData.progression = data.progression; changed = true; }
             
             if (data.sm2 && typeof data.sm2 === 'object') {
                 if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
@@ -13635,6 +13744,9 @@ ${text}`;
             totalCorrect: (cloud.stats?.totalCorrect || 0) + Math.max(0, (local.stats?.totalCorrect || 0) - (baselineStats.totalCorrect || 0)),
             streakDays: Math.max(local.stats?.streakDays || 0, cloud.stats?.streakDays || 0),
             subjectStats: {}
+        };
+        merged.progression = {
+            xp: Math.max(local.progression?.xp || 0, cloud.progression?.xp || 0)
         };
         let allSubjects = new Set([...Object.keys(local.stats?.subjectStats || {}), ...Object.keys(cloud.stats?.subjectStats || {})]);
         allSubjects.forEach(sub => {
@@ -13772,7 +13884,7 @@ ${text}`;
             'bookmarked', 'bookmarkedLog',
             'wrong', 'wrongLog',
             'customQuestions',
-            'streak', 'stats', 'achievements', 'sm2',
+            'streak', 'stats', 'achievements', 'sm2', 'progression',
             'examProfiles', 'homeSettings', 'appearanceSettings',
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
             'timingLog', 'mockScores', 'practiceRecent',
@@ -16001,7 +16113,8 @@ window.initNepalGlobe = function() {
                     wrong: localData.wrong || [],
                     streak: localData.streak || 0,
                     stats: localData.stats || {},
-                    achievements: localData.achievements || []
+                    achievements: localData.achievements || [],
+                    progression: localData.progression || { xp: 0 }
                 },
                 sm2Data: window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {}
             };
@@ -16073,7 +16186,7 @@ window.initNepalGlobe = function() {
                 }
                 
                 // Apply values to localData safely
-                const keys = ['bookmarked', 'wrong', 'streak', 'stats', 'achievements'];
+                const keys = ['bookmarked', 'wrong', 'streak', 'stats', 'achievements', 'progression'];
                 keys.forEach(k => {
                     if (imported.localData[k] !== undefined) {
                         localData[k] = imported.localData[k];

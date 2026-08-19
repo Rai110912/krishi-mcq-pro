@@ -1,9 +1,16 @@
-[33m[1m! [22m[39m Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
-Authentication Error: Your credentials are no longer valid. Please run [1mfirebase login --reauth[22m
 
-For CI servers and headless environments, generate a new token with [1mfirebase login:ci[22m
-Authentication Error: Your credentials are no longer valid. Please run [1mfirebase login --reauth[22m
+[1m[37m===[39m Deploying to 'krishi-mcq-pro'...[22m
 
-For CI servers and headless environments, generate a new token with [1mfirebase login:ci[22m
+[36m[1mi [22m[39m deploying [1mhosting[22m
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m beginning deploy...
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m found 38 files in [1mwww[22m
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m file upload complete
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m finalizing version...
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m version finalized
+[36m[1mi  hosting[krishi-mcq-pro]:[22m[39m releasing new version...
+[32m[1m+  hosting[krishi-mcq-pro]:[22m[39m release complete
 
-[1m[31mError:[39m[22m Assertion failed: resolving hosting target of a site with no site name or target name. This should have caused an error earlier
+[32m[1m+ [22m[39m [1m[4mDeploy complete![24m[22m
+
+[1mProject Console:[22m https://console.firebase.google.com/project/krishi-mcq-pro/overview
+[1mHosting URL:[22m https://krishi-mcq-pro.web.app

@@ -404,14 +404,14 @@
     // ──────────────────────────────────────────────
     // 8. CORE EXECUTION
     // ──────────────────────────────────────────────
-    function executeAnimation(eventType, payload) {
+    function executeAnimation(eventType, payload, forceLevelOverride) {
         var renderer = RENDERERS[eventType];
         if (!renderer) {
             console.warn('[AnimOrchestrator] No renderer for event:', eventType);
             return Promise.resolve();
         }
 
-        var level = getAccessibilityLevel();
+        var level = forceLevelOverride || getAccessibilityLevel();
         var priority = EVENT_PRIORITY_MAP[eventType] || PRIORITY.NORMAL;
 
         // Track active animation
@@ -422,36 +422,59 @@
             startTime: Date.now()
         });
 
+        // STATE 4: Suppress generic button micro-interactions globally while CRITICAL plays
+        if (priority >= PRIORITY.CRITICAL) {
+            document.body.classList.add('suppress-micro-interactions');
+        }
+
         return new Promise(function (resolve) {
             try {
                 var result = renderer(payload || {}, level);
                 // Ensure we always get a Promise
                 if (result && typeof result.then === 'function') {
                     result.then(function () {
-                        activeAnimations.delete(animId);
+                        cleanupActive(animId, priority);
                         resolve();
                     }).catch(function (err) {
                         console.warn('[AnimOrchestrator] Renderer error for', eventType, err);
-                        activeAnimations.delete(animId);
+                        cleanupActive(animId, priority);
                         resolve(); // Never block
                     });
                 } else {
-                    activeAnimations.delete(animId);
+                    cleanupActive(animId, priority);
                     resolve();
                 }
             } catch (err) {
                 console.warn('[AnimOrchestrator] Render exception for', eventType, err);
-                activeAnimations.delete(animId);
+                cleanupActive(animId, priority);
                 resolve(); // NEVER block business logic
             }
 
             // Safety timeout: force cleanup after 6 seconds regardless
             setTimeout(function () {
-                if (activeAnimations.has(animId)) {
-                    activeAnimations.delete(animId);
-                }
+                cleanupActive(animId, priority);
+                resolve();
             }, 6000);
         });
+    }
+
+    function cleanupActive(animId, priority) {
+        if (activeAnimations.has(animId)) {
+            activeAnimations.delete(animId);
+            
+            if (priority >= PRIORITY.CRITICAL) {
+                var stillCritical = false;
+                for (var entry of activeAnimations.values()) {
+                    if (entry.priority >= PRIORITY.CRITICAL) {
+                        stillCritical = true;
+                        break;
+                    }
+                }
+                if (!stillCritical) {
+                    document.body.classList.remove('suppress-micro-interactions');
+                }
+            }
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -474,17 +497,38 @@
             var now = Date.now();
             var priority = EVENT_PRIORITY_MAP[eventType] || PRIORITY.NORMAL;
 
-            // Deduplication: ignore identical events within DEDUP_WINDOW
+            // STATE 5: RAPID ANSWERING Deduplication
+            var dedupWindow = DEDUP_WINDOW;
+            if (priority === PRIORITY.NORMAL) dedupWindow = 250; // Throttle Correct/Wrong slightly more
+            if (priority === PRIORITY.MICRO) dedupWindow = 50;   // XP can happen fast
+
             var lastTime = lastDispatchTime.get(eventType) || 0;
-            if (now - lastTime < DEDUP_WINDOW) {
+            if (now - lastTime < dedupWindow) {
                 console.log('[AnimOrchestrator] Deduplicated:', eventType);
                 return;
             }
             lastDispatchTime.set(eventType, now);
 
+            // Check if CRITICAL is active
+            var isCriticalActive = false;
+            for (var entry of activeAnimations.values()) {
+                if (entry.priority >= PRIORITY.CRITICAL) {
+                    isCriticalActive = true;
+                    break;
+                }
+            }
+
+            // STATE 3 & 4: Suppress XP (MICRO) if CRITICAL is active
+            if (isCriticalActive && priority === PRIORITY.MICRO) {
+                console.log('[AnimOrchestrator] Suppressed MICRO because CRITICAL is active');
+                return; 
+            }
+
             // MICRO and NORMAL: play immediately (no queue, no conflict)
             if (priority <= PRIORITY.NORMAL) {
-                executeAnimation(eventType, payload);
+                // STATE 4: Downgrade NORMAL to 'reduced' (CSS only) to prevent Lottie conflicts with CRITICAL
+                var forceLevel = (isCriticalActive && priority === PRIORITY.NORMAL) ? 'reduced' : null;
+                executeAnimation(eventType, payload, forceLevel);
                 return;
             }
 
@@ -524,6 +568,9 @@
         // Clean up Level-Up overlay if present
         var levelUpOverlay = document.getElementById('css-levelup-overlay');
         if (levelUpOverlay) levelUpOverlay.remove();
+
+        // Clean up CRITICAL suppression class (Step 28 feature)
+        document.body.classList.remove('suppress-micro-interactions');
 
         window._isLevelUpPlaying = false;
         console.log('[AnimOrchestrator] All animations cancelled.');

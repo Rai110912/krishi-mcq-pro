@@ -1676,7 +1676,7 @@ function loadData(){
                                 <strong class="text-[9px] block mt-2 text-slate-700 dark:text-slate-200">Alternative Pairing Option:</strong>
                                 Enter your pairing Sync Key manually in the settings box underneath.
                             </p>
-                            <button onclick="closeQRScanner(); playSound('click');" class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg text-[9px] font-bold border-none cursor-pointer active:scale-95 transition" style="color:var(--text);">Cancel & Enter Manually</button>
+                            <button onclick="closeQRScanner(); playSound('click');" class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg text-[9px] font-bold border-none cursor-pointer  transition" style="color:var(--text);">Cancel & Enter Manually</button>
                         </div>
                     `;
                 }
@@ -3309,6 +3309,9 @@ function loadData(){
             // Trigger premium bi-directional transitions based on user customization
             if (activePage && activePage.id !== pageId) {
                 let style = (window.EliteAnimsConfig && window.EliteAnimsConfig.pageTransitionStyle) || 'slide';
+                const ps = typeof window.getPerfSettings === 'function' ? window.getPerfSettings() : {};
+                if (ps.reduceMotion || ps.perfMode === 'battery') style = 'none';
+
                 if (style === 'slide') {
                     let slideClass = newIdx > oldIdx ? 'slide-in-right' : 'slide-in-left';
                     target.classList.add(slideClass);
@@ -4762,7 +4765,7 @@ function loadData(){
 
         indexMap.forEach((meta, i)=>{
             let btn = document.createElement('button');
-            btn.className = 'option-btn transition-all duration-200 active:scale-95 text-left option-entrance';
+            btn.className = 'option-btn transition-all duration-200 text-left option-entrance';
             btn.style.animationDelay = (i * 0.05) + 's';
             btn.textContent = String.fromCharCode(65+i) + '. ' + meta.text;
             btn.dataset.originalIndex = meta.originalIdx;
@@ -9850,7 +9853,7 @@ document.querySelectorAll('button').forEach(btn => {
 
             itemDiv.innerHTML = `
                 <div class="flex items-start gap-2 max-w-[70%]">
-                    <button onclick="toggleWidgetHiddenState('${wId}')" class="text-xs cursor-pointer hover:scale-110 active:scale-90 transition pt-0.5">
+                    <button onclick="toggleWidgetHiddenState('${wId}')" class="text-xs cursor-pointer hover:scale-110  transition pt-0.5">
                         ${isHidden ? '❌' : '✅'}
                     </button>
                     <div>
@@ -10436,10 +10439,10 @@ document.querySelectorAll('button').forEach(btn => {
                 </div>
 
                 <div class="flex gap-2 mt-3">
-                    <button onclick="startRecommendationPractice('${recommendationAction}', '${weakInfo.subject}')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[10.5px] py-2 rounded-xl active:scale-95 transition cursor-pointer text-center">
+                    <button onclick="startRecommendationPractice('${recommendationAction}', '${weakInfo.subject}')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[10.5px] py-2 rounded-xl  transition cursor-pointer text-center">
                         🎯 Start Practice
                     </button>
-                    <button onclick="generateTodaySmartPlanSequence()" class="flex-1 border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 font-extrabold text-[10.5px] py-2 rounded-xl active:scale-95 transition cursor-pointer text-center">
+                    <button onclick="generateTodaySmartPlanSequence()" class="flex-1 border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 font-extrabold text-[10.5px] py-2 rounded-xl  transition cursor-pointer text-center">
                         📋 Generate Plan
                     </button>
                 </div>
@@ -10494,7 +10497,7 @@ document.querySelectorAll('button').forEach(btn => {
                         </div>
                     </div>
                     <div class="pt-1.5 flex gap-2">
-                        <button onclick="startPractice('${weakSub}', 20)" class="flex-1 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[10px] font-bold shadow-xs transition active:scale-95 cursor-pointer text-center">Launch Study Sequence</button>
+                        <button onclick="startPractice('${weakSub}', 20)" class="flex-1 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[10px] font-bold shadow-xs transition  cursor-pointer text-center">Launch Study Sequence</button>
                     </div>
                 </div>
             `;
@@ -10546,7 +10549,7 @@ document.querySelectorAll('button').forEach(btn => {
                     </div>
                     <div class="flex items-center gap-2">
                         <span class="text-[10px] bg-white/20 px-2.5 py-1 rounded-full font-extrabold">📅 ${dateVal}</span>
-                        <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="px-2.5 py-1 bg-white/20 hover:bg-white/35 text-white font-bold text-[10px] rounded-xl shadow-3xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
+                        <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="px-2.5 py-1 bg-white/20 hover:bg-white/35 text-white font-bold text-[10px] rounded-xl shadow-3xs transition duration-150 cursor-pointer hover:scale-105 ">Manage</button>
                     </div>
                 </div>
                 <div class="flex items-baseline gap-2 mt-4">
@@ -11838,7 +11841,7 @@ document.querySelectorAll('button').forEach(btn => {
             let btn = document.createElement('button');
             btn.textContent = label;
             btn.id = 'rest-day-' + i;
-            btn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition active:scale-95';
+            btn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black cursor-pointer border-none transition ';
             btn.style.background = isSelected ? 'rgba(99,102,241,0.15)' : 'var(--bg)';
             btn.style.color = isSelected ? '#6366f1' : 'var(--text-secondary)';
             btn.style.outline = isSelected ? '2px solid #6366f1' : 'none';
@@ -14192,7 +14195,7 @@ function updatePracticePage() {
         let accuracyColor = stats.solved > 0 ? (stats.correct / stats.solved >= 0.8 ? 'text-emerald-500' : stats.correct / stats.solved >= 0.5 ? 'text-amber-500' : 'text-rose-500') : 'text-slate-400 dark:text-slate-500';
 
         container.innerHTML += `
-            <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all active:scale-95 group flex flex-col justify-between" style="border-color:var(--border);">
+            <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all  group flex flex-col justify-between" style="border-color:var(--border);">
                 <div>
                     <p class="font-extrabold text-xs text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">${sub}</p>
                     <span class="text-[9px] text-slate-400 mt-1 block">${count} Questions</span>

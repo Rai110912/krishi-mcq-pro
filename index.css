@@ -2525,3 +2525,37 @@ aside {
     90%  { transform: translateY(-2px); }
     100% { transform: translateY(0); }
 }
+
+/* ==================== STEP 26: PREMIUM MICRO-INTERACTIONS ==================== */
+button:not(:disabled):not(.disabled):not(.option-btn):not(.creator-tab):not([role="tab"]):active, .btn:not(:disabled):not(.disabled):active {
+    scale: 0.96;
+    transition: scale 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.option-btn:not(:disabled):not(.disabled):active {
+    scale: 0.97;
+    transition: scale 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+div[id^="creator-panel-"]:not(.hidden), div[id^="settings-tab-"]:not(.hidden), div[id^="customizer-panel-"]:not(.hidden), div[id^="hybrid-dash-content-"]:not(.hidden), #practice-active-state-panels:not(.hidden), #practice-result-panel:not(.hidden) {
+    animation: micro-tab-enter 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes micro-tab-enter {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    button:active, .btn:active, .option-btn:active {
+        scale: 1 !important;
+        transition: none !important;
+    }
+    div[id^="creator-panel-"]:not(.hidden), div[id^="settings-tab-"]:not(.hidden), div[id^="customizer-panel-"]:not(.hidden), div[id^="hybrid-dash-content-"]:not(.hidden), #practice-active-state-panels:not(.hidden), #practice-result-panel:not(.hidden) {
+        animation: micro-fade-enter 0.2s ease-out forwards;
+    }
+}
+@keyframes micro-fade-enter {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+}
+
+
+.suppress-micro-interactions button:active, .suppress-micro-interactions .btn:active, .suppress-micro-interactions .option-btn:active { scale: 1 !important; transition: none !important; }
+

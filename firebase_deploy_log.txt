@@ -1,6 +1,9 @@
+[33m[1m! [22m[39m Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+Authentication Error: Your credentials are no longer valid. Please run [1mfirebase login --reauth[22m
 
-[1m[37m===[39m Deploying to 'krishi-mcq-pro'...[22m
+For CI servers and headless environments, generate a new token with [1mfirebase login:ci[22m
+Authentication Error: Your credentials are no longer valid. Please run [1mfirebase login --reauth[22m
 
-[36m[1mi [22m[39m deploying [1mhosting[22m
+For CI servers and headless environments, generate a new token with [1mfirebase login:ci[22m
 
-[1m[31mError:[39m[22m Failed to make request to https://firebasehosting.googleapis.com/v1beta1/projects/krishi-mcq-pro/sites/krishi-mcq-pro
+[1m[31mError:[39m[22m Assertion failed: resolving hosting target of a site with no site name or target name. This should have caused an error earlier

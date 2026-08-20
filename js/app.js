@@ -2793,8 +2793,8 @@ function loadData(){
                         const cloudData = cachedCloudData;
                         syncInProgress = true;
                         console.log('[Cloud Sync] Snappy silent real-time CRDT merge executing...');
-                        detectPeerChangesAndNotify(cloudData);
                         const mergedPayload = mergeCloudAndLocalData(cloudData);
+                        detectPeerChangesAndNotify(cloudData);
                         applyAllAppData(mergedPayload);
 
                         const delta = getDifferentialSyncDelta(mergedPayload, cloudData);

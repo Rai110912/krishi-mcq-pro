@@ -14136,7 +14136,7 @@ ${text}`;
                 
                 // Trigger UI Refresh Event & Update Home Page
                 const activePanels = document.getElementById('practice-active-state-panels');
-                const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
+                const isUserInActiveQuiz = activePanels && activePanels.classList.contains('hidden');
                 if (!isUserInActiveQuiz) {
                     if (typeof updateHomePage === 'function') updateHomePage();
                     if (typeof updateStatsRibbon === 'function') updateStatsRibbon();

@@ -830,6 +830,7 @@ async function loadStaticQuestions() {
                             let cloudSession = doc.data();
                             let localSessionObj = safeParseSession(localSaved);
                             let localTime = localSessionObj ? (localSessionObj.updatedAt || 0) : 0;
+                            let localTombstone = parseInt(KrishiStorage.getItem('krishi_local_session_tombstone') || '0');
 
                             if (cloudSession.isCleared) {
                                 // Tombstone found. If it was cleared AFTER our local save, we must wipe local data!
@@ -846,6 +847,14 @@ async function loadStaticQuestions() {
                             }
 
                             let cloudTime = cloudSession.updatedAt || 0;
+                            
+                            // Check for stale cloud session (finished offline, cloud never got the tombstone)
+                            if (localTombstone > cloudTime) {
+                                console.log('[Resumption] Stale cloud session detected (cleared locally offline). Syncing tombstone and aborting.');
+                                clearPracticeProgress(); 
+                                return;
+                            }
+
                             if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {
                                 console.log('[Resumption] Resolving to cloud active session progress.');
                                 triggerPrompt(cloudSession, true);
@@ -15454,6 +15463,7 @@ function savePracticeProgress() {
 // २. सुरक्षित राखिएको अधुरो अभ्यासलाई हटाउने फङ्सन
 function clearPracticeProgress() {
     try {
+        KrishiStorage.setItem('krishi_local_session_tombstone', Date.now());
         KrishiStorage.removeItem('krishi_saved_practice');
         
         const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;

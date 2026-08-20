@@ -1,21 +1,33 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /sync_keys/{key} {
-      allow read, write: if true;
-      
+
+    // ─── User Data: Only authenticated owner can access ───────────────────────
+    // All user progress, bookmarks, mistakes, stats, sessions, backups, handoff
+    // are stored under users/{userId}/...
+    // A user can ONLY read/write their own data.
+    match /users/{userId} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId;
+
       match /{document=**} {
-        allow read, write, delete: if true;
+        allow read, write, delete: if request.auth != null
+                                   && request.auth.uid == userId;
       }
     }
+
+    // ─── Pairing Pins: Authenticated users only, for device pairing ───────────
+    // Pins are short-lived (15 minutes). Only authenticated users can create.
     match /sync_pins/{pin} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null;
     }
-    match /users/{userId} {
-      allow read, write: if true;
-      
+
+    // ─── Legacy sync_keys: Permanently denied ────────────────────────────────
+    // The old sync_keys collection is no longer used. Deny all access.
+    match /sync_keys/{key} {
+      allow read, write: if false;
       match /{document=**} {
-        allow read, write, delete: if true;
+        allow read, write, delete: if false;
       }
     }
   }

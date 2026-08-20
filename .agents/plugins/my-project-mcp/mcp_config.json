@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sqlite-mcp": {
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "database.sqlite"
+      ]
+    },
+    "memory-mcp": {
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    }
+  }
+}

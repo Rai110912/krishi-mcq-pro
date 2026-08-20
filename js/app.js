@@ -611,20 +611,9 @@ async function loadStaticQuestions() {
             }
         });
         
-        // Parse incoming Scan-to-Sync key from QR URL
-        try {
-            const urlParams = new URLSearchParams(window.location.search);
-            const incomingSyncKey = urlParams.get('sync_key');
-            if (incomingSyncKey && incomingSyncKey.startsWith('KRISHI-SYNC-')) {
-                KrishiStorage.setItem('krishi_sync_key', incomingSyncKey);
-                showToast('🔗 Synced device successfully via QR scan!');
-                initCloudSync();
-                // Clean URL parameters from the address bar to avoid re-sync notifications
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-        } catch(e) {
-            console.warn('[Sync URL Parser] Failed to parse query parameter:', e);
-        }
+        // Legacy: ?sync_key= URL parameter is no longer used.
+        // Users sync via Firebase Authentication (account-based) instead.
+        // Old QR codes with sync_key are gracefully ignored.
         
         // Asynchronously load custom questions from IndexedDB (Zero-Risk Legacy Migrator)
         try {
@@ -726,7 +715,8 @@ async function loadStaticQuestions() {
         if (window.resumePromptShown) return;
 
         let localSaved = KrishiStorage.getItem('krishi_saved_practice');
-        const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
+        const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
+        const key = uid; // alias for condition check below
 
         function triggerPrompt(session, isCloud = false) {
             if (window.resumePromptShown) return;
@@ -818,7 +808,7 @@ async function loadStaticQuestions() {
 
             if (firebaseApp) {
                 const firestore = firebase.firestore(firebaseApp);
-                firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').get()
+                firestore.collection('users').doc(uid).collection('active_session').doc('progress').get()
                     .then(doc => {
                         if (doc.exists) {
                             let cloudSession = doc.data();
@@ -1550,8 +1540,33 @@ function loadData(){
     window.closeSyncConflictModal = closeSyncConflictModal;
     window.resolveConflict = resolveConflict;
 
+    // ─── Cloud Identity: Canonical Firebase UID ───────────────────────────────
+    // getCloudUID() is the single source of truth for cloud identity.
+    // Unauthenticated users return null → cloud sync disabled safely.
+    function getCloudUID() {
+        if (currentAuthUser && currentAuthUser.uid) return currentAuthUser.uid;
+        if (window.firebase && firebase.auth) {
+            try {
+                const authInst = firebase.auth(getSafeFirebaseApp());
+                if (authInst && authInst.currentUser) return authInst.currentUser.uid;
+            } catch(e) {}
+        }
+        return null;
+    }
+
+    // getSyncKey() — Legacy bridge. Returns UID-prefixed key when logged in,
+    // empty string otherwise (safely disables sync without crashing old callers).
     function getSyncKey() {
-        return KrishiStorage.getItem('krishi_sync_key') || '';
+        const uid = getCloudUID();
+        return uid ? ('KRISHI-UID-' + uid) : '';
+    }
+
+    // getCloudDocRef() — Returns the canonical Firestore document reference
+    // for the current authenticated user. Returns null if not authenticated.
+    function getCloudDocRef(firestore) {
+        const uid = getCloudUID();
+        if (!uid || !firestore) return null;
+        return firestore.collection('users').doc(uid);
     }
 
     function generateNewAutoSyncKey() {
@@ -1997,15 +2012,11 @@ function loadData(){
                 if (user && navigator.onLine && firebaseApp) {
                     try {
                         const firestore = firebase.firestore(firebaseApp);
+                        // UID is now the canonical cloud identity — no synthetic sync key needed
                         const userDocRef = firestore.collection('users').doc(user.uid);
-                        
-                        // Enforce UID-based sync key for uniquely linking activity data to this user
-                        const activeKey = 'KRISHI-UID-' + user.uid;
-                        KrishiStorage.setItem('krishi_sync_key', activeKey);
-                        
                         await userDocRef.set({
                             email: user.email || user.displayName || 'Authorized User',
-                            syncKey: activeKey,
+                            uid: user.uid,
                             updatedAt: Date.now()
                         }, { merge: true });
                         
@@ -2239,12 +2250,7 @@ function loadData(){
             if (!confirm('Logging out will clear your local offline study data from this device to protect your privacy. Are you sure you want to log out?')) return;
             
             showToast('⏳ Logging out & clearing local data...');
-            KrishiStorage.setItem('krishi_one_tap_disabled', 'true'); // Suppress One Tap loop
             KrishiStorage.removeItem('krishi_sync_credentials_authorized');
-            const syncKey = KrishiStorage.getItem('krishi_sync_key');
-            if (syncKey && syncKey.startsWith('KRISHI-UID-')) {
-                KrishiStorage.removeItem('krishi_sync_key');
-            }
             
             // Wipe user-specific study data to prevent Data Bleed for the next user (V2 Complete Wipe)
             const keysToWipe = [
@@ -2456,9 +2462,10 @@ function loadData(){
     }
 
     async function initCloudSync() {
-        const key = getSyncKey();
+        // Use canonical UID-based identity; getSyncKey() returns '' when logged out
+        const uid = getCloudUID();
         updateSyncUI();
-        if (!key) return;
+        if (!uid) return;
 
         try {
             setSyncStatus('Syncing...');
@@ -2484,7 +2491,7 @@ function loadData(){
             const platform = (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : (window.Capacitor.getPlatform() === 'ios' ? 'iOS App' : 'Web PWA')) : 'Web PWA';
             const deviceName = /Android/i.test(navigator.userAgent) ? 'Android Device' : (/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'iOS Device' : 'Desktop Browser');
             
-            const sessionRef = firestore.collection('sync_keys').doc(key).collection('sessions').doc(sessionId);
+            const sessionRef = firestore.collection('users').doc(uid).collection('sessions').doc(sessionId);
             const updateSessionDoc = () => {
                 const customName = KrishiStorage.getItem('krishi_custom_device_name');
                 const sessionPayload = {
@@ -2549,7 +2556,7 @@ function loadData(){
             // Define global disconnect callback for the UI button
             window.remotelyDisconnectDevice = function(targetSessionId) {
                 if (confirm('Are you sure you want to disconnect this device remotely?')) {
-                    firestore.collection('sync_keys').doc(key).collection('sessions').doc(targetSessionId).set({
+                    firestore.collection('users').doc(uid).collection('sessions').doc(targetSessionId).set({
                         disconnect: true
                     }, { merge: true }).then(() => {
                         showToast('✉️ Sent disconnect request to device...');
@@ -2563,7 +2570,7 @@ function loadData(){
             // iOS Safari Foreground Synchronization Fallback
             if (window.safariPeriodicSyncInterval) clearInterval(window.safariPeriodicSyncInterval);
             window.safariPeriodicSyncInterval = setInterval(() => {
-                if (navigator.onLine && !syncInProgress && getSyncKey()) {
+                if (navigator.onLine && !syncInProgress && getCloudUID()) {
                     console.log('[iOS Sync Fallback] Executing periodic study progress foreground synchronization...');
                     performCloudSync();
                 }
@@ -2573,7 +2580,7 @@ function loadData(){
             if (window.presenceListenerUnsubscribe) {
                 window.presenceListenerUnsubscribe();
             }
-            window.presenceListenerUnsubscribe = firestore.collection('sync_keys').doc(key).collection('sessions')
+            window.presenceListenerUnsubscribe = firestore.collection('users').doc(uid).collection('sessions')
                 .onSnapshot(snapshot => {
                     const listContainer = document.getElementById('sync-connected-devices-list');
                     if (!listContainer) return;
@@ -2684,10 +2691,10 @@ function loadData(){
             }
 
             // Listen for cross-device quiz handoff events
-            listenForRemoteHandoff(key, firestore);
+            listenForRemoteHandoff(uid, firestore);
 
             // Real-time snapshot listener
-            window.syncListenerUnsubscribe = firestore.collection('sync_keys').doc(key)
+            window.syncListenerUnsubscribe = firestore.collection('users').doc(uid)
                 .onSnapshot(async doc => {
                     if (doc.exists) {
                         const rawData = doc.data();
@@ -2720,7 +2727,7 @@ function loadData(){
                             const now = firebase.firestore.FieldValue.serverTimestamp();
                             mergedPayload.updatedAt = Date.now();
                             KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
-                            firestore.collection('sync_keys').doc(key).set({ ...mergedPayload, updatedAt: now }, { merge: true })
+                            firestore.collection('users').doc(uid).set({ ...mergedPayload, updatedAt: now }, { merge: true })
                                 .then(() => console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud'))
                                 .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
                         } else {
@@ -2835,13 +2842,12 @@ function loadData(){
                 return;
             }
             
+            // PIN pairing resolved: trigger full Firebase login sync.
+            // The user should now be authenticated via Firebase Auth;
+            // getCloudUID() will return their UID automatically.
             syncCredentialsAuthorized = true;
             KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
-            KrishiStorage.setItem('krishi_sync_key', targetKey);
-            
-            const input = document.getElementById('cloud-sync-key-input');
-            if (input) input.value = targetKey;
-            
+
             showToast('✅ Device Linked with PIN! Merging account data...');
             await initCloudSync();
             if (typeof syncCloudNow === 'function') await syncCloudNow(false);
@@ -2855,11 +2861,11 @@ function loadData(){
     }
     window.pairWithPin = pairWithPin;
 
-    function listenForRemoteHandoff(key, firestore) {
+    function listenForRemoteHandoff(uid, firestore) {
         if (window.handoffListenerUnsubscribe) {
             window.handoffListenerUnsubscribe();
         }
-        window.handoffListenerUnsubscribe = firestore.collection('sync_keys').doc(key).collection('handoff').doc('current')
+        window.handoffListenerUnsubscribe = firestore.collection('users').doc(uid).collection('handoff').doc('current')
             .onSnapshot(doc => {
                 if (!doc || !doc.exists) return;
                 const data = doc.data();
@@ -2892,8 +2898,8 @@ function loadData(){
 
     function broadcastQuizHandoff(quizState) {
         quizState = quizState || {};
-        const key = getSyncKey();
-        if (!key || !firebaseApp) return;
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return;
         try {
             const firestore = firebase.firestore(firebaseApp);
             const payload = {
@@ -2905,7 +2911,7 @@ function loadData(){
                 updatedAt: Date.now(),
                 active: true
             };
-            firestore.collection('sync_keys').doc(key).collection('handoff').doc('current').set(payload, { merge: true })
+            firestore.collection('users').doc(uid).collection('handoff').doc('current').set(payload, { merge: true })
                 .catch(e => console.warn('[Handoff] Broadcast failed:', e));
         } catch(e){}
     }
@@ -2920,14 +2926,14 @@ function loadData(){
     }
 
     async function performMidnightVaultBackup(dateStr) {
-        const key = getSyncKey();
-        if (!key || !firebaseApp) return;
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return;
         try {
             const firestore = firebase.firestore(firebaseApp);
             const snapshot = collectAllAppData();
             snapshot.vaultDate = dateStr;
             snapshot.vaultTimestamp = Date.now();
-            await firestore.collection('sync_keys').doc(key).collection('backups').doc(dateStr).set(snapshot, { merge: true });
+            await firestore.collection('users').doc(uid).collection('backups').doc(dateStr).set(snapshot, { merge: true });
             KrishiStorage.setItem('krishi_last_vault_date', dateStr);
             console.log('[Midnight Vault] Cloud backup snapshot created for:', dateStr);
         } catch(e) {
@@ -2949,17 +2955,10 @@ function loadData(){
 
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();
-        if (!inputKey || (!inputKey.startsWith('KRISHI-SYNC-') && !inputKey.startsWith('KRISHI-UID-'))) {
-            showToast('⚠️ Please enter a valid Cloud Sync Key!');
-            return;
-        }
-
-        syncCredentialsAuthorized = true;
-        KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
-        KrishiStorage.setItem('krishi_sync_key', inputKey);
-        showToast('🔄 Initializing real-time Cloud Sync...');
-        await initCloudSync();
-        if (typeof syncCloudNow === 'function') await syncCloudNow(true);
+        // Legacy manual key input: this function is replaced by Firebase Authentication.
+        // Users should log in via Google/Email to get automatic sync.
+        showToast('⚠️ Manual Sync Key is no longer supported. Please login with your account for automatic sync!');
+        return;
     }
 
     function disableCloudSync() {
@@ -2972,10 +2971,10 @@ function loadData(){
     function disableCloudSyncSilently() {
         // Delete presence registration before clean up
         try {
-            const key = getSyncKey();
-            if (key && firebaseApp) {
+            const uid = getCloudUID();
+            if (uid && firebaseApp) {
                 const firestore = firebase.firestore(firebaseApp);
-                firestore.collection('sync_keys').doc(key).collection('sessions').doc(currentSessionId).delete()
+                firestore.collection('users').doc(uid).collection('sessions').doc(currentSessionId).delete()
                     .catch(e => console.warn('[Presence] Cleanup failed:', e));
             }
         } catch(e) {
@@ -3007,7 +3006,6 @@ function loadData(){
             try { syncListenerRef.off(); } catch(e){}
             syncListenerRef = null;
         }
-        KrishiStorage.removeItem('krishi_sync_key');
         KrishiStorage.removeItem('krishi_last_sync_time');
         KrishiStorage.removeItem('krishi_sync_credentials_authorized');
         syncCredentialsAuthorized = false;
@@ -3049,8 +3047,8 @@ function loadData(){
     }
 
     async function syncCloudNow(silent = false) {
-    const key = getSyncKey();
-    if (!key) return;
+    const uid = getCloudUID();
+    if (!uid) return;
 
     const spinner = document.getElementById('sync-spinner');
     const btn = document.getElementById('btn-sync-now');
@@ -3067,7 +3065,7 @@ function loadData(){
         }
         if (firebaseApp) {
             const firestore = firebase.firestore(firebaseApp);
-            const docRef = firestore.collection('sync_keys').doc(key);
+            const docRef = firestore.collection('users').doc(uid);
             const doc = await docRef.get();
             
             if (doc.exists) {
@@ -3130,12 +3128,12 @@ function loadData(){
 
     function writeFCMTokenToFirebaseSession(token) {
         if (!token) return;
-        const key = getSyncKey();
-        if (!key || !firebaseApp) return;
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return;
 
         try {
             const firestore = firebase.firestore(firebaseApp);
-            const sessionRef = firestore.collection('sync_keys').doc(key)
+            const sessionRef = firestore.collection('users').doc(uid)
                 .collection('sessions').doc(currentSessionId);
             
             sessionRef.set({
@@ -3156,7 +3154,7 @@ function loadData(){
     }
 
     window.addEventListener('online', () => {
-        if (KrishiStorage.getItem('krishi_sync_key')) {
+        if (getCloudUID()) {
             initCloudSync();
         }
     });
@@ -13963,8 +13961,8 @@ ${text}`;
     }
 
     async function performCloudSync() {
-        const key = getSyncKey();
-        if (!key) return;
+        const uid = getCloudUID();
+        if (!uid) return;
 
         if (!navigator.onLine) {
             setSyncStatus('Offline');
@@ -13976,7 +13974,7 @@ ${text}`;
         try {
             await loadFirebaseSDKs();
             const firestore = firebase.firestore(firebaseApp);
-            const docRef = firestore.collection('sync_keys').doc(key);
+            const docRef = firestore.collection('users').doc(uid);
             
             const localDataPayload = collectAllAppData();
             const localUpdatedAt = parseInt(KrishiStorage.getItem('krishi_last_updated_at')) || 0;
@@ -15242,14 +15240,14 @@ function savePracticeProgress() {
                 }
             }
 
-            // Sync to Firestore if online and cloud sync key is active
-            const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
-            if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
+            // Sync to Firestore if online and authenticated
+            const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
+            if (uid && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
                 let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
                 let firebaseApp = existingApp || firebase.app("KrishiApp");
                 if (firebaseApp) {
                     const firestore = firebase.firestore(firebaseApp);
-                    firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').set({
+                    firestore.collection('users').doc(uid).collection('active_session').doc('progress').set({
                         questions: state.questions,
                         currentIndex: state.currentIndex,
                         score: state.score,
@@ -15297,7 +15295,7 @@ function savePracticeProgress() {
                         let txt = indicator.querySelector('.indicator-text');
                         if (dot && txt) {
                             dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
-                            txt.textContent = key ? 'Offline' : 'Local Only';
+                            txt.textContent = uid ? 'Offline' : 'Local Only';
                             txt.style.color = '';
                         }
                     }
@@ -15314,13 +15312,13 @@ function clearPracticeProgress() {
     try {
         KrishiStorage.removeItem('krishi_saved_practice');
         
-        const key = (typeof getSyncKey === 'function') ? getSyncKey() : null;
-        if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
+        const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
+        if (uid && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
             let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
             let firebaseApp = existingApp || firebase.app("KrishiApp");
             if (firebaseApp) {
                 const firestore = firebase.firestore(firebaseApp);
-                firestore.collection('sync_keys').doc(key).collection('active_session').doc('progress').delete()
+                firestore.collection('users').doc(uid).collection('active_session').doc('progress').delete()
                     .then(() => console.log('[Cloud Sync] Active practice session cleared.'))
                     .catch(err => console.warn('[Cloud Sync] Active practice session clear failed:', err));
             }

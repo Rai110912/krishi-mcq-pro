@@ -134,8 +134,8 @@ function initMobileQROverlay() {
             .then(data => {
                 if (!data || !data.ip) return;
                 const ip = data.ip;
-                const syncKey = localStorage.getItem('krishi_sync_key');
-                const mobileUrl = syncKey ? `http://${ip}:8080/index.html?sync_key=${syncKey}` : `http://${ip}:8080/index.html`;
+                // Login-based sync: no sync_key needed in URL — user logs in with their account
+                const mobileUrl = `http://${ip}:8080/index.html`;
                 const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mobileUrl)}`;
 
                 // Create the floating button

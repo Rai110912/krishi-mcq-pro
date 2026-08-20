@@ -15372,6 +15372,12 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
 function savePracticeProgress() {
     try {
         if (state && state.questions && state.questions.length > 0 && !state.answered) {
+            // Abort saving if it's a completely fresh, untouched session (0% progress)
+            // This prevents "ghost popups" from appearing if the user accidentally clicks a subject and leaves immediately.
+            if (state.currentIndex === 0 && state.score === 0 && (!state.sessionResults || state.sessionResults.length === 0)) {
+                return;
+            }
+
             const progressData = {
                 questions: state.questions,
                 currentIndex: state.currentIndex,

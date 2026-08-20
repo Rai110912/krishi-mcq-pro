@@ -783,7 +783,7 @@ async function loadStaticQuestions() {
                     if (session.timeSpentArray) state.timeSpentArray = session.timeSpentArray;
                     if (session.totalTimeSpent) state.totalTimeSpent = session.totalTimeSpent;
                     renderMCQ();
-                    window.resumePromptShown = false;
+                    // Fix: Do not reset window.resumePromptShown here so the popup doesn't reappear on Firebase sync
                 },
                 function() {
                     clearPracticeProgress();
@@ -14785,6 +14785,9 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
             state.perQuestionTimerInterval = null;
         }
 
+        if (pageId !== 'page-practice') {
+            window.resumePromptShown = false; // Reset so prompt can show again on next visit
+        }
         if (typeof window.navigate === 'function') {
             window.navigate(pageId);
         }

@@ -714,12 +714,17 @@ async function loadStaticQuestions() {
         }
         if (window.resumePromptShown) return;
 
+        let snapshotSessionId = state ? state.sessionId : undefined;
         let localSaved = KrishiStorage.getItem('krishi_saved_practice');
         const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
         const key = uid; // alias for condition check below
 
         function triggerPrompt(session, isCloud = false) {
             if (window.resumePromptShown) return;
+            if (state && state.sessionId !== snapshotSessionId) {
+                console.log('[Resumption] Prompt aborted because user started a new session while cloud fetch was pending.');
+                return;
+            }
             window.resumePromptShown = true;
 
             let total = session.questions ? session.questions.length : 0;
@@ -812,10 +817,24 @@ async function loadStaticQuestions() {
                     .then(doc => {
                         if (doc.exists) {
                             let cloudSession = doc.data();
-                            let cloudTime = cloudSession.updatedAt || 0;
                             let localSessionObj = safeParseSession(localSaved);
                             let localTime = localSessionObj ? (localSessionObj.updatedAt || 0) : 0;
 
+                            if (cloudSession.isCleared) {
+                                // Tombstone found. If it was cleared AFTER our local save, we must wipe local data!
+                                let clearedTime = cloudSession.clearedAt || 0;
+                                if (clearedTime > localTime) {
+                                    console.log('[Resumption] Cloud session was cleared on another device. Wiping outdated local session.');
+                                    try { KrishiStorage.removeItem('krishi_saved_practice'); } catch(e){}
+                                    return; // Abort prompt
+                                } else if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                                    // Extremely rare: user played offline AFTER another device cleared it.
+                                    triggerPrompt(localSessionObj, false);
+                                }
+                                return;
+                            }
+
+                            let cloudTime = cloudSession.updatedAt || 0;
                             if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {
                                 console.log('[Resumption] Resolving to cloud active session progress.');
                                 triggerPrompt(cloudSession, true);
@@ -4528,6 +4547,7 @@ function loadData(){
         state.sessionResults = [];
         state.isMock = isMock;
         state.totalQuestions = questions.length;
+        state.sessionId = Date.now(); // Track active session to prevent race conditions
         state.timerSec = timerSec;
         state.hybridHearts = 5; // Default 5 hearts for hybrid attempts
         
@@ -15408,9 +15428,13 @@ function clearPracticeProgress() {
             let firebaseApp = existingApp || firebase.app("KrishiApp");
             if (firebaseApp) {
                 const firestore = firebase.firestore(firebaseApp);
-                firestore.collection('users').doc(uid).collection('active_session').doc('progress').delete()
-                    .then(() => console.log('[Cloud Sync] Active practice session cleared.'))
-                    .catch(err => console.warn('[Cloud Sync] Active practice session clear failed:', err));
+                // Instead of deleting, set a tombstone so other devices know it was cleared
+                firestore.collection('users').doc(uid).collection('active_session').doc('progress').set({
+                    isCleared: true,
+                    clearedAt: Date.now()
+                })
+                .then(() => console.log('[Cloud Sync] Active practice session cleared (Tombstone set).'))
+                .catch(err => console.warn('[Cloud Sync] Active practice session clear failed:', err));
             }
         }
     } catch (e) {

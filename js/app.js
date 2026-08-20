@@ -1260,6 +1260,81 @@ function loadData(){
     // ==================== CLOUD SYNCHRONIZATION ENGINE ====================
     let firebaseApp = null;
     let firebaseDb = null;
+
+    // ── Dirty Module Tracker ─────────────────────────────────────────────────
+    // Set by applyAllAppData() when sync data changes a module.
+    // Consumed by krishiScheduleSyncRender() which renders only active+dirty pages.
+    // navigate() always renders the target page fresh, so stale risk is zero.
+    const _krishiDirty = {
+        home:      false,
+        practice:  false,
+        profiles:  false,
+        planner:   false,
+        questions: false,
+        appearance: false
+    };
+    // RAF handle — prevents scheduling two frames in the same sync cycle
+    let _krishiSyncRafHandle = null;
+
+    /**
+     * krishiScheduleSyncRender — called once per onSnapshot cycle.
+     * Schedules a single requestAnimationFrame that renders ONLY the
+     * currently visible page, leaving all other dirty modules for the
+     * next navigate() call (which always re-renders anyway).
+     */
+    function krishiScheduleSyncRender() {
+        if (_krishiSyncRafHandle) return; // already scheduled this frame
+        _krishiSyncRafHandle = requestAnimationFrame(function () {
+            _krishiSyncRafHandle = null;
+            try {
+                // Apply appearance (CSS vars / body class) only when it changed.
+                // This can trigger a layout, so we isolate it to the RAF frame.
+                if (_krishiDirty.appearance) {
+                    _krishiDirty.appearance = false;
+                    if (typeof applyAppearanceSettings === 'function') applyAppearanceSettings();
+                    if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
+                        applyCustomAppearanceAndLanguageSettings();
+                    }
+                }
+
+                // Lightweight ribbon — always safe, uses targeted textContent patches
+                if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
+
+                // Active page detection
+                const activePanels = document.getElementById('practice-active-state-panels');
+                const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
+                const activePage = document.querySelector('.page.active');
+                const activeId = activePage ? activePage.id : '';
+
+                // User is mid-quiz — do NOT rebuild any page DOM
+                if (isUserInActiveQuiz) {
+                    console.log('[SyncRender] Skipped full render: user in active quiz.');
+                    return;
+                }
+
+                // Render only the currently visible page if it is dirty
+                if (activeId === 'page-home' && _krishiDirty.home) {
+                    _krishiDirty.home = false;
+                    if (typeof updateHomePage === 'function') updateHomePage();
+                } else if (activeId === 'page-practice' && _krishiDirty.practice) {
+                    _krishiDirty.practice = false;
+                    if (typeof updatePracticePage === 'function') updatePracticePage();
+                } else if (activeId === 'page-study-planner' && _krishiDirty.planner) {
+                    _krishiDirty.planner = false;
+                    if (typeof refreshPlannerPage === 'function') refreshPlannerPage();
+                } else if (activeId === 'page-settings' && _krishiDirty.profiles) {
+                    _krishiDirty.profiles = false;
+                    if (typeof renderProfilesInventory === 'function') renderProfilesInventory();
+                } else if ((activeId === 'page-mcq-creator') && _krishiDirty.questions) {
+                    _krishiDirty.questions = false;
+                    if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList();
+                }
+                // All other dirty modules remain dirty; navigate() clears them on visit.
+            } catch (e) {
+                console.warn('[SyncRender] Non-fatal render error during sync RAF:', e);
+            }
+        });
+    }
     let syncListenerRef = null;
     let syncInProgress = false;
     let cachedCloudData = null;
@@ -2741,21 +2816,12 @@ function loadData(){
                         scheduleMidnightCloudVault();
                         if (typeof updateSyncUI === 'function') updateSyncUI();
 
-                        const activePanels = document.getElementById('practice-active-state-panels');
-                        const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
-
-                        if (!isUserInActiveQuiz) {
-                            if (typeof updateHomePage === 'function') updateHomePage();
-                            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
-                            if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList(true);
-                            if (typeof updatePracticePage === 'function') updatePracticePage();
-                            if (typeof renderProfilesInventory === 'function') renderProfilesInventory();
-                            if (typeof updateSizingDiagnosticsInSetup === 'function') {
-                                try { updateSizingDiagnosticsInSetup(); } catch(e){}
-                            }
-                        } else {
-                            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
-                        }
+                        // Single batched RAF render — replaces the previous multi-render storm.
+                        // applyAllAppData() above has already set dirty flags.
+                        // krishiScheduleSyncRender() will render only the active+dirty page
+                        // in the next animation frame, keeping the main thread free for
+                        // the toast animation and any ongoing user interaction.
+                        if (typeof krishiScheduleSyncRender === 'function') krishiScheduleSyncRender();
 
                         syncInProgress = false;
                         window.dispatchEvent(new Event('appDataSynced'));
@@ -13681,20 +13747,41 @@ ${text}`;
             }
         }
         
-        // Reload all parameters in active memory
+        // Reload state into active memory (no DOM involvement)
         loadData();
         loadTimingData();
-        applyAppearanceSettings();
-        applyCustomAppearanceAndLanguageSettings();
-        initPracticeSoundSettings();
-        
-        // Refresh UIs
-        updateHomePage();
-        updatePracticePage();
-        if (typeof updateSizingDiagnosticsInSetup === 'function') {
-            try { updateSizingDiagnosticsInSetup(); } catch(e){}
+        if (typeof initPracticeSoundSettings === 'function') initPracticeSoundSettings();
+
+        // ── Mark dirty modules based on what actually changed ──────────────
+        // applyAllAppData() no longer triggers UI renders directly.
+        // krishiScheduleSyncRender() (called by onSnapshot after this) will
+        // render only the currently visible page in a single RAF frame.
+        // navigate() always re-renders the target page, so inactive pages
+        // will never show stale data when the user visits them.
+        if (syncSelectiveBookmarks && (Array.isArray(data.bookmarked) || data.bookmarkedLog)) {
+            _krishiDirty.home     = true;
+            _krishiDirty.practice = true;
         }
-        if (typeof refreshPlannerPage === 'function') refreshPlannerPage();
+        if (syncSelectiveErrors && (Array.isArray(data.wrong) || data.wrongLog)) {
+            _krishiDirty.home     = true;
+            _krishiDirty.practice = true;
+        }
+        if (syncSelectiveCustom && Array.isArray(data.customQuestions)) {
+            _krishiDirty.questions = true;
+            _krishiDirty.practice  = true;
+        }
+        if (syncSelectiveLogs) {
+            if (data.streak)      { _krishiDirty.home = true; _krishiDirty.planner = true; }
+            if (data.stats)       { _krishiDirty.home = true; _krishiDirty.practice = true; }
+            if (data.achievements){ _krishiDirty.home = true; }
+            if (data.progression) { _krishiDirty.home = true; }
+            if (data.examProfiles){ _krishiDirty.profiles = true; }
+            if (data.plannerSettings) { _krishiDirty.planner = true; }
+            if (data.appearanceSettings || data.customAppearanceSettings) {
+                _krishiDirty.appearance = true;
+                _krishiDirty.home       = true;
+            }
+        }
     }
 
     function mergeCloudAndLocalData(cloud) {

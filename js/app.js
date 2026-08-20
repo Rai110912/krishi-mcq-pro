@@ -1334,6 +1334,10 @@ function loadData(){
                 // Render only the currently visible page if it is dirty
                 if (activeId === 'page-home' && _krishiDirty.home) {
                     _krishiDirty.home = false;
+                    // Suppress .slide-up-card entrance animation during sync renders
+                    // to prevent the opacity:0 → 1 flash on full innerHTML rebuild.
+                    const _hwc = document.getElementById('home-widgets-container');
+                    if (_hwc) _hwc.classList.add('krishi-sync-update');
                     if (typeof updateHomePage === 'function') updateHomePage();
                 } else if (activeId === 'page-practice' && _krishiDirty.practice) {
                     _krishiDirty.practice = false;
@@ -3497,7 +3501,12 @@ function loadData(){
             }
         }
 
-        if(pageId==='page-home') updateHomePage();
+        if(pageId==='page-home') {
+            // Remove sync-render animation suppression so entrance animations play on navigation
+            const _hwc = document.getElementById('home-widgets-container');
+            if (_hwc) _hwc.classList.remove('krishi-sync-update');
+            updateHomePage();
+        }
         if(pageId==='page-practice') updatePracticePage();
         if(pageId==='page-analytics') updateEnhancedAnalyticsPage();
         if(pageId==='page-wrong-questions') renderWrongPage();
@@ -11132,8 +11141,11 @@ document.querySelectorAll('button').forEach(btn => {
                 let diffDays = Math.ceil((targetDate - new Date()) / (1000 * 60 * 60 * 24));
                 if (isNaN(diffDays)) diffDays = 0;
                 if (diffDays > 0) {
-                    hprofileCountdown.innerHTML = `📅 <span id="anim-countdownVal">${diffDays}</span> days remaining`;
-                    animateNumericText(document.getElementById('anim-countdownVal'), diffDays);
+                    let newHtml = `📅 <span id="anim-countdownVal">${diffDays}</span> days remaining`;
+                    if (hprofileCountdown.innerHTML !== newHtml) {
+                        hprofileCountdown.innerHTML = newHtml;
+                        animateNumericText(document.getElementById('anim-countdownVal'), diffDays);
+                    }
                 } else {
                     hprofileCountdown.textContent = `📅 Exam date passed / today`;
                 }
@@ -11142,8 +11154,11 @@ document.querySelectorAll('button').forEach(btn => {
             let hprofileTargets = document.getElementById('hprofile-targets');
             if (hprofileTargets) {
                 let dailyT = sPlanner.dailyTarget || 50;
-                hprofileTargets.innerHTML = `🎯 <span id="anim-dailyTargetVal">${dailyT}</span> Daily`;
-                animateNumericText(document.getElementById('anim-dailyTargetVal'), dailyT);
+                let newHtml = `🎯 <span id="anim-dailyTargetVal">${dailyT}</span> Daily`;
+                if (hprofileTargets.innerHTML !== newHtml) {
+                    hprofileTargets.innerHTML = newHtml;
+                    animateNumericText(document.getElementById('anim-dailyTargetVal'), dailyT);
+                }
             }
 
             let greetingEl = document.getElementById('home-greeting');
@@ -11171,7 +11186,7 @@ document.querySelectorAll('button').forEach(btn => {
                 sidebarStreak.textContent = `${typeof getStreakCount === 'function' ? getStreakCount() : 0} Day Streak`;
             }
 
-            container.innerHTML = '';
+            let htmlStr = '';
 
             if (settings.compact) {
                 container.classList.add('space-y-2');
@@ -11233,12 +11248,13 @@ document.querySelectorAll('button').forEach(btn => {
                 }
 
                 if (widgetHTML) {
-                    let wDiv = document.createElement('div');
-                    wDiv.className = `slide-up-card ${settings.compact ? 'p-0.5' : ''}`;
-                    wDiv.innerHTML = widgetHTML;
-                    container.appendChild(wDiv);
+                    htmlStr += `<div class="slide-up-card ${settings.compact ? 'p-0.5' : ''}">${widgetHTML}</div>`;
                 }
             });
+            
+            if (container.innerHTML !== htmlStr) {
+                container.innerHTML = htmlStr;
+            }
 
             // Trigger the premium streak count-up animation if the counter exists
             let elStreakCounters = document.querySelectorAll('.streak-counter-value');
@@ -11364,13 +11380,14 @@ document.querySelectorAll('button').forEach(btn => {
             }
 
             if (historyList.length === 0) {
-                historyContainer.innerHTML = `
+                let newHtml = `
                     <div class="col-span-full py-6 text-center text-slate-400 dark:text-slate-600 italic text-[10px] font-mono select-none">
                         No recent practice runs yet. Start your first session!
                     </div>
                 `;
+            if (historyContainer.innerHTML !== newHtml) historyContainer.innerHTML = newHtml;
             } else {
-                historyContainer.innerHTML = historyList.slice(0, 5).map(item => `
+                let newHtml2 = historyList.slice(0, 5).map(item => `
                     <div class="p-3 rounded-lg border flex justify-between items-center text-[10px] transition-all" style="background:var(--card);border-color:var(--border);">
                         <div class="space-y-0.5">
                             <p class="font-extrabold text-slate-800 dark:text-slate-200">${item.mode}</p>
@@ -11383,6 +11400,7 @@ document.querySelectorAll('button').forEach(btn => {
                         </div>
                     </div>
                 `).join('');
+                if (historyContainer.innerHTML !== newHtml2) historyContainer.innerHTML = newHtml2;
             }
         }
     
@@ -13700,6 +13718,10 @@ ${text}`;
 
     function applyAllAppData(data) {
         if (!data) return;
+
+        // Capture current appearance settings before overwriting (for diff check below)
+        const _prevAppearanceJSON = KrishiStorage.getItem('krishi_appearance_settings') || '';
+        const _prevCustomAppearanceJSON = KrishiStorage.getItem('krishi_custom_appearance_settings') || '';
         
         let changed = false;
         if (syncSelectiveBookmarks && Array.isArray(data.bookmarked)) { localData.bookmarked = data.bookmarked; changed = true; }
@@ -13798,8 +13820,14 @@ ${text}`;
             if (data.examProfiles){ _krishiDirty.profiles = true; }
             if (data.plannerSettings) { _krishiDirty.planner = true; }
             if (data.appearanceSettings || data.customAppearanceSettings) {
-                _krishiDirty.appearance = true;
-                _krishiDirty.home       = true;
+                // Only mark appearance dirty if settings actually changed (prevents
+                // unnecessary CSS variable storm + full document style recalculation)
+                const _newAppearanceJSON = KrishiStorage.getItem('krishi_appearance_settings') || '';
+                const _newCustomAppearanceJSON = KrishiStorage.getItem('krishi_custom_appearance_settings') || '';
+                if (_prevAppearanceJSON !== _newAppearanceJSON || _prevCustomAppearanceJSON !== _newCustomAppearanceJSON) {
+                    _krishiDirty.appearance = true;
+                    _krishiDirty.home       = true;
+                }
             }
         }
     }
@@ -14134,15 +14162,11 @@ ${text}`;
                 if (typeof updateSyncUI === 'function') updateSyncUI();
                 syncInProgress = false;
                 
-                // Trigger UI Refresh Event & Update Home Page
-                const activePanels = document.getElementById('practice-active-state-panels');
-                const isUserInActiveQuiz = activePanels && activePanels.classList.contains('hidden');
-                if (!isUserInActiveQuiz) {
-                    if (typeof updateHomePage === 'function') updateHomePage();
-                    if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
-                    if (typeof updatePracticePage === 'function') updatePracticePage();
-                    if (typeof renderProfilesInventory === 'function') renderProfilesInventory();
-                }
+                // Delegate all page refreshes to the dirty-flag + RAF dispatcher.
+                // applyAllAppData() above has already set all _krishiDirty flags.
+                // krishiScheduleSyncRender() renders only the currently active+dirty page in
+                // the next animation frame, with the quiz-active guard handled internally.
+                if (typeof krishiScheduleSyncRender === 'function') krishiScheduleSyncRender();
                 window.dispatchEvent(new Event('appDataSynced'));
             } else {
                 const now = firebase.firestore.FieldValue.serverTimestamp();
@@ -15355,53 +15379,47 @@ function savePracticeProgress() {
                 }
             }
 
-            // Sync to Firestore if online and authenticated
+            // Sync to Firestore if online and authenticated (Debounced)
             const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
             if (uid && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
-                let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
-                let firebaseApp = existingApp || firebase.app("KrishiApp");
-                if (firebaseApp) {
-                    const firestore = firebase.firestore(firebaseApp);
-                    firestore.collection('users').doc(uid).collection('active_session').doc('progress').set({
-                        questions: state.questions,
-                        currentIndex: state.currentIndex,
-                        score: state.score,
-                        sessionResults: state.sessionResults,
-                        isMock: state.isMock,
-                        timerSec: state.timerSec,
-                        updatedAt: Date.now(),
-                        device: progressData.device
-                    }).then(() => {
-                        console.log('[Cloud Sync] Active practice session saved successfully.');
-                        if (indicator) {
-                            let dot = indicator.querySelector('span');
-                            let txt = indicator.querySelector('.indicator-text');
-                            if (dot && txt) {
-                                dot.className = 'w-1.5 h-1.5 rounded-full transition-colors duration-300';
-                                dot.classList.add('autosave-glow-active');
-                                txt.textContent = 'Autosaved';
-                                txt.style.color = '#10b981';
-                                setTimeout(() => {
-                                    if (txt.textContent === 'Autosaved') {
-                                        txt.textContent = 'Connected';
-                                        txt.style.color = '';
-                                    }
-                                }, 2000);
+                if (window.cloudSavePracticeTimeout) clearTimeout(window.cloudSavePracticeTimeout);
+                window.cloudSavePracticeTimeout = setTimeout(() => {
+                    let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
+                    let firebaseApp = existingApp || firebase.app("KrishiApp");
+                    if (firebaseApp) {
+                        const firestore = firebase.firestore(firebaseApp);
+                        firestore.collection('users').doc(uid).collection('active_session').doc('progress').set(progressData).then(() => {
+                            console.log('[Cloud Sync] Active practice session saved successfully (Debounced).');
+                            if (indicator) {
+                                let dot = indicator.querySelector('span');
+                                let txt = indicator.querySelector('.indicator-text');
+                                if (dot && txt) {
+                                    dot.className = 'w-1.5 h-1.5 rounded-full transition-colors duration-300';
+                                    dot.classList.add('autosave-glow-active');
+                                    txt.textContent = 'Autosaved';
+                                    txt.style.color = '#10b981';
+                                    setTimeout(() => {
+                                        if (txt.textContent === 'Autosaved') {
+                                            txt.textContent = 'Connected';
+                                            txt.style.color = '';
+                                        }
+                                    }, 2000);
+                                }
                             }
-                        }
-                    }).catch(err => {
-                        console.warn('[Cloud Sync] Active practice session save failed:', err);
-                        if (indicator) {
-                            let dot = indicator.querySelector('span');
-                            let txt = indicator.querySelector('.indicator-text');
-                            if (dot && txt) {
-                                dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
-                                txt.textContent = 'Local Only';
-                                txt.style.color = '';
+                        }).catch(err => {
+                            console.warn('[Cloud Sync] Active practice session save failed:', err);
+                            if (indicator) {
+                                let dot = indicator.querySelector('span');
+                                let txt = indicator.querySelector('.indicator-text');
+                                if (dot && txt) {
+                                    dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
+                                    txt.textContent = 'Local Only';
+                                    txt.style.color = '';
+                                }
                             }
-                        }
-                    });
-                }
+                        });
+                    }
+                }, 3000);
             } else {
                 // local only / offline HUD update
                 setTimeout(() => {

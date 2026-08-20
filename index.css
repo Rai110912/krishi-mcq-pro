@@ -403,6 +403,11 @@
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        /* Suppress entrance animations during sync-triggered renders to prevent
+           the visible opacity:0 flash when innerHTML rebuilds all widgets */
+        .krishi-sync-update .slide-up-card {
+            animation: none !important;
+        }
         .pulse-accent {
             animation: pulseAlert 2s infinite ease-in-out;
         }

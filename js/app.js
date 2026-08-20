@@ -850,9 +850,15 @@ async function loadStaticQuestions() {
                             
                             // Check for stale cloud session (finished offline, cloud never got the tombstone)
                             if (localTombstone > cloudTime) {
-                                console.log('[Resumption] Stale cloud session detected (cleared locally offline). Syncing tombstone and aborting.');
-                                clearPracticeProgress(); 
-                                return;
+                                console.log('[Resumption] Stale cloud session detected. Ignoring cloud data.');
+                                cloudTime = 0; // Invalidate cloud session
+                                cloudSession = {}; 
+                                
+                                // Only sync the tombstone if we haven't started a NEW local session since then
+                                if (!localSessionObj || !localSessionObj.questions || localSessionObj.questions.length === 0) {
+                                    clearPracticeProgress(); 
+                                    return;
+                                }
                             }
 
                             if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {

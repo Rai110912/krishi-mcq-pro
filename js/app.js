@@ -1956,6 +1956,7 @@ function loadData(){
                 badge.className = 'text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400';
             }
         }
+        updateProfileSyncUI();
         updateOfflineQueueBadge();
     }
 
@@ -2063,7 +2064,22 @@ function loadData(){
         return firebaseApp;
     }
 
-   async function initFirebaseAuth() {
+   // Concurrency guard: `firebaseAuthInitialized` is only set after two awaits, so two callers
+   // racing into init (boot + syncCloudNow + retry paths) could each register their own
+   // onAuthStateChanged observer. Caching the in-flight promise makes init genuinely once-only;
+   // it is cleared on failure so an offline boot can still retry later.
+   let firebaseAuthInitPromise = null;
+   function initFirebaseAuth() {
+        if (firebaseAuthInitialized) return Promise.resolve();
+        if (firebaseAuthInitPromise) return firebaseAuthInitPromise;
+        firebaseAuthInitPromise = _initFirebaseAuthOnce().catch(err => {
+            firebaseAuthInitPromise = null;
+            throw err;
+        });
+        return firebaseAuthInitPromise;
+   }
+
+   async function _initFirebaseAuthOnce() {
         if (firebaseAuthInitialized) return;
         try {
             await loadFirebaseSDKs();
@@ -2134,6 +2150,10 @@ function loadData(){
                 updateAuthUI();
                 
                 if (user && navigator.onLine && firebaseApp) {
+                    // A restored session fires this observer on every reload. Only a genuinely new
+                    // link (different uid than the one already recorded) should announce itself,
+                    // otherwise the user sees the same popup on every app start.
+                    const isNewLink = KrishiStorage.getItem('krishi_linked_uid') !== user.uid;
                     try {
                         const firestore = firebase.firestore(firebaseApp);
                         // UID is now the canonical cloud identity — no synthetic sync key needed
@@ -2143,8 +2163,9 @@ function loadData(){
                             uid: user.uid,
                             updatedAt: Date.now()
                         }, { merge: true });
-                        
-                        showToast('✅ Account Linked: Cloud Sync initialized successfully!');
+
+                        KrishiStorage.setItem('krishi_linked_uid', user.uid);
+                        if (isNewLink) showToast('✅ Account Linked: Cloud Sync initialized successfully!');
                         await initCloudSync();
                         if (typeof syncCloudNow === 'function') await syncCloudNow(true);
                     } catch (err) {
@@ -2169,6 +2190,8 @@ function loadData(){
             });
         } catch(e) {
             console.error("Firebase Auth loading failed:", e);
+            // Allow a later retry (e.g. once the device is back online) to re-run init
+            firebaseAuthInitPromise = null;
             showAuthStatus('Firebase Unavailable 🌐');
             updateAuthUI();
         }
@@ -2407,6 +2430,9 @@ function loadData(){
                 'krishi_elite_animations',
                 'krishi_haptic_enabled',
                 'krishi_username',
+                'krishi_profile_photo',
+                'krishi_profile_updated_at',
+                'krishi_linked_uid',
                 'krishi_custom_device_name',
                 'krishi_layout_backups',
                 'krishi_stats_baseline',
@@ -2503,6 +2529,7 @@ function loadData(){
                 userDisplayEl.innerText = currentAuthUser ? `Offline Mode (${userEmail})` : 'Offline Mode';
                 userDisplayEl.className = 'p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border text-[10px] font-bold text-center text-amber-800 dark:text-amber-400 border-amber-100/30';
             }
+            updateProfileSyncUI();
             return;
         }
 
@@ -2524,7 +2551,324 @@ function loadData(){
             if (loginFormEl) loginFormEl.classList.remove('hidden');
             if (loggedInControlsEl) loggedInControlsEl.classList.add('hidden');
         }
+        updateProfileSyncUI();
     }
+
+    // ==================== STUDENT PROFILE (identity + account hub) ====================
+    // Identity reuses the existing `krishi_username` key — no second user/account model.
+    // This module only RENDERS state that updateAuthUI() / updateSyncUI() already own and
+    // is invoked from them, so it registers no auth listener, sync manager or timer of its own.
+    const PROFILE_NAME_KEY = 'krishi_username';
+    const PROFILE_PHOTO_KEY = 'krishi_profile_photo';
+    const PROFILE_STAMP_KEY = 'krishi_profile_updated_at';
+    const PROFILE_PHOTO_PX = 128;
+
+    function getProfileName() {
+        const stored = (KrishiStorage.getItem(PROFILE_NAME_KEY) || '').trim();
+        return stored || 'विद्यार्थी';
+    }
+
+    function getProfilePhoto() {
+        return KrishiStorage.getItem(PROFILE_PHOTO_KEY) || '';
+    }
+
+    // Single greeting builder shared by Home, the sidebar and Profile (no duplicated logic)
+    function getGreetingText(username) {
+        const appearance = getAppearanceSettings();
+        if (appearance.greetingLanguage === 'nepali') return `नमस्ते, ${username}`;
+        if (appearance.greetingLanguage === 'sanskrit') return `शुभमस्तु, ${username}`;
+        return `Welcome back, ${username}`;
+    }
+
+    function stampProfileUpdated() {
+        KrishiStorage.setItem(PROFILE_STAMP_KEY, Date.now());
+    }
+
+    function paintAvatarEl(el, src, initial) {
+        if (!el) return;
+        if (src) {
+            // Repaint only when the source actually changed — prevents avatar flicker on re-render
+            if (el.getAttribute('data-avatar-src') === src) return;
+            el.setAttribute('data-avatar-src', src);
+            el.innerHTML = '';
+            const img = document.createElement('img');
+            img.className = 'w-full h-full object-cover';
+            img.alt = '';
+            img.draggable = false;
+            img.onerror = () => {
+                el.removeAttribute('data-avatar-src');
+                el.textContent = initial;
+            };
+            img.src = src;
+            el.appendChild(img);
+        } else {
+            if (el.hasAttribute('data-avatar-src')) el.removeAttribute('data-avatar-src');
+            if (el.textContent !== initial) el.textContent = initial;
+        }
+    }
+
+    function renderProfileAvatars() {
+        const name = getProfileName();
+        const initial = Array.from(name)[0] || '🌾';
+        // Priority: user photo → Google account photo → first letter of the display name
+        const googlePhoto = (currentAuthUser && currentAuthUser.photoURL) ? currentAuthUser.photoURL : '';
+        const src = getProfilePhoto() || googlePhoto;
+        paintAvatarEl(document.getElementById('home-avatar-circle'), src, initial);
+        paintAvatarEl(document.getElementById('profile-avatar-large'), src, initial);
+    }
+
+    function refreshHomeGreeting() {
+        const greetText = `${getGreetingText(getProfileName())} 👋`;
+        const greetingEl = document.getElementById('home-greeting');
+        const sidebarGreeting = document.getElementById('sidebar-greeting');
+        if (greetingEl && greetingEl.innerHTML !== greetText) greetingEl.innerHTML = greetText;
+        if (sidebarGreeting && sidebarGreeting.innerHTML !== greetText) sidebarGreeting.innerHTML = greetText;
+    }
+
+    function renderProfileIdentity() {
+        const name = getProfileName();
+        const greetEl = document.getElementById('profile-greeting');
+        if (greetEl) {
+            const txt = `${getGreetingText(name)} 👋`;
+            if (greetEl.innerHTML !== txt) greetEl.innerHTML = txt;
+        }
+        const nameEl = document.getElementById('profile-name-display');
+        if (nameEl && nameEl.innerText !== name) nameEl.innerText = name;
+        const actions = document.getElementById('profile-photo-actions');
+        if (actions) actions.classList.toggle('hidden', !getProfilePhoto());
+        renderProfileAvatars();
+    }
+
+    // Read-only mirror of the existing statistics + daily target — no new calculation, no second goal system
+    function renderProfileSnapshot() {
+        const stats = localData.stats || {};
+        const solved = stats.totalSolved || 0;
+        const correct = stats.totalCorrect || 0;
+
+        const attemptedEl = document.getElementById('profile-stat-attempted');
+        if (attemptedEl) attemptedEl.innerText = solved;
+        const accuracyEl = document.getElementById('profile-stat-accuracy');
+        if (accuracyEl) accuracyEl.innerText = solved > 0 ? Math.round((correct / solved) * 100) + '%' : '--%';
+        const streakEl = document.getElementById('profile-stat-streak');
+        if (streakEl) streakEl.innerText = typeof getStreakCount === 'function' ? getStreakCount() : 0;
+
+        const target = getPlannerSettings().dailyTarget || 30;
+        const todayData = (localData.streak && localData.streak[getLocalDateString()]) || {};
+        const done = todayData.solved || 0;
+        const goalTxt = document.getElementById('profile-goal-text');
+        if (goalTxt) goalTxt.innerText = `${done} / ${target}`;
+        const goalBar = document.getElementById('profile-goal-bar');
+        if (goalBar) goalBar.style.width = Math.min(100, target > 0 ? Math.round((done / target) * 100) : 0) + '%';
+    }
+
+    // Mirrors auth + sync state into the Profile account card. Called from updateAuthUI()
+    // and updateSyncUI() only — it never queries Firebase itself.
+    function updateProfileSyncUI() {
+        if (!document.getElementById('page-profile')) return;
+        const online = navigator.onLine;
+        const signedIn = !!currentAuthUser;
+        const key = typeof getSyncKey === 'function' ? getSyncKey() : '';
+
+        const offlineChip = document.getElementById('profile-offline-chip');
+        if (offlineChip) offlineChip.classList.toggle('hidden', online);
+
+        const loggedInEl = document.getElementById('profile-loggedin-controls');
+        if (loggedInEl) loggedInEl.classList.toggle('hidden', !signedIn);
+        const whyEl = document.getElementById('profile-connect-why');
+        if (whyEl) whyEl.classList.toggle('hidden', signedIn);
+        const syncActions = document.getElementById('profile-sync-actions');
+        if (syncActions) syncActions.classList.toggle('hidden', !(signedIn && key));
+        const inactiveHint = document.getElementById('profile-sync-inactive-hint');
+        if (inactiveHint) inactiveHint.classList.toggle('hidden', !(signedIn && !key));
+
+        const timeTxt = document.getElementById('sync-time-txt');
+        if (timeTxt) {
+            const lastSync = KrishiStorage.getItem('krishi_last_sync_time');
+            const txt = lastSync ? 'Last Synced: ' + lastSync : 'Last Synced: Never';
+            if (timeTxt.innerText !== txt) timeTxt.innerText = txt;
+        }
+
+        const badge = document.getElementById('profile-sync-badge');
+        if (badge) {
+            let label = 'Not connected ⚪';
+            let tone = 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400';
+            if (signedIn && !online) {
+                label = 'Offline 🟡';
+            } else if (signedIn && !key) {
+                label = 'Not syncing ⚪';
+            } else if (signedIn) {
+                const status = KrishiStorage.getItem('krishi_sync_status') || 'Synced';
+                if (status === 'Syncing...') {
+                    label = 'Syncing... 🟡';
+                    tone = 'bg-amber-500/10 text-amber-500 animate-pulse';
+                } else if (status === 'Sync failed') {
+                    label = 'Sync failed 🔴';
+                    tone = 'bg-rose-500/10 text-rose-500';
+                } else {
+                    label = 'Synced 🟢';
+                    tone = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
+                }
+            }
+            const cls = 'text-[8px] font-extrabold px-2 py-0.5 rounded-full ' + tone;
+            if (badge.innerText !== label) badge.innerText = label;
+            if (badge.className !== cls) badge.className = cls;
+        }
+    }
+
+    function refreshProfilePage() {
+        renderProfileIdentity();
+        renderProfileSnapshot();
+        updateProfileSyncUI();
+    }
+
+    function flashProfileSaved(el) {
+        if (!el) return;
+        const ps = typeof getPerfSettings === 'function' ? getPerfSettings() : {};
+        if (ps.reduceMotion || ps.perfMode === 'battery') return;
+        el.classList.remove('profile-saved-flash');
+        void el.offsetWidth; // restart the animation cleanly
+        el.classList.add('profile-saved-flash');
+        setTimeout(() => el.classList.remove('profile-saved-flash'), 800);
+    }
+
+    function openProfilePage() {
+        if (typeof playSound === 'function') { try { playSound('click'); } catch(e) {} }
+        if (typeof window.navigate === 'function') window.navigate('page-profile');
+    }
+
+    // The pairing console (sync key / QR / devices / selective sync) intentionally stays in Settings
+    function openAdvancedSyncSettings() {
+        if (typeof window.navigate === 'function') window.navigate('page-settings');
+        if (typeof switchSettingsTab === 'function') switchSettingsTab('general');
+        const ps = typeof getPerfSettings === 'function' ? getPerfSettings() : {};
+        const behavior = (ps.reduceMotion || ps.perfMode === 'battery') ? 'auto' : 'smooth';
+        setTimeout(() => {
+            const body = document.getElementById('accordion-body-sync');
+            if (body && body.classList.contains('hidden') && typeof window.toggleSettingsAccordion === 'function') {
+                window.toggleSettingsAccordion('sync');
+            }
+            const anchor = document.getElementById('accordion-body-sync');
+            if (anchor && anchor.scrollIntoView) anchor.scrollIntoView({ behavior: behavior, block: 'center' });
+        }, 240);
+    }
+
+    // ---------- display name editing ----------
+    function startProfileNameEdit() {
+        const row = document.getElementById('profile-name-row');
+        const edit = document.getElementById('profile-name-edit');
+        const input = document.getElementById('profile-name-input');
+        if (!row || !edit || !input) return;
+        input.value = (KrishiStorage.getItem(PROFILE_NAME_KEY) || '').trim();
+        row.classList.add('hidden');
+        edit.classList.remove('hidden');
+        input.focus();
+        input.select();
+    }
+
+    function cancelProfileNameEdit() {
+        const row = document.getElementById('profile-name-row');
+        const edit = document.getElementById('profile-name-edit');
+        if (row) row.classList.remove('hidden');
+        if (edit) edit.classList.add('hidden');
+    }
+
+    function saveProfileName() {
+        const input = document.getElementById('profile-name-input');
+        if (!input) return;
+        const clean = (input.value || '').trim().replace(/\s+/g, ' ').slice(0, 24);
+        KrishiStorage.setItem(PROFILE_NAME_KEY, clean);
+        stampProfileUpdated();
+        cancelProfileNameEdit();
+        renderProfileIdentity();
+        refreshHomeGreeting();
+        flashProfileSaved(document.getElementById('profile-name-display'));
+        showToast(clean ? '✅ नाम सुरक्षित भयो!' : '✅ नाम रिसेट भयो!');
+        // Reuses the existing debounced cloud push — queues safely while offline
+        syncSettingsToCloud('Profile name updated');
+    }
+
+    // ---------- profile photo ----------
+    function triggerProfilePhotoPicker() {
+        const input = document.getElementById('profile-photo-input');
+        if (!input) return;
+        input.value = '';
+        input.click();
+    }
+
+    // Downscale + center-crop to a small square JPEG so the avatar rides along inside the
+    // existing sync payload (no Firebase Storage, no second upload path)
+    function compressImageToDataURL(file, size) {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const side = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+                    if (!side) throw new Error('Empty image');
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(
+                        img,
+                        ((img.naturalWidth || img.width) - side) / 2,
+                        ((img.naturalHeight || img.height) - side) / 2,
+                        side, side, 0, 0, size, size
+                    );
+                    resolve(canvas.toDataURL('image/jpeg', 0.7));
+                } catch (err) {
+                    reject(err);
+                } finally {
+                    URL.revokeObjectURL(url);
+                }
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error('Image could not be decoded'));
+            };
+            img.src = url;
+        });
+    }
+
+    async function handleProfilePhotoPick(event) {
+        const file = event && event.target && event.target.files ? event.target.files[0] : null;
+        if (!file) return;
+        if (file.type && file.type.indexOf('image/') !== 0) {
+            showToast('⚠️ कृपया फोटो (image) फाइल छान्नुहोस्।');
+            return;
+        }
+        try {
+            const dataUrl = await compressImageToDataURL(file, PROFILE_PHOTO_PX);
+            KrishiStorage.setItem(PROFILE_PHOTO_KEY, dataUrl);
+            stampProfileUpdated();
+            renderProfileIdentity();
+            flashProfileSaved(document.getElementById('profile-avatar-large'));
+            showToast('✅ प्रोफाइल फोटो अपडेट भयो!');
+            syncSettingsToCloud('Profile photo updated');
+        } catch (err) {
+            console.error('[Profile] Photo processing failed:', err);
+            showToast('❌ फोटो प्रोसेस गर्न सकिएन।');
+        }
+    }
+
+    function removeProfilePhoto() {
+        if (!getProfilePhoto()) return;
+        KrishiStorage.removeItem(PROFILE_PHOTO_KEY);
+        stampProfileUpdated();
+        renderProfileIdentity();
+        showToast('🗑️ प्रोफाइल फोटो हटाइयो।');
+        syncSettingsToCloud('Profile photo removed');
+    }
+
+    window.openProfilePage = openProfilePage;
+    window.openAdvancedSyncSettings = openAdvancedSyncSettings;
+    window.startProfileNameEdit = startProfileNameEdit;
+    window.saveProfileName = saveProfileName;
+    window.cancelProfileNameEdit = cancelProfileNameEdit;
+    window.triggerProfilePhotoPicker = triggerProfilePhotoPicker;
+    window.handleProfilePhotoPick = handleProfilePhotoPick;
+    window.removeProfilePhoto = removeProfilePhoto;
+    window.refreshProfilePage = refreshProfilePage;
 
     async function manualCheckForUpdates() {
         if ('serviceWorker' in navigator) {
@@ -3394,6 +3738,7 @@ function loadData(){
         // Navigation weight map to determine left/right sliding directions
         const navIndexMap = {
             'page-home': 0,
+            'page-profile': 0.5, // detail view opened from the Home header: forward from Home, back to Home
             'page-practice': 1, 'page-mock': 1, 'page-mock-config': 1, 'page-wrong-questions': 1, 'page-smart-scan': 1, 'page-file-scan': 1, 'page-edit-mcq': 1,
             'page-mcq-creator': 2,
             'page-analytics': 3,
@@ -3534,6 +3879,7 @@ function loadData(){
             updateHomePage();
         }
         if(pageId==='page-practice') updatePracticePage();
+        if(pageId==='page-profile') refreshProfilePage();
         if(pageId==='page-analytics') updateEnhancedAnalyticsPage();
         if(pageId==='page-wrong-questions') renderWrongPage();
         if(pageId==='page-settings') loadApiKeyInput();
@@ -11189,22 +11535,15 @@ document.querySelectorAll('button').forEach(btn => {
 
             let greetingEl = document.getElementById('home-greeting');
             let sidebarGreeting = document.getElementById('sidebar-greeting');
-            let username = KrishiStorage.getItem('krishi_username') || "विद्यार्थी";
-            let appearance = getAppearanceSettings();
-            let greetText = username;
-            if (appearance.greetingLanguage === 'nepali') {
-                greetText = `नमस्ते, ${username}`;
-            } else if (appearance.greetingLanguage === 'sanskrit') {
-                greetText = `शुभमस्तु, ${username}`;
-            } else {
-                greetText = `Welcome back, ${username}`;
+            let greetText = `${getGreetingText(getProfileName())} 👋`;
+            if (greetingEl && greetingEl.innerHTML !== greetText) {
+                greetingEl.innerHTML = greetText;
             }
-            if (greetingEl) {
-                greetingEl.innerHTML = `${greetText} 👋`;
+            if (sidebarGreeting && sidebarGreeting.innerHTML !== greetText) {
+                sidebarGreeting.innerHTML = greetText;
             }
-            if (sidebarGreeting) {
-                sidebarGreeting.innerHTML = `${greetText} 👋`;
-            }
+            // Keep the header avatar in step with the stored photo / display name
+            renderProfileAvatars();
 
             // Sync learning streak count to sidebar dynamically
             let sidebarStreak = document.getElementById('sidebar-streak-badge');
@@ -13698,6 +14037,13 @@ ${text}`;
             updatedAt: Date.now()
         };
 
+        // Profile identity always rides along (not gated by selective sync) — it is who the account is
+        payload.userProfile = {
+            name: (KrishiStorage.getItem(PROFILE_NAME_KEY) || '').trim(),
+            photo: KrishiStorage.getItem(PROFILE_PHOTO_KEY) || '',
+            updatedAt: Number(KrishiStorage.getItem(PROFILE_STAMP_KEY) || 0)
+        };
+
         if (syncSelectiveBookmarks) {
             payload.bookmarked = localData.bookmarked || [];
             payload.bookmarkedLog = localData.bookmarkedLog || {};
@@ -13771,7 +14117,25 @@ ${text}`;
                 changed = true;
             }
         }
-        
+
+        // Profile identity — newest write wins, so a stale cloud copy never overwrites a fresh local edit
+        if (data.userProfile && typeof data.userProfile === 'object') {
+            const cloudStamp = Number(data.userProfile.updatedAt || 0);
+            const localStamp = Number(KrishiStorage.getItem(PROFILE_STAMP_KEY) || 0);
+            if (cloudStamp >= localStamp) {
+                if (typeof data.userProfile.name === 'string') {
+                    KrishiStorage.setItem(PROFILE_NAME_KEY, data.userProfile.name.trim());
+                }
+                if (typeof data.userProfile.photo === 'string') {
+                    if (data.userProfile.photo) KrishiStorage.setItem(PROFILE_PHOTO_KEY, data.userProfile.photo);
+                    else KrishiStorage.removeItem(PROFILE_PHOTO_KEY);
+                }
+                if (cloudStamp) KrishiStorage.setItem(PROFILE_STAMP_KEY, cloudStamp);
+                renderProfileIdentity();
+                refreshHomeGreeting();
+            }
+        }
+
         // Save localData keys
         if (changed) {
             Object.entries(localData).forEach(([k,v]) => {
@@ -14049,7 +14413,18 @@ ${text}`;
         merged.appearanceSettings = useCloud ? (cloud.appearanceSettings || local.appearanceSettings) : (local.appearanceSettings || cloud.appearanceSettings);
         merged.customAppearanceSettings = useCloud ? (cloud.customAppearanceSettings || local.customAppearanceSettings) : (local.customAppearanceSettings || cloud.customAppearanceSettings);
         merged.plannerSettings = useCloud ? (cloud.plannerSettings || local.plannerSettings) : (local.plannerSettings || cloud.plannerSettings);
-        
+
+        // Profile identity carries its own edit timestamp, so it merges on its own clock
+        const localProfileStamp = Number((local.userProfile && local.userProfile.updatedAt) || 0);
+        const cloudProfileStamp = Number((cloud.userProfile && cloud.userProfile.updatedAt) || 0);
+        if (cloudProfileStamp > localProfileStamp) {
+            merged.userProfile = cloud.userProfile;
+        } else if (local.userProfile) {
+            merged.userProfile = local.userProfile;
+        } else if (cloud.userProfile) {
+            merged.userProfile = cloud.userProfile;
+        }
+
         merged.soundEnabled = useCloud ? (cloud.soundEnabled ?? local.soundEnabled) : (local.soundEnabled ?? cloud.soundEnabled);
         merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
         merged.soundVolume = useCloud ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
@@ -14071,6 +14446,7 @@ ${text}`;
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
             'timingLog', 'mockScores', 'practiceRecent',
             'soundEnabled', 'soundMuted', 'soundVolume',
+            'userProfile',
             'ownerUid', 'isCompressed'
         ];
 

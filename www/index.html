@@ -18,7 +18,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-    <link href="./index.css?v=jzkxxvl" rel="stylesheet">
+    <link href="./index.css?v=uab9yh9" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by clearing old caches if a new version is active
         if ('serviceWorker' in navigator && window.caches) {
@@ -282,7 +282,11 @@
                 
                 <div class="flex justify-between items-center relative z-10">
                     <div class="flex items-center gap-3">
-                        <div id="home-avatar-circle" class="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white font-extrabold text-sm shadow-md badge-floating">🌾</div>
+                        <!-- Student Profile entry: real avatar (photo / initial), opens Profile page -->
+                        <button id="home-avatar-btn" onclick="openProfilePage(); event.stopPropagation();" aria-label="प्रोफाइल खोल्नुहोस् (Open profile)" class="profile-avatar-btn relative flex-shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900">
+                            <div id="home-avatar-circle" class="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center overflow-hidden text-white font-extrabold text-sm shadow-md">🌾</div>
+                            <span class="pointer-events-none absolute inset-0 rounded-full ring-1 ring-inset ring-white/25"></span>
+                        </button>
                         <div>
                             <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-1" id="home-greeting">नमस्ते, विद्यार्थी! 👋</h2>
                             <p class="text-[10.5px] font-medium" style="color:var(--text-secondary);">आजको तयारीलाई गति दिऔं।</p>
@@ -1762,6 +1766,152 @@
             <p id="no-wrong-msg" class="text-center py-6 text-xs opacity-75">🎉 No mistake records found!</p>
         </div>
 
+        <!-- ============ STUDENT PROFILE PAGE ============ -->
+        <!-- Personal overview + account hub. Deliberately NOT a second Settings/Stats page:
+             every number below is read from the existing stats/streak/goal sources. -->
+        <div id="page-profile" class="page p-4 space-y-3">
+            <div class="flex items-center gap-2.5">
+                <button onclick="navigateTab('page-home')" aria-label="पछाडि जानुहोस् (Back to home)" class="w-8 h-8 flex items-center justify-center rounded-xl border text-sm font-black cursor-pointer transition active:scale-90 hover:opacity-80" style="border-color:var(--border); color:var(--text);">←</button>
+                <h2 class="text-lg font-bold select-none">Profile</h2>
+                <span id="profile-offline-chip" class="hidden ml-auto text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Offline 🟡</span>
+            </div>
+
+            <!-- ---------- 1. IDENTITY HEADER ---------- -->
+            <div class="profile-card-enter p-4 rounded-3xl border shadow-sm relative overflow-hidden" style="background:var(--card); border-color:var(--border); color:var(--text);">
+                <div class="absolute -top-10 -right-10 w-24 h-24 bg-emerald-400/20 dark:bg-emerald-500/10 blur-2xl rounded-full pointer-events-none"></div>
+                <div class="flex items-center gap-3.5 relative z-10">
+                    <button onclick="triggerProfilePhotoPicker(); event.stopPropagation();" aria-label="प्रोफाइल फोटो परिवर्तन गर्नुहोस् (Change profile photo)" class="profile-avatar-btn relative flex-shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
+                        <div id="profile-avatar-large" class="profile-avatar-enter w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center overflow-hidden text-white font-extrabold text-xl shadow-md">🌾</div>
+                        <span class="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-emerald-600 text-white text-[9px] flex items-center justify-center" style="box-shadow:0 0 0 2px var(--card);">📷</span>
+                    </button>
+                    <div class="min-w-0 flex-1">
+                        <h3 id="profile-greeting" class="text-sm font-black truncate" style="color:var(--text);">नमस्ते, विद्यार्थी 👋</h3>
+                        <p class="text-[10.5px] font-medium" style="color:var(--text-secondary);">आजको तयारीलाई गति दिऔं।</p>
+                        <p class="mt-1.5 flex items-baseline gap-1.5 min-w-0">
+                            <span class="text-[8px] font-black uppercase tracking-widest text-slate-400 flex-shrink-0">Name</span>
+                            <span id="profile-name-display" class="text-[11px] font-bold truncate" style="color:var(--text);">विद्यार्थी</span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Editable display name (reuses the existing krishi_username identity) -->
+                <div id="profile-name-row" class="mt-3 flex items-stretch gap-2 relative z-10">
+                    <button onclick="startProfileNameEdit(); event.stopPropagation();" class="flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-xl border text-[10px] font-black cursor-pointer transition active:scale-95 hover:opacity-80" style="background:var(--bg); border-color:var(--border); color:var(--text);">✏️ Edit name</button>
+                    <button onclick="triggerProfilePhotoPicker(); event.stopPropagation();" class="flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-xl border text-[10px] font-black cursor-pointer transition active:scale-95 hover:opacity-80" style="background:var(--bg); border-color:var(--border); color:var(--text);">📷 Photo</button>
+                    <span id="profile-photo-actions" class="hidden flex-shrink-0">
+                        <button onclick="removeProfilePhoto(); event.stopPropagation();" aria-label="फोटो हटाउनुहोस् (Remove photo)" title="फोटो हटाउनुहोस्" class="h-full px-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 text-[11px] text-rose-500 cursor-pointer transition active:scale-95 hover:bg-rose-100 dark:hover:bg-rose-950/60">🗑️</button>
+                    </span>
+                </div>
+                <div id="profile-name-edit" class="hidden mt-3 flex items-stretch gap-2 relative z-10">
+                    <input id="profile-name-input" type="text" maxlength="24" placeholder="तपाईंको नाम" onkeydown="if(event.key==='Enter'){event.preventDefault();saveProfileName();}else if(event.key==='Escape'){event.preventDefault();cancelProfileNameEdit();}" class="flex-1 min-w-0 px-3 border rounded-xl text-[11px] font-bold" style="border-color:var(--border); background:var(--bg); color:var(--text);">
+                    <button onclick="saveProfileName(); event.stopPropagation();" class="px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black cursor-pointer transition active:scale-95">Save</button>
+                    <button onclick="cancelProfileNameEdit(); event.stopPropagation();" aria-label="रद्द (Cancel)" class="px-3.5 rounded-xl border text-[10px] font-black cursor-pointer transition active:scale-95 hover:opacity-80" style="background:var(--bg); border-color:var(--border); color:var(--text-secondary);">✕</button>
+                </div>
+                <input type="file" id="profile-photo-input" accept="image/*" class="hidden" onchange="handleProfilePhotoPick(event)">
+            </div>
+
+            <!-- ---------- 2. LEARNING SNAPSHOT (read-only summary of existing data) ---------- -->
+            <div class="profile-card-enter p-4 rounded-3xl border shadow-sm space-y-3" style="background:var(--card); border-color:var(--border); color:var(--text);">
+                <div class="flex justify-between items-center">
+                    <span class="text-[9px] font-black uppercase tracking-widest text-slate-400">📊 Learning Snapshot <span class="normal-case tracking-normal font-bold opacity-70">· all-time</span></span>
+                    <button onclick="navigateTab('page-analytics')" class="text-[9px] font-black text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer">Full stats →</button>
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="p-2.5 rounded-2xl border bg-indigo-500/5 flex flex-col gap-0.5" style="border-color:var(--border);">
+                        <span class="text-[8px] font-bold uppercase tracking-wider text-indigo-500">Attempted</span>
+                        <span id="profile-stat-attempted" class="text-sm font-black" style="color:var(--text);">0</span>
+                    </div>
+                    <div class="p-2.5 rounded-2xl border bg-emerald-500/5 flex flex-col gap-0.5" style="border-color:var(--border);">
+                        <span class="text-[8px] font-bold uppercase tracking-wider text-emerald-600">Accuracy</span>
+                        <span id="profile-stat-accuracy" class="text-sm font-black" style="color:var(--text);">--%</span>
+                    </div>
+                    <div class="p-2.5 rounded-2xl border bg-amber-500/5 flex flex-col gap-0.5" style="border-color:var(--border);">
+                        <span class="text-[8px] font-bold uppercase tracking-wider text-amber-500">Streak</span>
+                        <span id="profile-stat-streak" class="text-sm font-black" style="color:var(--text);">0</span>
+                    </div>
+                </div>
+                <!-- Compact mirror of the existing daily target — no second goal system -->
+                <div id="profile-goal-wrap" class="pt-1">
+                    <div class="flex justify-between items-end mb-1">
+                        <span class="text-[9px] font-black uppercase tracking-widest text-slate-400">🎯 Today's Goal</span>
+                        <span id="profile-goal-text" class="text-[10px] font-black" style="color:var(--text);">0 / 50</span>
+                    </div>
+                    <div class="w-full h-1.5 rounded-full overflow-hidden" style="background:var(--bg);">
+                        <div id="profile-goal-bar" class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500" style="width:0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ---------- 3. ACCOUNT & CLOUD SYNC (relocated from Settings) ---------- -->
+            <div class="profile-card-enter p-4 rounded-3xl border shadow-sm space-y-3" style="background:var(--card); border-color:var(--border); color:var(--text);">
+                <div class="flex justify-between items-center">
+                    <span class="text-[9px] font-black uppercase tracking-widest text-slate-400">☁️ Account & Cloud Sync</span>
+                    <span id="profile-sync-badge" class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">Disabled 🔴</span>
+                </div>
+
+                <!-- Connection Summary bar (moved from Settings) -->
+                <div class="p-2.5 rounded-xl border text-[10px] font-bold text-center flex justify-between items-center" style="background:var(--bg); border-color:var(--border);">
+                    <span class="text-slate-400 block uppercase tracking-wider text-[8px] text-left">Active Session Status</span>
+                    <span id="auth-user-email-display" class="font-bold text-[10px]" style="color:var(--text);">No active session</span>
+                </div>
+
+                <!-- Why connect (shown only when signed out) -->
+                <p id="profile-connect-why" class="hidden text-[9px] leading-relaxed text-slate-400">
+                    Google खातामा जोड्नुहोस् — तपाईंको bookmarks, गल्तीहरू, streak र study logs सुरक्षित रहन्छन् र अरू device मा पनि उपलब्ध हुन्छन्।
+                </p>
+
+                <!-- Authentication Form (moved from Settings — shown when logged out) -->
+                <div id="auth-login-form" class="space-y-2.5 text-xs">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Email Address</label>
+                        <input id="firebase-auth-email" type="email" class="w-full p-2 border rounded-xl text-xs" placeholder="student@krishi.com" style="border-color:var(--border); background:var(--bg); color:var(--text);">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Password</label>
+                        <input id="firebase-auth-password" type="password" class="w-full p-2 border rounded-xl text-xs" placeholder="••••••••" style="border-color:var(--border); background:var(--bg); color:var(--text);">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2.5 pt-1">
+                        <button onclick="handleFirebaseLogin(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Login</button>
+                        <button onclick="handleFirebaseSignup(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Sign Up</button>
+                    </div>
+                    <div class="flex flex-col items-center gap-2 mt-2 pt-2 border-t border-dashed" style="border-color:var(--border);">
+                        <button id="google-login-btn" onclick="handleGoogleLogin(); playSound('click');" class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border font-bold cursor-pointer transition active:scale-95 hover:bg-slate-50 dark:hover:bg-slate-900" style="border-color:var(--border); color:var(--text);">
+                            <svg class="w-4 h-4" viewBox="0 0 24 24">
+                                <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.6 15.02 1 12 1 7.24 1 3.23 3.73 1.3 7.72l3.96 3.07C6.18 7.37 8.82 5.04 12 5.04z"/>
+                                <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.12 2.73-2.38 3.58l3.69 2.87c2.16-1.99 3.74-4.91 3.74-8.55z"/>
+                                <path fill="#FBBC05" d="M5.26 14.79c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29L1.3 7.14C.47 8.81 0 10.7 0 12.7s.47 3.89 1.3 5.56l3.96-3.47z"/>
+                                <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.69-2.87c-1.02.68-2.33 1.1-4.27 1.1-3.16 0-5.82-2.33-6.78-5.46l-3.96 3.07C3.23 20.27 7.24 23 12 23z"/>
+                            </svg>
+                            <span class="text-[10px]">Continue with Google</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Signed-in account controls (Profile-side; mirrors auth state, adds no listener) -->
+                <div id="profile-loggedin-controls" class="hidden space-y-2.5">
+                    <div id="profile-sync-actions" class="hidden space-y-2">
+                        <button onclick="syncCloudNow()" id="btn-sync-now" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95 shadow-sm">
+                            <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
+                        </button>
+                        <p id="sync-time-txt" class="text-[8px] text-center text-slate-400">Last Synced: Never</p>
+                    </div>
+                    <div id="profile-sync-inactive-hint" class="hidden p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100/40 text-[9px] font-bold text-amber-700 dark:text-amber-400 text-center">
+                        Auto-Sync अझै सक्रिय छैन — Settings ▸ Cloud Sync बाट पेयर गर्नुहोस्।
+                    </div>
+                    <button onclick="handleFirebaseLogout(); playSound('click');" class="w-full border hover:opacity-80 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition text-rose-500 active:scale-95" style="border-color:var(--border);">Sign Out &amp; Disconnect 🚪</button>
+                </div>
+
+                <!-- Pointer to the advanced pairing console, which stays in Settings -->
+                <button onclick="openAdvancedSyncSettings()" class="w-full flex justify-between items-center p-2.5 rounded-xl border cursor-pointer transition active:scale-[0.98] hover:opacity-80" style="background:var(--bg); border-color:var(--border);">
+                    <span class="text-left">
+                        <span class="text-[10px] font-black block" style="color:var(--text);">🔗 Device Link &amp; Advanced Sync</span>
+                        <span class="text-[8px] text-slate-400">Sync key, QR pairing, selective sync, devices</span>
+                    </span>
+                    <span class="text-[10px] text-slate-400">→</span>
+                </button>
+            </div>
+        </div>
+
         <!-- SETTINGS PAGE -->
         <div id="page-settings" class="page p-4 space-y-3">
             <h2 class="text-lg font-bold select-none">Settings</h2>
@@ -1858,11 +2008,14 @@
                     
                     <!-- Accordion Body Content -->
                     <div id="accordion-body-sync" class="hidden p-4 border-t space-y-3.5" style="border-color:var(--border);">
-                        <!-- Connection Summary bar -->
-                        <div class="p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border text-[10px] font-bold text-center flex justify-between items-center" style="border-color:var(--border);">
-                            <span class="text-slate-400 block uppercase tracking-wider text-[8px] text-left">Active Session Status</span>
-                            <span id="auth-user-email-display" class="font-bold text-[10px]" style="color:var(--text);">No active session</span>
-                        </div>
+                        <!-- Account & sign-in now live in Profile (single source, no duplicate control) -->
+                        <button onclick="openProfilePage()" class="w-full flex justify-between items-center p-2.5 rounded-xl border bg-slate-50/60 dark:bg-slate-900/50 cursor-pointer transition active:scale-[0.98] hover:bg-slate-100 dark:hover:bg-slate-900" style="border-color:var(--border);">
+                            <span class="text-left">
+                                <span class="text-[10px] font-black block" style="color:var(--text);">👤 Account &amp; Sign-in</span>
+                                <span class="text-[8px] text-slate-400">Google connection, sync status &amp; sign out moved to Profile</span>
+                            </span>
+                            <span class="text-[10px] text-slate-400">→</span>
+                        </button>
 
                         <!-- Firebase Credentials setup toggle link -->
                         <div class="p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-900/60 border flex justify-between items-center" style="border-color:var(--border);">
@@ -1871,33 +2024,6 @@
                                 <p class="text-[8px] text-slate-400 dark:text-slate-500">Input custom database config keys</p>
                             </div>
                             <button onclick="openCloudConfigModal()" class="px-3 py-1 bg-indigo-500 hover:bg-indigo-650 text-white rounded-lg text-[9px] font-black cursor-pointer transition active:scale-95">Configure</button>
-                        </div>
-
-                        <!-- Authentication Form (Shown when logged out) -->
-                        <div id="auth-login-form" class="space-y-2.5 text-xs">
-                            <div class="space-y-1">
-                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Email Address</label>
-                                <input id="firebase-auth-email" type="email" class="w-full p-2 border rounded-xl text-xs" placeholder="student@krishi.com" style="border-color:var(--border); color:var(--text); background:var(--card);">
-                            </div>
-                            <div class="space-y-1">
-                                <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Password</label>
-                                <input id="firebase-auth-password" type="password" class="w-full p-2 border rounded-xl text-xs" placeholder="••••••••" style="border-color:var(--border); color:var(--text); background:var(--card);">
-                            </div>
-                            <div class="grid grid-cols-2 gap-2.5 pt-1">
-                                <button onclick="handleFirebaseLogin(); playSound('click');" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Sign In 🔐</button>
-                                <button onclick="handleFirebaseSignup(); playSound('click');" class="bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95">Sign Up 🚀</button>
-                            </div>
-                            <div class="flex flex-col items-center gap-2 mt-2 pt-2 border-t border-dashed" style="border-color:var(--border);">
-                                <button id="google-login-btn" onclick="handleGoogleLogin(); playSound('click');" class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-white text-slate-800 font-bold border border-slate-200 shadow-sm hover:bg-slate-50 active:scale-95 transition duration-150 cursor-pointer">
-                                    <svg class="w-4 h-4" viewBox="0 0 24 24">
-                                        <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.6 15.02 1 12 1 7.24 1 3.23 3.73 1.3 7.72l3.96 3.07C6.18 7.37 8.84 5.04 12 5.04z"/>
-                                        <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.12 2.73-2.38 3.58l3.69 2.87c2.16-1.99 3.74-4.91 3.74-8.55z"/>
-                                        <path fill="#FBBC05" d="M5.26 14.79c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29L1.3 7.14C.47 8.81 0 10.7 0 12.7s.47 3.89 1.3 5.56l3.96-3.47z"/>
-                                        <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.69-2.87c-1.02.68-2.33 1.1-4.27 1.1-3.16 0-5.82-2.33-6.78-5.46l-3.96 3.07C3.23 20.27 7.24 23 12 23z"/>
-                                    </svg>
-                                    <span class="text-[10px]">Continue with Google</span>
-                                </button>
-                            </div>
                         </div>
 
                         <!-- Logged In Content Group (Shown when logged in) -->
@@ -2030,17 +2156,11 @@
                                     </div>
                                 </div>
 
-                                <!-- Operations pill group -->
+                                <!-- Operations pill group — "Sync Now" & last-synced now live in Profile -->
                                 <div class="flex gap-2">
-                                    <button onclick="syncCloudNow()" id="btn-sync-now" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95 shadow-sm">
-                                        <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
-                                    </button>
                                     <button onclick="disableCloudSync()" class="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95 shadow-sm">Disable Sync</button>
                                 </div>
-                                <p id="sync-time-txt" class="text-[8px] text-center text-slate-400">Last Synced: Never</p>
                             </div>
-
-                            <button onclick="handleFirebaseLogout(); playSound('click');" class="w-full border hover:bg-slate-50 dark:hover:bg-slate-900 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition text-rose-500 active:scale-95" style="border-color:var(--border);">Sign Out & Disconnect 🚪</button>
                         </div>
                     </div>
                 </div>
@@ -3457,14 +3577,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=jzkxxvl" defer></script>
-    <script src="./js/elite_3d_engine.js?v=jzkxxvl" defer></script>
-    <script src="./js/canvas_charts.js?v=jzkxxvl" defer></script>
+    <script src="./js/elite_animations_controller.js?v=uab9yh9" defer></script>
+    <script src="./js/elite_3d_engine.js?v=uab9yh9" defer></script>
+    <script src="./js/canvas_charts.js?v=uab9yh9" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=jzkxxvl" defer></script>
-    <script src="./js/sqlite_db.js?v=jzkxxvl" defer></script>
-    <script src="./js/krishi_idb.js?v=jzkxxvl"></script>
-    <script src="./js/app.js?v=jzkxxvl" defer></script>
+    <script src="./js/pwa_helpers.js?v=uab9yh9" defer></script>
+    <script src="./js/sqlite_db.js?v=uab9yh9" defer></script>
+    <script src="./js/krishi_idb.js?v=uab9yh9"></script>
+    <script src="./js/app.js?v=uab9yh9" defer></script>
 
 
     <!--
@@ -3492,7 +3612,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=jzkxxvl" defer></script>
+    <script src="./js/voice_assistant.js?v=uab9yh9" defer></script>
 </body>
 </html>
 

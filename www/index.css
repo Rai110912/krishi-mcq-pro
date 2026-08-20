@@ -408,6 +408,67 @@
         .krishi-sync-update .slide-up-card {
             animation: none !important;
         }
+
+        /* ============ STUDENT PROFILE ============ */
+        /* Avatar entry button: press feedback only — no constant float (exam-focus UI).
+           inline-flex keeps the round avatar optically centred inside the app-wide
+           48px mobile touch target instead of sitting hard against its top edge. */
+        .profile-avatar-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .profile-avatar-btn:active {
+            transform: scale(0.94);
+        }
+        /* Subtle one-shot entrance for the profile header avatar */
+        .profile-avatar-enter {
+            animation: profileAvatarIn 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        @keyframes profileAvatarIn {
+            from { opacity: 0; transform: scale(0.86); }
+            to   { opacity: 1; transform: scale(1); }
+        }
+        /* Staggered card entrance, reusing the app's cardSlideUp curve */
+        .profile-card-enter {
+            animation: cardSlideUp 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .profile-card-enter:nth-child(2) { animation-delay: 0.05s; }
+        .profile-card-enter:nth-child(3) { animation-delay: 0.10s; }
+        .profile-card-enter:nth-child(4) { animation-delay: 0.15s; }
+        /* Same anti-flicker guard the home widgets use: never replay entrances
+           when a cloud-sync render rebuilds the DOM */
+        .krishi-sync-update .profile-card-enter,
+        .krishi-sync-update .profile-avatar-enter {
+            animation: none !important;
+        }
+        /* Sync activity indicator — restrained, only while actually syncing */
+        .profile-sync-spin {
+            animation: profileSyncSpin 0.9s linear infinite;
+            display: inline-block;
+        }
+        @keyframes profileSyncSpin {
+            to { transform: rotate(360deg); }
+        }
+        /* Save confirmation: brief, non-blocking */
+        .profile-saved-flash {
+            animation: profileSavedFlash 0.9s ease-out both;
+        }
+        @keyframes profileSavedFlash {
+            0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45); }
+            35%  { box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.28); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .profile-avatar-enter,
+            .profile-card-enter,
+            .profile-saved-flash {
+                animation: none !important;
+            }
+            .profile-avatar-btn:active { transform: none; }
+            .profile-sync-spin { animation-duration: 2s; }
+        }
         .pulse-accent {
             animation: pulseAlert 2s infinite ease-in-out;
         }

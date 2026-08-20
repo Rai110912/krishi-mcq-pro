@@ -706,26 +706,37 @@ async function loadStaticQuestions() {
     };
 
     // Resume session logic
-    window.resumePromptShown = false;
+    window.lastPromptedSessionKey = window.lastPromptedSessionKey || null;
     window.checkAndPromptResumeSession = function() {
         let activePage = document.querySelector('.page.active');
         if (!activePage || activePage.id !== 'page-practice') {
             return;
         }
-        if (window.resumePromptShown) return;
-
         let snapshotSessionId = state ? state.sessionId : undefined;
         let localSaved = KrishiStorage.getItem('krishi_saved_practice');
         const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
         const key = uid; // alias for condition check below
 
         function triggerPrompt(session, isCloud = false) {
-            if (window.resumePromptShown) return;
+            if (!session) return;
+            
+            // Generate a unique key for this session state
+            let sessionKey = session.updatedAt || session.score || 0;
+            
+            if (window.lastPromptedSessionKey === sessionKey) return;
+            
             if (state && state.sessionId !== snapshotSessionId) {
                 console.log('[Resumption] Prompt aborted because user started a new session while cloud fetch was pending.');
                 return;
             }
-            window.resumePromptShown = true;
+            
+            // Async safety check: Ensure user is still on the practice page after network fetch
+            let currentActive = document.querySelector('.page.active');
+            if (!currentActive || currentActive.id !== 'page-practice') {
+                return;
+            }
+            
+            window.lastPromptedSessionKey = sessionKey;
 
             let total = session.questions ? session.questions.length : 0;
             let current = session.currentIndex || 0;
@@ -788,11 +799,11 @@ async function loadStaticQuestions() {
                     if (session.timeSpentArray) state.timeSpentArray = session.timeSpentArray;
                     if (session.totalTimeSpent) state.totalTimeSpent = session.totalTimeSpent;
                     renderMCQ();
-                    // Fix: Do not reset window.resumePromptShown here so the popup doesn't reappear on Firebase sync
+                    // The session key prevents duplicate prompts; no boolean reset needed.
                 },
                 function() {
                     clearPracticeProgress();
-                    window.resumePromptShown = false;
+                    // On cancel, the session is cleared, so it won't prompt anyway.
                 }
             );
         }
@@ -14835,7 +14846,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         }
 
         if (pageId !== 'page-practice') {
-            window.resumePromptShown = false; // Reset so prompt can show again on next visit
+            // Navigation reset removed. Session key tracking handles re-entry cleanly.
         }
         if (typeof window.navigate === 'function') {
             window.navigate(pageId);

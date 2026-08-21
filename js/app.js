@@ -79,50 +79,80 @@ async function loadStaticQuestions() {
             });
         }
         
+        // Returns the current row count, or null if it cannot be determined.
+        function countRows(db) {
+            return new Promise(resolve => {
+                try {
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const req = tx.objectStore(STORE_NAME).count();
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(null);
+                } catch(e) { resolve(null); }
+            });
+        }
+
         return {
+            // Resolves to an array on success, or null when the store could not be
+            // read. null means "unknown" and MUST NOT be treated as "empty" — a read
+            // failure that is laundered into [] becomes a destructive write later.
             getAll: async () => {
                 try {
                     const db = await getDB();
-                    return new Promise((resolve, reject) => {
+                    return await new Promise(resolve => {
                         const tx = db.transaction(STORE_NAME, 'readonly');
                         const store = tx.objectStore(STORE_NAME);
                         const req = store.getAll();
                         req.onsuccess = () => resolve(req.result || []);
-                        req.onerror = () => reject(req.error);
+                        req.onerror = () => {
+                            console.error('[IndexedDB] Get all read failed:', req.error);
+                            resolve(null);
+                        };
                     });
                 } catch(e) {
                     console.error('[IndexedDB] Get all failed:', e);
-                    return [];
+                    return null;
                 }
             },
-            saveAll: async (questions) => {
-                try {
-                    const db = await getDB();
-                    return new Promise((resolve, reject) => {
-                        const tx = db.transaction(STORE_NAME, 'readwrite');
-                        const store = tx.objectStore(STORE_NAME);
-                        const clearReq = store.clear();
-                        clearReq.onsuccess = () => {
-                            if (questions.length === 0) return resolve();
-                            let completed = 0;
-                            let hasError = false;
-                            questions.forEach(q => {
-                                const addReq = store.put(q);
-                                addReq.onsuccess = () => {
-                                    completed++;
-                                    if (completed === questions.length && !hasError) resolve();
-                                };
-                                addReq.onerror = () => {
-                                    hasError = true;
-                                    reject(addReq.error);
-                                };
-                            });
-                        };
-                        clearReq.onerror = () => reject(clearReq.error);
-                    });
-                } catch(e) {
-                    console.error('[IndexedDB] Save all failed:', e);
+            // Destructive: clears the store and rewrites it. Refuses to clear a
+            // non-empty store when handed an empty array unless allowEmpty is set
+            // (only the deliberate logout wipe passes it).
+            saveAll: async (questions, opts) => {
+                const allowEmpty = !!(opts && opts.allowEmpty);
+                if (!Array.isArray(questions)) {
+                    throw new Error('[IndexedDB] saveAll refused: not an array');
                 }
+                const db = await getDB();
+                if (questions.length === 0 && !allowEmpty) {
+                    const existing = await countRows(db);
+                    if (existing === null || existing > 0) {
+                        throw new Error('[IndexedDB] saveAll refused: empty array would wipe ' +
+                            (existing === null ? 'an unknown number of' : existing) + ' stored questions');
+                    }
+                    return; // store is already empty — nothing to do
+                }
+                return await new Promise((resolve, reject) => {
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    let aborted = false;
+                    // Resolve/reject off the transaction, so a rolled-back clear() is
+                    // never reported as a success.
+                    tx.oncomplete = () => resolve();
+                    tx.onabort = () => reject(tx.error || new Error('[IndexedDB] saveAll transaction aborted'));
+                    tx.onerror = () => reject(tx.error || new Error('[IndexedDB] saveAll transaction failed'));
+                    const clearReq = store.clear();
+                    clearReq.onsuccess = () => {
+                        questions.forEach(q => {
+                            if (aborted) return;
+                            const addReq = store.put(q);
+                            addReq.onerror = () => {
+                                if (aborted) return;
+                                aborted = true;
+                                console.error('[IndexedDB] put failed, rolling back clear():', addReq.error);
+                                try { tx.abort(); } catch(e) {}
+                            };
+                        });
+                    };
+                });
             }
         };
     })();
@@ -132,6 +162,11 @@ async function loadStaticQuestions() {
         bookmarked:[], wrong:[], bookmarkedLog:{}, wrongLog:{}, customQuestions:[], streak:{},
         stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[], progression:{xp:0}
     };
+    // True only once localData.customQuestions has been proven to reflect IndexedDB.
+    // Until then localData.customQuestions is the empty literal above, which must never
+    // be persisted locally or uploaded — an unhydrated [] is indistinguishable from a
+    // genuinely empty bank and would destroy the user's questions.
+    let customQuestionsHydrated = false;
     // Removed legacy sm2Data variable
     let tempBatch=[];
     let tempBulkParsed=[];
@@ -618,17 +653,28 @@ async function loadStaticQuestions() {
         // Asynchronously load custom questions from IndexedDB (Zero-Risk Legacy Migrator)
         try {
             let legacyQuestions = Storage.getJSON('krishi_customQuestions', null);
-            if (legacyQuestions && Array.isArray(legacyQuestions)) {
+            // length > 0 is essential: a legacy "[]" would otherwise clear the store.
+            if (legacyQuestions && Array.isArray(legacyQuestions) && legacyQuestions.length > 0) {
                 console.log('[IndexedDB Migration] Migrating legacy custom questions to IndexedDB...');
                 await KrishiDB.saveAll(legacyQuestions);
                 KrishiStorage.removeItem('krishi_customQuestions'); // Clean up old LocalStorage
                 console.log('[IndexedDB Migration] Legacy custom questions successfully migrated!');
+            } else if (legacyQuestions && Array.isArray(legacyQuestions)) {
+                KrishiStorage.removeItem('krishi_customQuestions'); // empty legacy key, nothing to migrate
             }
             const idbQuestions = await KrishiDB.getAll();
-            if (idbQuestions && Array.isArray(idbQuestions)) {
+            if (Array.isArray(idbQuestions)) {
                 localData.customQuestions = idbQuestions.map(q => normalizeQuestion(q));
                 registerCustomSubjectsFromQuestions(localData.customQuestions);
+                customQuestionsHydrated = true;
                 console.log('[IndexedDB] Custom questions loaded:', localData.customQuestions.length);
+            } else {
+                // getAll() returned null => the store could not be read. Stay unhydrated so
+                // no save or sync path can mistake this for an empty question bank.
+                console.error('[IndexedDB] Custom questions unreadable — question bank locked read-only for this session.');
+                if (typeof showToast === 'function') {
+                    showToast('⚠️ Custom questions could not be loaded. Restart the app before adding or syncing questions.', 'error');
+                }
             }
         } catch(e) {
             console.error('[IndexedDB] Failed to load custom questions:', e);
@@ -1286,11 +1332,16 @@ function loadData(){
             }
         });
         
-        // Write custom questions to IndexedDB asynchronously
-        if (localData.customQuestions && Array.isArray(localData.customQuestions)) {
+        // Write custom questions to IndexedDB asynchronously.
+        // Gated on hydration: before the initial IndexedDB read resolves (or after it
+        // failed) localData.customQuestions is not authoritative, and saveAll() is a
+        // clear-then-rewrite — writing it would delete the real bank.
+        if (customQuestionsHydrated && Array.isArray(localData.customQuestions)) {
             KrishiDB.saveAll(localData.customQuestions)
                 .then(() => console.log('[IndexedDB] Custom questions saved successfully.'))
                 .catch(err => console.error('[IndexedDB] Custom questions save failed:', err));
+        } else if (!customQuestionsHydrated) {
+            console.warn('[IndexedDB] Skipped custom-question write: bank not hydrated yet.');
         }
         
         try { Storage.flush(); } catch(e) {}
@@ -1387,6 +1438,9 @@ function loadData(){
     let syncListenerRef = null;
     let syncInProgress = false;
     let cachedCloudData = null;
+    // The uid cachedCloudData was populated for. Without this, one account's cached
+    // cloud state can drive writes into another account's document after a switch.
+    let cachedCloudUid = null;
 
     let currentSessionId = Math.random().toString(36).substring(2, 10);
     let sessionTouchInterval = null;
@@ -1607,6 +1661,9 @@ function loadData(){
         const localL = (local.timingLog || []).length;
         const cloudL = (cloud.timingLog || []).length;
         const localC = (local.customQuestions || []).length;
+        // Was never declared. Referencing it below threw a ReferenceError that aborted
+        // this function and silently killed the entire manual "Sync Now" path.
+        const cloudC = (cloud.customQuestions || []).length;
 
         // Auto-Pull Protection: If local device is fresh/empty (0 data), bypass conflict modal and auto-pull cloud data!
         if (localB === 0 && localW === 0 && localS === 0 && localL === 0 && localC === 0) {
@@ -2451,12 +2508,23 @@ function loadData(){
                 'krishi_gemini_model',
                 'krishi_gemini_temp'
             ];
-            keysToWipe.forEach(k => KrishiStorage.removeItem(k));
-            
-            // Clear IndexedDB Custom Questions
-            if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
-                try { await KrishiDB.saveAll([]); } catch(e) { console.warn('Failed to wipe custom questions IDB on logout'); }
+            // Tear the sync engine down BEFORE wiping anything. While the users/{uid}
+            // listener is still attached and the uid still valid, an inbound snapshot
+            // would merge the half-emptied local state and push it back to the cloud.
+            try { disableCloudSyncSilently(); } catch(e) { console.warn('[Logout] sync teardown failed:', e); }
+            if (typeof syncDebounceTimer !== 'undefined' && syncDebounceTimer) {
+                clearTimeout(syncDebounceTimer);
+                syncDebounceTimer = null;
             }
+
+            keysToWipe.forEach(k => KrishiStorage.removeItem(k));
+
+            // Clear IndexedDB Custom Questions (the one deliberate empty wipe)
+            if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
+                try { await KrishiDB.saveAll([], { allowEmpty: true }); } catch(e) { console.warn('Failed to wipe custom questions IDB on logout'); }
+            }
+            customQuestionsHydrated = false;
+            localData.customQuestions = [];
             
             if (firebaseAuth) {
                 await firebaseAuth.signOut();
@@ -3164,27 +3232,50 @@ function loadData(){
             // Real-time snapshot listener
             window.syncListenerUnsubscribe = firestore.collection('users').doc(uid)
                 .onSnapshot(async doc => {
+                    // Tracks whether THIS invocation took the syncInProgress lock, so the
+                    // finally block never releases a lock owned by another run.
+                    let ownsSyncLock = false;
+                    try {
+                    const fromCache = !!(doc.metadata && doc.metadata.fromCache);
+
                     if (doc.exists) {
                         const rawData = doc.data();
-                        if (rawData && rawData.__e2ee__ && window.KrishiE2EEEngine) {
-                            cachedCloudData = await window.KrishiE2EEEngine.decryptPayload(rawData, key);
-                        } else {
-                            cachedCloudData = rawData;
+                        if (rawData && rawData.__e2ee__) {
+                            // An encrypted envelope carries none of the real fields. Treating
+                            // it as the payload would blank everything it lacks, so refuse to
+                            // sync rather than decrypt with key material the app never sets.
+                            console.error('[Cloud Sync] Cloud document is encrypted and unreadable — sync halted to protect data.');
+                            setSyncStatus('Sync failed');
+                            return;
                         }
+                        cachedCloudData = rawData;
+                        cachedCloudUid = uid;
+                        window.__krishiSyncListenerInitialized__ = true;
                     } else {
+                        // A "document does not exist" answer served from the local Firestore
+                        // cache is NOT proof of absence: on a fresh install, after cleared
+                        // storage, or in a new browser profile the cache is empty and reports
+                        // every document as missing. Trusting it here is what allowed the app
+                        // to replace a populated cloud document with an empty one.
+                        if (fromCache) {
+                            console.warn('[Cloud Sync] Ignoring cache-only "document missing" snapshot; waiting for the server copy.');
+                            return;
+                        }
                         cachedCloudData = null;
+                        cachedCloudUid = uid;
+                        window.__krishiSyncListenerInitialized__ = true;
                     }
-                    window.__krishiSyncListenerInitialized__ = true;
 
                     if (syncInProgress) return;
-                    
+
                     if (doc.metadata && doc.metadata.hasPendingWrites) {
                         return;
                     }
-                    
+
                     if (doc.exists) {
                         const cloudData = cachedCloudData;
                         syncInProgress = true;
+                        ownsSyncLock = true;
                         console.log('[Cloud Sync] Snappy silent real-time CRDT merge executing...');
                         const mergedPayload = mergeCloudAndLocalData(cloudData);
                         detectPeerChangesAndNotify(cloudData);
@@ -3195,7 +3286,7 @@ function loadData(){
                             const now = firebase.firestore.FieldValue.serverTimestamp();
                             mergedPayload.updatedAt = Date.now();
                             KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
-                            firestore.collection('users').doc(uid).set({ ...mergedPayload, updatedAt: now }, { merge: true })
+                            firestore.collection('users').doc(uid).set({ ...delta, updatedAt: now }, { merge: true })
                                 .then(() => console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud'))
                                 .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
                         } else {
@@ -3216,10 +3307,17 @@ function loadData(){
                         // the toast animation and any ongoing user interaction.
                         if (typeof krishiScheduleSyncRender === 'function') krishiScheduleSyncRender();
 
-                        syncInProgress = false;
                         window.dispatchEvent(new Event('appDataSynced'));
                     } else {
                         scheduleCloudSync('Initial sync configuration setup');
+                    }
+                    } catch (e) {
+                        // Without this, any throw in the merge left syncInProgress latched
+                        // true for the rest of the session, silently killing all sync.
+                        console.error('[Cloud Sync] Snapshot handler failed:', e);
+                        setSyncStatus('Sync failed');
+                    } finally {
+                        if (ownsSyncLock) syncInProgress = false;
                     }
                 }, err => {
                     console.error('[Cloud Sync] Listener failed:', err);
@@ -3468,6 +3566,13 @@ function loadData(){
         KrishiStorage.removeItem('krishi_last_sync_time');
         KrishiStorage.removeItem('krishi_sync_credentials_authorized');
         syncCredentialsAuthorized = false;
+        // Drop the cloud snapshot cache with the listener that fed it. Leaving it behind
+        // let a stale (or another account's) snapshot decide document existence and write
+        // paths after re-enabling sync.
+        cachedCloudData = null;
+        cachedCloudUid = null;
+        window.__krishiSyncListenerInitialized__ = false;
+        syncInProgress = false;
         updateSyncUI();
     }
 
@@ -3540,7 +3645,11 @@ function loadData(){
                                 const now = Date.now();
                                 const localDataPayload = collectAllAppData();
                                 localDataPayload.updatedAt = now;
-                                await docRef.set(localDataPayload);
+                                // merge:true — "keep local" means the user's local copy of the
+                                // conflicting collections wins, not that every cloud field the
+                                // payload happens to omit (a disabled sync toggle, a newer
+                                // schema key) gets deleted.
+                                await docRef.set(localDataPayload, { merge: true });
                                 KrishiStorage.setItem('krishi_last_updated_at', now);
                                 KrishiStorage.removeItem('krishi_sync_pending');
                                 KrishiStorage.setItem('krishi_sync_pending_count', '0');
@@ -4718,7 +4827,7 @@ function loadData(){
         document.getElementById('prac-cfg-cnt-custom').textContent = getCustomQuestions().length;
         
         // Count unattempted items
-        let loggedIds = new Set(timingLog.map(l => l.id));
+        let loggedIds = new Set(timingLog.map(l => l.qid));
         let unattemptedCount = getAllQuestions().filter(q => !loggedIds.has(q.id)).length;
         document.getElementById('prac-cfg-cnt-unattempt').textContent = unattemptedCount;
     }
@@ -4755,7 +4864,7 @@ function loadData(){
         let allQuestions = getAllQuestions();
         
         // Log attempt sets
-        let loggedIds = new Set(timingLog.map(l => l.id));
+        let loggedIds = new Set(timingLog.map(l => l.qid));
         let wrongSet = new Set(localData.wrong);
         let bkSet = new Set(localData.bookmarked);
         let customSet = new Set(getCustomQuestions().map(q => q.id));
@@ -13295,7 +13404,9 @@ document.querySelectorAll('button').forEach(btn => {
                 if(!startTime) return;
                 let timeSec = Math.round((Date.now() - startTime)/1000);
                 let today = getLocalDateString();
-                _timingLog.push({qid: qid, timeSec: timeSec, subject: subject, difficulty: difficulty, date: today, correct: isCorrect});
+                // `ts` gives each record a unique identity so the cloud merge can key on
+                // it; `date` alone is a per-day string and collapsed records together.
+                _timingLog.push({qid: qid, timeSec: timeSec, subject: subject, difficulty: difficulty, date: today, correct: isCorrect, ts: Date.now()});
                 if(_timingLog.length > 500) _timingLog.shift();
                 checkQuotaAndSave();
             },
@@ -14053,14 +14164,22 @@ ${text}`;
             payload.wrongLog = localData.wrongLog || {};
         }
         if (syncSelectiveCustom) {
-            payload.customQuestions = localData.customQuestions || [];
+            // Only ship the question bank once it is proven to reflect IndexedDB. An
+            // unhydrated or unreadable bank is [], and uploading that empty array is
+            // how the cloud copy used to get erased. Omitting the key is safe because
+            // every users/{uid} write merges.
+            if (customQuestionsHydrated && Array.isArray(localData.customQuestions)) {
+                payload.customQuestions = localData.customQuestions;
+            }
         }
         if (syncSelectiveLogs) {
             payload.streak = localData.streak || {};
             payload.stats = localData.stats || {};
             payload.achievements = localData.achievements || [];
             payload.progression = localData.progression || { xp: 0 };
-            payload.sm2 = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
+            // Omit rather than send {} — an unloaded SM2 module must not blank the
+            // cloud copy of all spaced-repetition scheduling state.
+            if (window.KrishiSM2Engine) payload.sm2 = window.KrishiSM2Engine._getData();
             
             // config data packs
             payload.examProfiles = safeJsonParse(KrishiStorage.getItem('krishi_exam_profiles'), []);
@@ -14088,31 +14207,85 @@ ${text}`;
         return payload;
     }
 
+    // Guards every incoming collection against the one pattern that destroys data:
+    // an empty (or degenerate) value arriving for a collection that is currently
+    // populated. [] is an Array and {} is an object, so a plain type check accepts
+    // them; this refuses them unless the local side is empty too.
+    function isSafeIncomingCollection(incoming, current, label) {
+        if (Array.isArray(incoming)) {
+            const currentLen = Array.isArray(current) ? current.length : 0;
+            if (incoming.length === 0 && currentLen > 0) {
+                console.warn('[Cloud Sync] Rejected empty "' + label + '" from payload; keeping ' + currentLen + ' local entries.');
+                return false;
+            }
+            return true;
+        }
+        if (incoming && typeof incoming === 'object') {
+            const incomingKeys = Object.keys(incoming).length;
+            const currentKeys = (current && typeof current === 'object') ? Object.keys(current).length : 0;
+            if (incomingKeys === 0 && currentKeys > 0) {
+                console.warn('[Cloud Sync] Rejected empty "' + label + '" from payload; keeping ' + currentKeys + ' local keys.');
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Same protection as isSafeIncomingCollection, for the collections that are stored
+    // directly in KrishiStorage instead of in localData. Array.isArray([]) is true, so
+    // the plain type checks these replaced happily overwrote a populated history with
+    // an empty one.
+    function setJSONArraySafely(key, incoming, label) {
+        if (!Array.isArray(incoming)) return;
+        if (incoming.length === 0) {
+            let currentLen = 0;
+            try {
+                const parsed = JSON.parse(KrishiStorage.getItem(key) || '[]');
+                if (Array.isArray(parsed)) currentLen = parsed.length;
+            } catch(e) { currentLen = 0; }
+            if (currentLen > 0) {
+                console.warn('[Cloud Sync] Rejected empty "' + label + '"; keeping ' + currentLen + ' stored entries.');
+                return;
+            }
+        }
+        KrishiStorage.setItem(key, JSON.stringify(incoming));
+    }
+
     function applyAllAppData(data) {
         if (!data) return;
 
         // Capture current appearance settings before overwriting (for diff check below)
         const _prevAppearanceJSON = KrishiStorage.getItem('krishi_appearance_settings') || '';
         const _prevCustomAppearanceJSON = KrishiStorage.getItem('krishi_custom_appearance_settings') || '';
-        
+
         let changed = false;
-        if (syncSelectiveBookmarks && Array.isArray(data.bookmarked)) { localData.bookmarked = data.bookmarked; changed = true; }
-        if (syncSelectiveBookmarks && data.bookmarkedLog && typeof data.bookmarkedLog === 'object') { localData.bookmarkedLog = data.bookmarkedLog; changed = true; }
-        if (syncSelectiveErrors && Array.isArray(data.wrong)) { localData.wrong = data.wrong; changed = true; }
-        if (syncSelectiveErrors && data.wrongLog && typeof data.wrongLog === 'object') { localData.wrongLog = data.wrongLog; changed = true; }
-        if (syncSelectiveCustom && Array.isArray(data.customQuestions)) { localData.customQuestions = data.customQuestions; changed = true; }
-        
+        // customQuestionsChanged is tracked separately: the IndexedDB write below is a
+        // clear-then-rewrite and must never fire just because an unrelated field changed.
+        let customQuestionsChanged = false;
+        if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarked, localData.bookmarked, 'bookmarked')) { localData.bookmarked = data.bookmarked; changed = true; }
+        if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarkedLog, localData.bookmarkedLog, 'bookmarkedLog') && !Array.isArray(data.bookmarkedLog)) { localData.bookmarkedLog = data.bookmarkedLog; changed = true; }
+        if (syncSelectiveErrors && isSafeIncomingCollection(data.wrong, localData.wrong, 'wrong')) { localData.wrong = data.wrong; changed = true; }
+        if (syncSelectiveErrors && isSafeIncomingCollection(data.wrongLog, localData.wrongLog, 'wrongLog') && !Array.isArray(data.wrongLog)) { localData.wrongLog = data.wrongLog; changed = true; }
+        // The question bank is only replaced once the local copy is hydrated, so an
+        // unhydrated [] can never be "confirmed" as the new truth.
+        if (syncSelectiveCustom && customQuestionsHydrated && isSafeIncomingCollection(data.customQuestions, localData.customQuestions, 'customQuestions')) {
+            localData.customQuestions = data.customQuestions;
+            changed = true;
+            customQuestionsChanged = true;
+        }
+
         if (syncSelectiveLogs) {
-            if (data.streak && typeof data.streak === 'object') { localData.streak = data.streak; changed = true; }
-            if (data.stats && typeof data.stats === 'object') { 
-                localData.stats = data.stats; 
+            if (isSafeIncomingCollection(data.streak, localData.streak, 'streak') && !Array.isArray(data.streak)) { localData.streak = data.streak; changed = true; }
+            if (isSafeIncomingCollection(data.stats, localData.stats, 'stats') && !Array.isArray(data.stats)) {
+                localData.stats = data.stats;
                 KrishiStorage.setItem('krishi_stats_baseline', JSON.stringify(data.stats));
-                changed = true; 
+                changed = true;
             }
-            if (Array.isArray(data.achievements)) { localData.achievements = data.achievements; changed = true; }
-            if (data.progression && typeof data.progression === 'object') { localData.progression = data.progression; changed = true; }
-            
-            if (data.sm2 && typeof data.sm2 === 'object') {
+            if (isSafeIncomingCollection(data.achievements, localData.achievements, 'achievements')) { localData.achievements = data.achievements; changed = true; }
+            if (isSafeIncomingCollection(data.progression, localData.progression, 'progression') && !Array.isArray(data.progression)) { localData.progression = data.progression; changed = true; }
+
+            if (data.sm2 && typeof data.sm2 === 'object' && Object.keys(data.sm2).length > 0) {
                 if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
                 changed = true;
             }
@@ -14144,8 +14317,11 @@ ${text}`;
                 }
             });
             
-            // Write custom questions to IndexedDB asynchronously
-            if (syncSelectiveCustom && localData.customQuestions && Array.isArray(localData.customQuestions)) {
+            // Write custom questions to IndexedDB asynchronously.
+            // Only when the payload actually carried questions (customQuestionsChanged) —
+            // saveAll() clears the store first, so firing it on an unrelated bookmark
+            // change used to rewrite the whole bank from possibly-stale memory.
+            if (syncSelectiveCustom && customQuestionsChanged && customQuestionsHydrated && Array.isArray(localData.customQuestions)) {
                 KrishiDB.saveAll(localData.customQuestions)
                     .then(() => console.log('[IndexedDB] Custom questions saved successfully.'))
                     .catch(err => console.error('[IndexedDB] Custom questions save failed:', err));
@@ -14154,15 +14330,15 @@ ${text}`;
         
         if (syncSelectiveLogs) {
             // Save extra config lists
-            if (Array.isArray(data.examProfiles)) KrishiStorage.setItem('krishi_exam_profiles', JSON.stringify(data.examProfiles));
+            if (Array.isArray(data.examProfiles)) setJSONArraySafely('krishi_exam_profiles', data.examProfiles, 'examProfiles');
             if (data.homeSettings) KrishiStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
             if (data.appearanceSettings) KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
             if (data.customAppearanceSettings) KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
             if (data.plannerSettings) KrishiStorage.setItem('krishi_planner_settings', JSON.stringify(data.plannerSettings));
-            if (Array.isArray(data.syllabusCustom)) KrishiStorage.setItem('krishi_syllabus_custom', JSON.stringify(data.syllabusCustom));
-            if (Array.isArray(data.timingLog)) KrishiStorage.setItem('krishi_timingLog', JSON.stringify(data.timingLog));
-            if (Array.isArray(data.mockScores)) KrishiStorage.setItem('krishi_mockScores', JSON.stringify(data.mockScores));
-            if (Array.isArray(data.practiceRecent)) KrishiStorage.setItem('krishi_practice_recent', JSON.stringify(data.practiceRecent));
+            setJSONArraySafely('krishi_syllabus_custom', data.syllabusCustom, 'syllabusCustom');
+            setJSONArraySafely('krishi_timingLog', data.timingLog, 'timingLog');
+            setJSONArraySafely('krishi_mockScores', data.mockScores, 'mockScores');
+            setJSONArraySafely('krishi_practice_recent', data.practiceRecent, 'practiceRecent');
             
             if (data.soundEnabled !== undefined && data.soundEnabled !== null) KrishiStorage.setItem('krishi_sound_enabled', data.soundEnabled);
             if (data.soundMuted !== undefined && data.soundMuted !== null) KrishiStorage.setItem('krishi_sound_muted', data.soundMuted);
@@ -14223,20 +14399,27 @@ ${text}`;
     }
 
     function mergeCloudAndLocalData(cloud) {
-        if (cloud.isCompressed && typeof LZString !== 'undefined') {
-            try {
-                if (typeof cloud.timingLog === 'string') cloud.timingLog = JSON.parse(LZString.decompressFromUTF16(cloud.timingLog) || '[]');
-            } catch (e) { 
-                console.error('[Sync] Decompression failed for timingLog', e);
-                cloud.timingLog = [];
+        cloud = cloud || {};
+        // Normalize the compressed fields BEFORE anything reads them, and do it on the
+        // field's actual type rather than on the isCompressed flag (which can be stale).
+        // If a compressed field cannot be decoded we abort the whole merge: letting a
+        // string reach .forEach() below threw an uncaught TypeError that latched
+        // syncInProgress and silently killed sync for the rest of the session, and
+        // substituting [] would push the local copy over the cloud's real history.
+        ['timingLog', 'mockScores'].forEach(field => {
+            if (typeof cloud[field] === 'string') {
+                if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
+                    throw new Error('[Sync] Cannot read compressed ' + field + ': LZString unavailable. Sync skipped to protect existing history.');
+                }
+                try {
+                    cloud[field] = JSON.parse(LZString.decompressFromUTF16(cloud[field]) || '[]');
+                } catch (e) {
+                    console.error('[Sync] Decompression failed for ' + field, e);
+                    throw new Error('[Sync] Corrupt compressed ' + field + '. Sync skipped to protect existing history.');
+                }
             }
-            try {
-                if (typeof cloud.mockScores === 'string') cloud.mockScores = JSON.parse(LZString.decompressFromUTF16(cloud.mockScores) || '[]');
-            } catch (e) { 
-                console.error('[Sync] Decompression failed for mockScores', e);
-                cloud.mockScores = [];
-            }
-        }
+            if (!Array.isArray(cloud[field])) cloud[field] = [];
+        });
 
         let local = collectAllAppData();
         let merged = {};
@@ -14264,7 +14447,9 @@ ${text}`;
         Object.entries(mergedBmLog).forEach(([qid, info]) => {
             const typedId = isNaN(Number(qid)) ? qid : Number(qid);
             if (info && info.action === 'add') rawBms.add(typedId);
-            else if (info && info.action === 'remove') rawBms.delete(typedId);
+            // Object keys are always strings, so the id may be stored as either type in
+            // the arrays. Delete both forms or the un-bookmark never takes effect.
+            else if (info && info.action === 'remove') { rawBms.delete(typedId); rawBms.delete(qid); }
         });
         merged.bookmarkedLog = mergedBmLog;
         merged.bookmarked = Array.from(rawBms);
@@ -14275,7 +14460,7 @@ ${text}`;
         Object.entries(mergedWrLog).forEach(([qid, info]) => {
             const typedId = isNaN(Number(qid)) ? qid : Number(qid);
             if (info && info.action === 'add') rawWrongs.add(typedId);
-            else if (info && info.action === 'remove') rawWrongs.delete(typedId);
+            else if (info && info.action === 'remove') { rawWrongs.delete(typedId); rawWrongs.delete(qid); }
         });
         merged.wrongLog = mergedWrLog;
         merged.wrong = Array.from(rawWrongs);
@@ -14285,14 +14470,18 @@ ${text}`;
         // Merge Stats using Delta Counters to prevent Offline Data Loss
         let baselineStats = {};
         try { baselineStats = JSON.parse(KrishiStorage.getItem('krishi_stats_baseline') || '{}'); } catch(e){}
+        // When the cloud has no stats it has nothing to contribute. Because
+        // applyAllAppData() writes the applied stats back AS the baseline, in steady
+        // state baseline === local, so the delta arithmetic below would evaluate to
+        // 0 + max(0, local - local) = 0 and zero out the user's totals.
+        if (!cloud.stats || typeof cloud.stats !== 'object') {
+            merged.stats = local.stats || { totalSolved: 0, totalCorrect: 0, subjectStats: {} };
+        } else {
         merged.stats = {
             totalSolved: (cloud.stats?.totalSolved || 0) + Math.max(0, (local.stats?.totalSolved || 0) - (baselineStats.totalSolved || 0)),
             totalCorrect: (cloud.stats?.totalCorrect || 0) + Math.max(0, (local.stats?.totalCorrect || 0) - (baselineStats.totalCorrect || 0)),
             streakDays: Math.max(local.stats?.streakDays || 0, cloud.stats?.streakDays || 0),
             subjectStats: {}
-        };
-        merged.progression = {
-            xp: Math.max(local.progression?.xp || 0, cloud.progression?.xp || 0)
         };
         let allSubjects = new Set([...Object.keys(local.stats?.subjectStats || {}), ...Object.keys(cloud.stats?.subjectStats || {})]);
         allSubjects.forEach(sub => {
@@ -14304,6 +14493,13 @@ ${text}`;
                 correct: cSub.correct + Math.max(0, lSub.correct - bSub.correct)
             };
         });
+        // A merge must never reduce a lifetime counter.
+        merged.stats.totalSolved = Math.max(merged.stats.totalSolved, local.stats?.totalSolved || 0, cloud.stats?.totalSolved || 0);
+        merged.stats.totalCorrect = Math.max(merged.stats.totalCorrect, local.stats?.totalCorrect || 0, cloud.stats?.totalCorrect || 0);
+        }
+        merged.progression = {
+            xp: Math.max(local.progression?.xp || 0, cloud.progression?.xp || 0)
+        };
 
         // 🧠 Helper function for Deep Field-Level Merging of Custom Questions (Feature 3)
         function deepMergeCustomQuestion(localQ, cloudQ) {
@@ -14327,14 +14523,27 @@ ${text}`;
 
         // Custom Questions merge - Deep Merge Field-Level (CRDT/LWW)
         let questionMap = new Map();
-        (cloud.customQuestions || []).forEach(q => { if (q && q.id) questionMap.set(q.id, q); });
+        // Fall back to a content-derived key so a question with a missing/falsy id is
+        // kept instead of being silently dropped out of the merge result.
+        const qKey = q => (q.id !== undefined && q.id !== null && q.id !== '')
+            ? 'id:' + q.id
+            : 'anon:' + JSON.stringify([q.question || '', q.options || '', q.subject || '']);
+        (cloud.customQuestions || []).forEach(q => { if (q) questionMap.set(qKey(q), q); });
         (local.customQuestions || []).forEach(q => {
-            if (q && q.id) {
-                const cloudQ = questionMap.get(q.id);
-                questionMap.set(q.id, deepMergeCustomQuestion(q, cloudQ));
+            if (q) {
+                const k = qKey(q);
+                questionMap.set(k, deepMergeCustomQuestion(q, questionMap.get(k)));
             }
         });
         merged.customQuestions = Array.from(questionMap.values());
+
+        // A union can never legitimately hold fewer items than either input. If it does,
+        // the merge is unsound — refuse rather than hand a shrunken bank to the writers.
+        const _cqExpected = Math.max((local.customQuestions || []).length, (cloud.customQuestions || []).length);
+        if (merged.customQuestions.length < _cqExpected) {
+            throw new Error('[Sync] Custom-question merge produced ' + merged.customQuestions.length +
+                ' of at least ' + _cqExpected + ' expected; aborting sync to protect the question bank.');
+        }
 
         // Streak merging - Date-map union
         const mergedStreak = { ...(cloud.streak || {}), ...(local.streak || {}) };
@@ -14376,32 +14585,47 @@ ${text}`;
         localSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
         merged.syllabusCustom = Array.from(syllabusMap.values());
         
-        // Study Logs (timingLog) merging - Unique by timestamp/date
+        // Study Logs (timingLog) merging.
+        // Records are {qid, timeSec, subject, difficulty, date, correct} — there is no
+        // `timestamp` and `date` is a per-DAY string, so the previous key
+        // (log.timestamp || log.date) collapsed every question solved on the same day
+        // into a single record and wrote that loss back to the device and the cloud.
+        // Key on the full record content instead (plus `ts` on newly created records).
         let localTimeLog = local.timingLog || [];
         let cloudTimeLog = cloud.timingLog || [];
+        const logKey = log => (log.ts !== undefined && log.ts !== null)
+            ? 'ts:' + log.ts
+            : 'c:' + [log.qid, log.date, log.timeSec, log.subject, log.difficulty, log.correct ? 1 : 0].join('|');
+        const logTime = log => {
+            if (typeof log.ts === 'number') return log.ts;
+            if (typeof log.timestamp === 'number') return log.timestamp;
+            const parsed = log.date ? Date.parse(log.date) : NaN;
+            return isNaN(parsed) ? 0 : parsed;
+        };
         let logMap = new Map();
-        cloudTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
-        localTimeLog.forEach(log => { if (log) logMap.set(log.timestamp || log.date, log); });
+        cloudTimeLog.forEach(log => { if (log) logMap.set(logKey(log), log); });
+        localTimeLog.forEach(log => { if (log) logMap.set(logKey(log), log); });
         merged.timingLog = Array.from(logMap.values())
-            .sort((a,b) => (b.timestamp||b.date||0) - (a.timestamp||a.date||0))
+            .sort((a, b) => logTime(b) - logTime(a))
             .slice(0, 2000); // Prevent unbounded growth in Firebase 1MB doc
 
-        // Mock Scores merging - Unique by id/timestamp
-        let localMockScores = local.mockScores || [];
-        let cloudMockScores = cloud.mockScores || [];
-        let mockMap = new Map();
-        cloudMockScores.forEach(score => { if (score) mockMap.set(score.id || score.timestamp, score); });
-        localMockScores.forEach(score => { if (score) mockMap.set(score.id || score.timestamp, score); });
-        merged.mockScores = Array.from(mockMap.values())
-            .sort((a,b) => (b.timestamp||0) - (a.timestamp||0))
-            .slice(0, 20); // Cap to latest 20 mock scores
+        // Mock Scores merging.
+        // Entries are plain numbers (KrishiStorageManager.recordMockScore pushes an
+        // accuracy value), so `score.id || score.timestamp` was undefined for every
+        // element and the Map collapsed the whole history into one value. Numbers carry
+        // no identity, so merge by keeping the longer history — this is monotone and can
+        // never shrink the record, which is what actually destroyed data.
+        let localMockScores = Array.isArray(local.mockScores) ? local.mockScores : [];
+        let cloudMockScores = Array.isArray(cloud.mockScores) ? cloud.mockScores : [];
+        merged.mockScores = (localMockScores.length >= cloudMockScores.length ? localMockScores : cloudMockScores).slice(-20);
 
         // Practice Recent merging - Unique by timestamp, sorted, keep latest 50
         let localPracticeRecent = local.practiceRecent || [];
         let cloudPracticeRecent = cloud.practiceRecent || [];
         let recentMap = new Map();
-        cloudPracticeRecent.forEach(item => { if (item) recentMap.set(item.id || item.timestamp, item); });
-        localPracticeRecent.forEach(item => { if (item) recentMap.set(item.id || item.timestamp, item); });
+        const recentKey = (item, i) => (item.id ?? item.timestamp ?? ('c:' + JSON.stringify(item)));
+        cloudPracticeRecent.forEach((item, i) => { if (item) recentMap.set(recentKey(item, i), item); });
+        localPracticeRecent.forEach((item, i) => { if (item) recentMap.set(recentKey(item, i), item); });
         merged.practiceRecent = Array.from(recentMap.values()).sort((a,b) => (b.timestamp||0) - (a.timestamp||0)).slice(0, 50);
 
         // For audio and interface configs, use Last Write Wins
@@ -14497,6 +14721,19 @@ ${text}`;
         }
     }
 
+    // Firestore hard-limits a document to 1 MiB. Refuse an oversized write rather than
+    // let it fail and leave the user believing their data is backed up.
+    const FIRESTORE_DOC_SOFT_LIMIT = 900 * 1024;
+    function assertPayloadFits(payload, label) {
+        let size = 0;
+        try { size = JSON.stringify(payload).length; } catch(e) { return; }
+        if (size > FIRESTORE_DOC_SOFT_LIMIT) {
+            throw new Error('[Sync] ' + label + ' is ' + Math.round(size / 1024) +
+                ' KB, over the ' + Math.round(FIRESTORE_DOC_SOFT_LIMIT / 1024) +
+                ' KB safe limit for one Firestore document. Sync skipped.');
+        }
+    }
+
     async function performCloudSync() {
         const uid = getCloudUID();
         if (!uid) return;
@@ -14508,30 +14745,44 @@ ${text}`;
 
         setSyncStatus('Syncing...');
 
+        let ownsSyncLock = false;
         try {
             await loadFirebaseSDKs();
             const firestore = firebase.firestore(firebaseApp);
             const docRef = firestore.collection('users').doc(uid);
-            
+
             const localDataPayload = collectAllAppData();
             const localUpdatedAt = parseInt(KrishiStorage.getItem('krishi_last_updated_at')) || 0;
 
-            let docExists = (cachedCloudData !== null);
-
-            // Fallback in case cache is not ready/initialized
-            if (!window.__krishiSyncListenerInitialized__) {
-                const doc = await docRef.get();
-                docExists = doc.exists;
-                if (docExists) {
-                    cachedCloudData = doc.data();
+            // Resolve whether the cloud document exists. The cached value is only
+            // trusted for the uid it was populated for — a stale cache from a previous
+            // account must never decide this — and `undefined` means "not known yet",
+            // which is resolved by an authoritative server read, never guessed.
+            let cloudSnapshotData = (cachedCloudUid === uid) ? cachedCloudData : undefined;
+            let absenceConfirmedByServer = false;
+            if (cloudSnapshotData === undefined) {
+                try {
+                    const doc = await docRef.get({ source: 'server' });
+                    cloudSnapshotData = doc.exists ? doc.data() : null;
+                    absenceConfirmedByServer = !doc.exists;
+                    cachedCloudData = cloudSnapshotData;
+                    cachedCloudUid = uid;
+                    window.__krishiSyncListenerInitialized__ = true;
+                } catch (e) {
+                    // A failed read means UNKNOWN, not "the cloud is empty".
+                    // navigator.onLine reports true on captive portals and data-saver
+                    // connections, so this path is reached routinely.
+                    console.warn('[Cloud Sync] Server read failed; sync deferred instead of guessing document state.', e);
+                    setSyncStatus('Sync failed');
+                    return;
                 }
-                window.__krishiSyncListenerInitialized__ = true;
             }
 
-            const currentCloudData = cachedCloudData;
+            const currentCloudData = cloudSnapshotData;
 
-            if (docExists && currentCloudData) {
+            if (currentCloudData) {
                 syncInProgress = true;
+                ownsSyncLock = true;
                 console.log('[Cloud Sync] Robust CRDT Union Merge executing...');
                 const mergedPayload = mergeCloudAndLocalData(currentCloudData);
                 applyAllAppData(mergedPayload);
@@ -14543,6 +14794,7 @@ ${text}`;
                         if (delta.mockScores) delta.mockScores = LZString.compressToUTF16(JSON.stringify(delta.mockScores));
                         delta.isCompressed = true;
                     }
+                    assertPayloadFits(delta, 'Sync delta');
                     const now = firebase.firestore.FieldValue.serverTimestamp();
                     mergedPayload.updatedAt = Date.now();
                     KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
@@ -14562,8 +14814,7 @@ ${text}`;
                 setSyncStatus('Synced');
                 updateOfflineQueueBadge();
                 if (typeof updateSyncUI === 'function') updateSyncUI();
-                syncInProgress = false;
-                
+
                 // Delegate all page refreshes to the dirty-flag + RAF dispatcher.
                 // applyAllAppData() above has already set all _krishiDirty flags.
                 // krishiScheduleSyncRender() renders only the currently active+dirty page in
@@ -14571,15 +14822,43 @@ ${text}`;
                 if (typeof krishiScheduleSyncRender === 'function') krishiScheduleSyncRender();
                 window.dispatchEvent(new Event('appDataSynced'));
             } else {
+                // Create path. Confirm the absence against the server first: a cached
+                // "missing" answer is not proof, and this branch used to replace a
+                // populated cloud document with whatever the device happened to hold.
+                // Skipped when the read above already came straight from the server.
+                if (!absenceConfirmedByServer) {
+                    let serverDoc;
+                    try {
+                        serverDoc = await docRef.get({ source: 'server' });
+                    } catch (e) {
+                        console.warn('[Cloud Sync] Could not confirm document absence with the server; initial push skipped.', e);
+                        setSyncStatus('Sync failed');
+                        return;
+                    }
+                    if (serverDoc.exists) {
+                        // It existed after all. Re-run as a merge instead of overwriting.
+                        cachedCloudData = serverDoc.data();
+                        cachedCloudUid = uid;
+                        window.__krishiSyncListenerInitialized__ = true;
+                        console.warn('[Cloud Sync] Server reports the document exists — re-running as a merge instead of a full push.');
+                        scheduleCloudSync('Document existence re-check');
+                        return;
+                    }
+                }
+
                 const now = firebase.firestore.FieldValue.serverTimestamp();
                 if (typeof LZString !== 'undefined') {
                     if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
                     if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
                     localDataPayload.isCompressed = true;
                 }
+                assertPayloadFits(localDataPayload, 'Initial full sync payload');
                 localDataPayload.updatedAt = now;
                 KrishiStorage.setItem('krishi_last_updated_at', Date.now());
-                await docRef.set(localDataPayload);
+                // merge:true even here — a concurrent writer between the get() above and
+                // this write must not be silently discarded.
+                await docRef.set(localDataPayload, { merge: true });
+                cachedCloudUid = uid;
                 logSyncActivity('Initial Full Sync completed. All local data backed up to cloud.');
                 KrishiStorage.removeItem('krishi_sync_pending');
                 KrishiStorage.setItem('krishi_sync_pending_count', '0');
@@ -14589,6 +14868,10 @@ ${text}`;
         } catch (err) {
             console.error('[Cloud Sync] Sync execution error:', err);
             setSyncStatus('Sync failed');
+        } finally {
+            // Without this, any throw above latched syncInProgress true for the rest of
+            // the session, silently disabling both this path and the snapshot listener.
+            if (ownsSyncLock) syncInProgress = false;
         }
     }
 

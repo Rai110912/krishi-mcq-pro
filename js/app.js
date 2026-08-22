@@ -3418,15 +3418,31 @@ function loadData(){
     }
     window.pairWithPin = pairWithPin;
 
+    // A session id is regenerated on every app launch, so it cannot identify a *device*:
+    // after finishing a quiz and reopening the app, the phone saw its own leftover handoff
+    // doc as a "peer" and offered to resume the quiz it had just completed. This id is
+    // persistent, so a device can always recognise its own broadcast and ignore it.
+    function getStableDeviceId() {
+        let id = KrishiStorage.getItem('krishi_device_id');
+        if (!id) {
+            id = 'dev-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
+            KrishiStorage.setItem('krishi_device_id', id);
+        }
+        return id;
+    }
+
     function listenForRemoteHandoff(uid, firestore) {
         if (window.handoffListenerUnsubscribe) {
             window.handoffListenerUnsubscribe();
         }
+        const myDeviceId = getStableDeviceId();
         window.handoffListenerUnsubscribe = firestore.collection('users').doc(uid).collection('handoff').doc('current')
             .onSnapshot(doc => {
                 if (!doc || !doc.exists) return;
                 const data = doc.data();
                 if (!data || data.sessionId === currentSessionId || !data.active) return;
+                // Ignore this device's own broadcast, whatever session it came from.
+                if (data.deviceId && data.deviceId === myDeviceId) return;
                 if (Date.now() - (data.updatedAt || 0) < 600000) {
                     renderHandoffBanner(data);
                 }
@@ -3461,6 +3477,7 @@ function loadData(){
             const firestore = firebase.firestore(firebaseApp);
             const payload = {
                 sessionId: currentSessionId,
+                deviceId: getStableDeviceId(),
                 deviceName: KrishiStorage.getItem('krishi_custom_device_name') || 'Peer Device',
                 subject: quizState.subject || (state ? state.selectedSubject : 'All Subjects') || 'Quiz',
                 questionIdx: typeof quizState.questionIdx !== 'undefined' ? quizState.questionIdx : (state ? state.currentIndex : 0),
@@ -3473,6 +3490,28 @@ function loadData(){
         } catch(e){}
     }
     window.broadcastQuizHandoff = broadcastQuizHandoff;
+
+    // renderMCQ() broadcasts `active: true` on every question, but nothing ever wrote the
+    // closing record, so the handoff doc stayed "active" forever. Every peer therefore kept
+    // offering to resume a quiz that had already been completed, and because the banner's
+    // Resume button just navigates to the practice page, tapping it replayed the finished
+    // session — the loop reported on the tablet.
+    function clearQuizHandoff() {
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return;
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            firestore.collection('users').doc(uid).collection('handoff').doc('current').set({
+                sessionId: currentSessionId,
+                deviceId: getStableDeviceId(),
+                active: false,
+                updatedAt: Date.now()
+            }, { merge: true }).catch(e => console.warn('[Handoff] Clear failed:', e));
+        } catch (e) { /* clearing is best-effort; never block finishing a quiz */ }
+        // Also drop any banner already on screen for the session that just ended.
+        if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+    }
+    window.clearQuizHandoff = clearQuizHandoff;
 
     function scheduleMidnightCloudVault() {
         const today = new Date().toISOString().split('T')[0];
@@ -3812,9 +3851,33 @@ function loadData(){
     }
     window.syncSettingsToCloud = syncSettingsToCloud;
 
+    // Per-setting write clocks.
+    //
+    // The document-level `updatedAt` cannot order an individual toggle: collectAllAppData()
+    // re-stamps it with Date.now() on every single read, so `useCloud` in
+    // mergeCloudAndLocalData() is effectively always false and the cloud could never win a
+    // scalar. That is why turning dark mode ON propagated (the peer held no value, so
+    // `local ?? cloud` had to fall through to the cloud) but turning it back OFF never did
+    // (the peer now held 'true', so local always won and re-pushed its own stale value).
+    // Each toggle therefore carries its own timestamp and merges on that clock alone.
+    const SETTING_STAMPS_KEY = 'krishi_setting_stamps';
+    function getSettingStamps() {
+        const s = safeJsonParse(KrishiStorage.getItem(SETTING_STAMPS_KEY), {});
+        return (s && typeof s === 'object' && !Array.isArray(s)) ? s : {};
+    }
+    function stampSetting(field) {
+        try {
+            const stamps = getSettingStamps();
+            stamps[field] = Date.now();
+            KrishiStorage.setItem(SETTING_STAMPS_KEY, JSON.stringify(stamps));
+        } catch (e) { /* a failed stamp must never block the setting itself */ }
+    }
+    window.stampSetting = stampSetting;
+
     function toggleDarkMode(){
         document.documentElement.classList.toggle('dark');
         KrishiStorage.setItem('krishi_dark', document.documentElement.classList.contains('dark'));
+        stampSetting('dark');
         syncSettingsToCloud('Dark mode toggled');
         if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
             applyCustomAppearanceAndLanguageSettings();
@@ -5994,6 +6057,9 @@ function loadData(){
        state.isFinishing = true;
        activePlanSequenceHTML = ''; // Clear stale recommendation plan
        clearPracticeProgress();
+       // Retire the cross-device handoff record: this session is over, so no peer should
+       // still be offering to resume it.
+       if (typeof clearQuizHandoff === 'function') { try { clearQuizHandoff(); } catch(e){} }
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
             state.perQuestionTimerInterval = null;
@@ -6352,6 +6418,20 @@ function loadData(){
         });
     }
 
+    // Subject add/remove write clocks, in the same shape as bookmarkedLog/wrongLog so
+    // mergeCRDTLogs() can order them. Without a 'remove' record the merge unions the two
+    // devices' lists and a deletion can never propagate — the peer would simply hand the
+    // subject straight back. Keyed by name because that is the subject's only identity.
+    const SUBJECT_LOG_KEY = 'krishi_custom_subjects_log';
+    function logSubjectChange(name, action) {
+        try {
+            const log = safeJsonParse(KrishiStorage.getItem(SUBJECT_LOG_KEY), {}) || {};
+            const rev = (log[name] && log[name]._rev) || 0;
+            log[name] = { action: action, timestamp: Date.now(), _rev: rev + 1 };
+            KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(log));
+        } catch (e) { /* never block the subject edit itself */ }
+    }
+
     function addSubject(){
         let input = document.getElementById('new-subject-input'); let val = input.value.trim();
         if(!val) { showToast('Subject name empty!'); return; }
@@ -6370,8 +6450,14 @@ function loadData(){
         if(getAllSubjects().includes(val)) { showToast('Duplicate names not allowed!'); return; }
         custom.push(val);
         KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        logSubjectChange(val, 'add');
         input.value = '';
         renderSubjectList();
+        // This write previously reached localStorage only. Nothing called saveData() or
+        // scheduleCloudSync(), so the new subject sat locally until some unrelated save
+        // happened to flush it — the "takes lots of time" symptom.
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+        if (typeof scheduleCloudSync === 'function') scheduleCloudSync('Subject added');
         showToast('Subject Added!');
     }
 
@@ -6390,7 +6476,10 @@ function loadData(){
         }
         custom = custom.filter(s=>s!==name);
         KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        logSubjectChange(name, 'remove');
         renderSubjectList();
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+        if (typeof scheduleCloudSync === 'function') scheduleCloudSync('Subject removed');
         showToast('Subject removed!');
     }
 
@@ -6948,6 +7037,10 @@ function loadData(){
             });
             newCustom = [...new Set(newCustom)];
             KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(newCustom));
+            // Log these as adds too. A subject removed on another device carries a 'remove'
+            // tombstone, and without a newer 'add' here the merge would keep deleting a
+            // subject that this device's questions still reference.
+            newCustom.forEach(s => logSubjectChange(s, 'add'));
             console.log('[PWA Safety] Auto-registered custom subjects:', newCustom);
             
             // Dynamic refresh of subjects UI lists
@@ -12180,6 +12273,9 @@ document.querySelectorAll('button').forEach(btn => {
         KrishiStorage.setItem('krishi_intensity_mode', intensity);
         KrishiStorage.setItem('krishi_difficulty_bias', difficultyBias);
         KrishiStorage.setItem('krishi_retry_delay', retryDelay);
+        stampSetting('intensityMode');
+        stampSetting('difficultyBias');
+        stampSetting('retryDelay');
         
         let studyHours = parseFloat(document.getElementById('planner-config-study-hours').value) || 2;
         let newRatio = parseInt(document.getElementById('planner-config-new-ratio').value) || 50;
@@ -12332,6 +12428,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.intensity = mode;
         } else {
             KrishiStorage.setItem('krishi_intensity_mode', mode);
+            stampSetting('intensityMode');
         }
         let configs = {
             relaxed: {target:20, hint:'🐢 Relaxed: 20 MCQs/day. Low pressure, steady pace.'},
@@ -12369,6 +12466,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.difficultyBias = bias;
         } else {
             KrishiStorage.setItem('krishi_difficulty_bias', bias);
+            stampSetting('difficultyBias');
         }
         let colors = {easy:'#10b981', balanced:'#f59e0b', hard:'#ef4444'};
         ['easy','balanced','hard'].forEach(b => {
@@ -12391,6 +12489,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.retryDelay = days;
         } else {
             KrishiStorage.setItem('krishi_retry_delay', days);
+            stampSetting('retryDelay');
         }
         [1,3,7].forEach(d => {
             let btn = document.getElementById('retry-' + d);
@@ -12736,6 +12835,7 @@ document.querySelectorAll('button').forEach(btn => {
     function setPlanMode(mode) {
         activePlanMode = mode;
         KrishiStorage.setItem('krishi_active_plan_mode', mode); // Persist plan mode selection (Bug 8)
+        stampSetting('activePlanMode');
         ['quick', 'normal', 'deep', 'full'].forEach(m => {
             let btn = document.getElementById('pm-tab-' + m);
             if (btn) {
@@ -14193,6 +14293,7 @@ ${text}`;
             payload.practiceRecent = safeJsonParse(KrishiStorage.getItem('krishi_practice_recent'), []);
             payload.goalSettings = safeJsonParse(KrishiStorage.getItem('krishi_goal_settings'), {});
             payload.customSubjects = safeJsonParse(KrishiStorage.getItem('krishi_custom_subjects'), []);
+            payload.customSubjectsLog = safeJsonParse(KrishiStorage.getItem(SUBJECT_LOG_KEY), {});
             payload.layoutBackups = safeJsonParse(KrishiStorage.getItem('krishi_layout_backups'), []);
             payload.lastPracticeConfig = safeJsonParse(KrishiStorage.getItem('krishi_last_practice_config'), {});
             payload.soundEnabled = KrishiStorage.getItem('krishi_sound_enabled');
@@ -14206,6 +14307,8 @@ ${text}`;
             payload.intensityMode = KrishiStorage.getItem('krishi_intensity_mode');
             payload.activePlanMode = KrishiStorage.getItem('krishi_active_plan_mode');
             payload.retryDelay = KrishiStorage.getItem('krishi_retry_delay');
+            // Per-setting write clocks travel with the settings they order.
+            payload.settingStamps = getSettingStamps();
         }
 
         if (window.currentAuthUser && window.currentAuthUser.uid) {
@@ -14367,6 +14470,14 @@ ${text}`;
             if (data.goalSettings) KrishiStorage.setItem('krishi_goal_settings', JSON.stringify(data.goalSettings));
             if (data.lastPracticeConfig) KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(data.lastPracticeConfig));
             setJSONArraySafely('krishi_custom_subjects', data.customSubjects, 'customSubjects');
+            if (data.customSubjectsLog && typeof data.customSubjectsLog === 'object') {
+                KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(data.customSubjectsLog));
+            }
+            // Persist the merged write clocks, otherwise the next merge on this device
+            // compares the incoming value against a stale stamp and flips it straight back.
+            if (data.settingStamps && typeof data.settingStamps === 'object') {
+                KrishiStorage.setItem(SETTING_STAMPS_KEY, JSON.stringify(data.settingStamps));
+            }
             setJSONArraySafely('krishi_layout_backups', data.layoutBackups, 'layoutBackups');
 
             [['hapticEnabled',  'krishi_haptic_enabled'],
@@ -14683,13 +14794,21 @@ ${text}`;
         merged.goalSettings = useCloud ? (cloud.goalSettings || local.goalSettings) : (local.goalSettings || cloud.goalSettings);
         merged.lastPracticeConfig = useCloud ? (cloud.lastPracticeConfig || local.lastPracticeConfig) : (local.lastPracticeConfig || cloud.lastPracticeConfig);
 
-        // Custom subjects and layout backups are additive lists, so they union by identity.
-        // LWW would let a device that has never seen a subject delete it for every device.
+        // Custom subjects merge through their own CRDT log, exactly like bookmarks. A plain
+        // union can only ever grow the list, so a removal on one device was silently undone
+        // by the next merge with a peer that still had it.
         const subjectKey = s => (typeof s === 'string' ? s : JSON.stringify(s));
-        const subjectMap = new Map();
-        (cloud.customSubjects || []).forEach(s => { if (s) subjectMap.set(subjectKey(s), s); });
-        (local.customSubjects || []).forEach(s => { if (s) subjectMap.set(subjectKey(s), s); });
-        merged.customSubjects = Array.from(subjectMap.values());
+        const subjectSet = new Set();
+        (cloud.customSubjects || []).forEach(s => { if (s) subjectSet.add(subjectKey(s)); });
+        (local.customSubjects || []).forEach(s => { if (s) subjectSet.add(subjectKey(s)); });
+        const mergedSubjectLog = mergeCRDTLogs(local.customSubjectsLog, cloud.customSubjectsLog);
+        Object.entries(mergedSubjectLog).forEach(([name, info]) => {
+            if (!info) return;
+            if (info.action === 'add') subjectSet.add(name);
+            else if (info.action === 'remove') subjectSet.delete(name);
+        });
+        merged.customSubjectsLog = mergedSubjectLog;
+        merged.customSubjects = Array.from(subjectSet);
 
         const layoutKey = b => ((b && (b.timestamp ?? b.id)) ?? JSON.stringify(b));
         const layoutMap = new Map();
@@ -14697,17 +14816,30 @@ ${text}`;
         (local.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
         merged.layoutBackups = Array.from(layoutMap.values());
 
-        // Scalar toggles — LWW. `dark` and `batterySaver` are collected by
-        // collectAllAppData() and applied by applyAllAppData(), but were never carried
-        // through this merge: the merged payload is what both the delta writer and the
-        // applier consume, so once the cloud document existed these two only ever moved
-        // on the initial full push and never propagated between devices again.
+        // Scalar toggles. These merge on their own per-field clock (settingStamps), NOT on
+        // the document clock: collectAllAppData() rewrites `updatedAt` to Date.now() on
+        // every read, so `useCloud` is essentially always false and the cloud side could
+        // never win. That is what stopped a dark-mode OFF from ever reaching the peer while
+        // the initial OFF->ON still appeared to work.
+        // Where neither side has a stamp yet (settings written before this existed, or
+        // toggles with no UI setter) fall back to the old document-clock behaviour.
         // Assigned only when defined — an undefined value in a Firestore write throws.
+        const localStamps = (local.settingStamps && typeof local.settingStamps === 'object') ? local.settingStamps : {};
+        const cloudStamps = (cloud.settingStamps && typeof cloud.settingStamps === 'object') ? cloud.settingStamps : {};
+        const mergedStamps = {};
         ['dark', 'batterySaver', 'hapticEnabled', 'eliteAnimations',
          'difficultyBias', 'intensityMode', 'activePlanMode', 'retryDelay'].forEach(k => {
-            const v = useCloud ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
+            const ls = Number(localStamps[k] || 0);
+            const cs = Number(cloudStamps[k] || 0);
+            let takeCloud;
+            if (cs !== ls) takeCloud = cs > ls;       // per-field clock decides
+            else takeCloud = useCloud;                 // no stamps to compare: legacy path
+            const v = takeCloud ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
             if (v !== undefined) merged[k] = v;
+            const stamp = Math.max(ls, cs);
+            if (stamp > 0) mergedStamps[k] = stamp;
         });
+        merged.settingStamps = mergedStamps;
 
         merged.updatedAt = Math.max(local.updatedAt || 0, cloudUpdatedAt);
         return merged;
@@ -14729,9 +14861,10 @@ ${text}`;
             // dark and batterySaver were missing here, so even once the merge carried them
             // the delta writer would still never have shipped a change to either.
             'dark', 'batterySaver',
-            'goalSettings', 'customSubjects', 'layoutBackups', 'lastPracticeConfig',
+            'goalSettings', 'customSubjects', 'customSubjectsLog', 'layoutBackups', 'lastPracticeConfig',
             'hapticEnabled', 'eliteAnimations', 'difficultyBias',
             'intensityMode', 'activePlanMode', 'retryDelay',
+            'settingStamps',
             'userProfile',
             'ownerUid', 'isCompressed'
         ];
@@ -15121,6 +15254,7 @@ function restoreUIStateIfCached() {
 function toggleHapticSetting() {
     let isEnabled = document.getElementById('haptic-enabled').checked;
     KrishiStorage.setItem('krishi_haptic_enabled', isEnabled);
+    stampSetting('hapticEnabled');
     if(isEnabled) {
         document.getElementById('haptic-test-area').classList.remove('hidden');
         triggerHaptic('correct'); // टोगल गर्दा सानो भाइब्रेसन दिने
@@ -16455,6 +16589,7 @@ window.toggleEliteAnimationsSetting = function() {
     if (!checkbox) return;
     let isEnabled = checkbox.checked;
     KrishiStorage.setItem('krishi_elite_animations', isEnabled ? 'true' : 'false');
+    stampSetting('eliteAnimations');
     
     let bgCanvasEl = document.getElementById('weather-ambient-canvas');
     if (bgCanvasEl) {

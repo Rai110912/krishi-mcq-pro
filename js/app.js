@@ -752,6 +752,17 @@ async function loadStaticQuestions() {
     };
 
     // Resume session logic
+    // Single source of truth for "can this saved session still be continued?". Both the
+    // save path and every restore path go through this, so a session that has run to the
+    // end can never be persisted, uploaded, or offered for resume on another device.
+    // Before this existed, a completed session was offered on the peer device and tapping
+    // the offer replayed it — which re-saved it and bounced the offer back, forever.
+    window.isResumableSession = function(session) {
+        if (!session || session.isCleared) return false;
+        if (!Array.isArray(session.questions) || session.questions.length === 0) return false;
+        return (session.currentIndex || 0) < session.questions.length;
+    };
+
     window.lastPromptedSessionKey = window.lastPromptedSessionKey || null;
     window.checkAndPromptResumeSession = function() {
         let activePage = document.querySelector('.page.active');
@@ -765,6 +776,13 @@ async function loadStaticQuestions() {
 
         function triggerPrompt(session, isCloud = false) {
             if (!session) return;
+            // A finished session must never be advertised. It used to reach here, and
+            // because questions[currentIndex] is undefined once the index has run past the
+            // end, the fallback below presented it as a fresh Q1.
+            if (!window.isResumableSession(session)) {
+                console.log('[Resumption] Ignoring a session that is already complete.');
+                return;
+            }
             
             // Generate a unique key for this session state
             let sessionKey = session.updatedAt || session.score || 0;
@@ -907,10 +925,13 @@ async function loadStaticQuestions() {
                                 }
                             }
 
-                            if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {
+                            // Test resumability, not merely "has questions". A completed
+                            // cloud session with a newer timestamp used to win here and
+                            // shadow a local session that really could be continued.
+                            if (cloudTime > localTime && window.isResumableSession(cloudSession)) {
                                 console.log('[Resumption] Resolving to cloud active session progress.');
                                 triggerPrompt(cloudSession, true);
-                            } else if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                            } else if (window.isResumableSession(localSessionObj)) {
                                 console.log('[Resumption] Resolving to local active session progress (newer).');
                                 triggerPrompt(localSessionObj, false);
                             }
@@ -3440,11 +3461,25 @@ function loadData(){
             .onSnapshot(doc => {
                 if (!doc || !doc.exists) return;
                 const data = doc.data();
-                if (!data || data.sessionId === currentSessionId || !data.active) return;
+                if (!data) return;
+                // The broadcasting device retired the session (finishSession -> clearQuizHandoff
+                // writes active:false). Tear down any banner still on screen instead of just
+                // ignoring the update, otherwise a banner rendered while the quiz was live
+                // lingers after it finished and its Resume button replays the done session.
+                if (!data.active || data.sessionId === currentSessionId) {
+                    if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+                    return;
+                }
                 // Ignore this device's own broadcast, whatever session it came from.
-                if (data.deviceId && data.deviceId === myDeviceId) return;
+                if (data.deviceId && data.deviceId === myDeviceId) {
+                    if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+                    return;
+                }
                 if (Date.now() - (data.updatedAt || 0) < 600000) {
                     renderHandoffBanner(data);
+                } else if (typeof window.dismissHandoffBanner === 'function') {
+                    // Stale broadcast (older than 10 min) — make sure no old banner survives.
+                    window.dismissHandoffBanner();
                 }
             }, err => console.warn('[Handoff] Listener error:', err));
     }
@@ -16232,6 +16267,15 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
 // एकीकृत सुरक्षित अभ्यास प्रोग्रेस सेभर (Unified Secure Practice Progress Saver)
 function savePracticeProgress() {
     try {
+        // A session that has ended must never be persisted again. finishSession() clears the
+        // saved-practice record and then calls saveData(), and saveData() calls back into
+        // this function — so without these two guards the finished session was written
+        // straight back over its own tombstone, both locally and (via the debounce below)
+        // to Firestore. That resurrected record is what the other device then offered as a
+        // "live session on peer device", and resuming it re-saved it, looping forever.
+        if (state && state.isFinishing) return;
+        if (state && state.questions && state.currentIndex >= state.questions.length) return;
+
         if (state && state.questions && state.questions.length > 0 && !state.answered) {
             // Abort saving if it's a completely fresh, untouched session (0% progress)
             // This prevents "ghost popups" from appearing if the user accidentally clicks a subject and leaves immediately.
@@ -16330,6 +16374,14 @@ function savePracticeProgress() {
 // २. सुरक्षित राखिएको अधुरो अभ्यासलाई हटाउने फङ्सन
 function clearPracticeProgress() {
     try {
+        // Cancel any autosave that savePracticeProgress() scheduled but has not yet flushed.
+        // That write is debounced 3000ms; if it fires after we set the tombstone below it
+        // re-uploads the full (now finished) session and undoes the clear — the exact race
+        // that made a completed session reappear as "live on peer device".
+        if (window.cloudSavePracticeTimeout) {
+            clearTimeout(window.cloudSavePracticeTimeout);
+            window.cloudSavePracticeTimeout = null;
+        }
         KrishiStorage.setItem('krishi_local_session_tombstone', Date.now());
         KrishiStorage.removeItem('krishi_saved_practice');
         

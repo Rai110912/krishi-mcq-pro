@@ -2,6 +2,9 @@
 node_modules/
 npm-debug.log*
 
+# Logs (regenerated on every run; only useful right after a failure)
+*.log
+
 # Capacitor
 android/.gradle/
 android/app/build/

@@ -14191,11 +14191,21 @@ ${text}`;
             payload.timingLog = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []);
             payload.mockScores = safeJsonParse(KrishiStorage.getItem('krishi_mockScores'), []);
             payload.practiceRecent = safeJsonParse(KrishiStorage.getItem('krishi_practice_recent'), []);
+            payload.goalSettings = safeJsonParse(KrishiStorage.getItem('krishi_goal_settings'), {});
+            payload.customSubjects = safeJsonParse(KrishiStorage.getItem('krishi_custom_subjects'), []);
+            payload.layoutBackups = safeJsonParse(KrishiStorage.getItem('krishi_layout_backups'), []);
+            payload.lastPracticeConfig = safeJsonParse(KrishiStorage.getItem('krishi_last_practice_config'), {});
             payload.soundEnabled = KrishiStorage.getItem('krishi_sound_enabled');
             payload.soundMuted = KrishiStorage.getItem('krishi_sound_muted');
             payload.soundVolume = KrishiStorage.getItem('krishi_sound_volume');
             payload.dark = KrishiStorage.getItem('krishi_dark');
             payload.batterySaver = KrishiStorage.getItem('krishi_battery_saver');
+            payload.hapticEnabled = KrishiStorage.getItem('krishi_haptic_enabled');
+            payload.eliteAnimations = KrishiStorage.getItem('krishi_elite_animations');
+            payload.difficultyBias = KrishiStorage.getItem('krishi_difficulty_bias');
+            payload.intensityMode = KrishiStorage.getItem('krishi_intensity_mode');
+            payload.activePlanMode = KrishiStorage.getItem('krishi_active_plan_mode');
+            payload.retryDelay = KrishiStorage.getItem('krishi_retry_delay');
         }
 
         if (window.currentAuthUser && window.currentAuthUser.uid) {
@@ -14353,6 +14363,22 @@ ${text}`;
             if (data.batterySaver !== undefined && data.batterySaver !== null) {
                 KrishiStorage.setItem('krishi_battery_saver', data.batterySaver);
             }
+
+            if (data.goalSettings) KrishiStorage.setItem('krishi_goal_settings', JSON.stringify(data.goalSettings));
+            if (data.lastPracticeConfig) KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(data.lastPracticeConfig));
+            setJSONArraySafely('krishi_custom_subjects', data.customSubjects, 'customSubjects');
+            setJSONArraySafely('krishi_layout_backups', data.layoutBackups, 'layoutBackups');
+
+            [['hapticEnabled',  'krishi_haptic_enabled'],
+             ['eliteAnimations','krishi_elite_animations'],
+             ['difficultyBias', 'krishi_difficulty_bias'],
+             ['intensityMode',  'krishi_intensity_mode'],
+             ['activePlanMode', 'krishi_active_plan_mode'],
+             ['retryDelay',     'krishi_retry_delay']].forEach(([field, key]) => {
+                if (data[field] !== undefined && data[field] !== null) {
+                    KrishiStorage.setItem(key, data[field]);
+                }
+            });
         }
         
         // Reload state into active memory (no DOM involvement)
@@ -14653,6 +14679,36 @@ ${text}`;
         merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
         merged.soundVolume = useCloud ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
 
+        // Object config packs — same document-clock LWW as the interface configs above.
+        merged.goalSettings = useCloud ? (cloud.goalSettings || local.goalSettings) : (local.goalSettings || cloud.goalSettings);
+        merged.lastPracticeConfig = useCloud ? (cloud.lastPracticeConfig || local.lastPracticeConfig) : (local.lastPracticeConfig || cloud.lastPracticeConfig);
+
+        // Custom subjects and layout backups are additive lists, so they union by identity.
+        // LWW would let a device that has never seen a subject delete it for every device.
+        const subjectKey = s => (typeof s === 'string' ? s : JSON.stringify(s));
+        const subjectMap = new Map();
+        (cloud.customSubjects || []).forEach(s => { if (s) subjectMap.set(subjectKey(s), s); });
+        (local.customSubjects || []).forEach(s => { if (s) subjectMap.set(subjectKey(s), s); });
+        merged.customSubjects = Array.from(subjectMap.values());
+
+        const layoutKey = b => ((b && (b.timestamp ?? b.id)) ?? JSON.stringify(b));
+        const layoutMap = new Map();
+        (cloud.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
+        (local.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
+        merged.layoutBackups = Array.from(layoutMap.values());
+
+        // Scalar toggles — LWW. `dark` and `batterySaver` are collected by
+        // collectAllAppData() and applied by applyAllAppData(), but were never carried
+        // through this merge: the merged payload is what both the delta writer and the
+        // applier consume, so once the cloud document existed these two only ever moved
+        // on the initial full push and never propagated between devices again.
+        // Assigned only when defined — an undefined value in a Firestore write throws.
+        ['dark', 'batterySaver', 'hapticEnabled', 'eliteAnimations',
+         'difficultyBias', 'intensityMode', 'activePlanMode', 'retryDelay'].forEach(k => {
+            const v = useCloud ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
+            if (v !== undefined) merged[k] = v;
+        });
+
         merged.updatedAt = Math.max(local.updatedAt || 0, cloudUpdatedAt);
         return merged;
     }
@@ -14670,6 +14726,12 @@ ${text}`;
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
             'timingLog', 'mockScores', 'practiceRecent',
             'soundEnabled', 'soundMuted', 'soundVolume',
+            // dark and batterySaver were missing here, so even once the merge carried them
+            // the delta writer would still never have shipped a change to either.
+            'dark', 'batterySaver',
+            'goalSettings', 'customSubjects', 'layoutBackups', 'lastPracticeConfig',
+            'hapticEnabled', 'eliteAnimations', 'difficultyBias',
+            'intensityMode', 'activePlanMode', 'retryDelay',
             'userProfile',
             'ownerUid', 'isCompressed'
         ];

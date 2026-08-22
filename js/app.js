@@ -2663,9 +2663,16 @@ function loadData(){
 
     // Single greeting builder shared by Home, the sidebar and Profile (no duplicated logic)
     function getGreetingText(username) {
-        const appearance = getAppearanceSettings();
-        if (appearance.greetingLanguage === 'nepali') return `नमस्ते, ${username}`;
-        if (appearance.greetingLanguage === 'sanskrit') return `शुभमस्तु, ${username}`;
+        /* Language lives in ONE place now (see getCanonicalLanguageValue): the
+           customizer's languageMode drives the UI labels and this greeting
+           together. 'custom' has no greeting of its own, so it keeps using the
+           older Appearance-tab dialect — as does any install that has never saved
+           the customizer, which is why existing users see no change. */
+        let lang = getCanonicalLanguageValue();
+        if (lang === 'custom') lang = getAppearanceSettings().greetingLanguage || 'nepali';
+        if (lang === 'nepali') return `नमस्ते, ${username}`;
+        if (lang === 'sanskrit') return `शुभमस्तु, ${username}`;
+        if (lang === 'mixed') return `नमस्ते (Welcome), ${username}`;
         return `Welcome back, ${username}`;
     }
 
@@ -9619,6 +9626,82 @@ function openEditImportModal(idx) {
         }
     }
 
+    /* ── ONE source of truth for corners / density / language ────────────────
+       These three settings used to exist twice: here (Settings → Appearance,
+       key krishi_appearance_settings) and in Home → Customize → Appearance &
+       Language (key krishi_custom_appearance_settings), so the two panels could
+       disagree and the last one saved silently won.
+
+       The customizer key is now the canonical one, and this tab is a second view
+       onto the same values. The maps below translate the older vocabulary
+       (small/medium/large, balanced density) into the canonical steps, so an
+       install saved before this change keeps the exact look it already had. */
+    const LEGACY_RADIUS_TO_CORNERS = { small: 'sharp', medium: 'balanced', large: 'round' };
+    const LEGACY_DENSITY_TO_CANON  = { compact: 'compact', balanced: 'comfortable', detailed: 'spacious' };
+
+    // True once the customizer has been saved at least once on this device.
+    // Until then every canonical read falls back to the older Appearance-tab
+    // value, so existing installs see zero change.
+    function hasCustomAppearanceKey() {
+        return !!KrishiStorage.getItem('krishi_custom_appearance_settings');
+    }
+
+    function getCanonicalCornerValue() {
+        let steps = SURFACE_STYLE_OPTIONS.cardCorners.steps;
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().cardCorners;
+            if (steps.indexOf(v) !== -1) return v;
+        }
+        let legacy = getAppearanceSettings().cardRadius;
+        if (steps.indexOf(legacy) !== -1) return legacy;
+        return LEGACY_RADIUS_TO_CORNERS[legacy] || SURFACE_STYLE_OPTIONS.cardCorners.fallback;
+    }
+
+    function getCanonicalDensityValue() {
+        let steps = SURFACE_STYLE_OPTIONS.layoutDensity.steps;
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().layoutDensity;
+            if (steps.indexOf(v) !== -1) return v;
+        }
+        // Older installs only stored the compact on/off flag used by the widgets.
+        return getHomeSettings().compact ? 'compact'
+                                        : (LEGACY_DENSITY_TO_CANON.balanced || SURFACE_STYLE_OPTIONS.layoutDensity.fallback);
+    }
+
+    function getCanonicalLanguageValue() {
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().languageMode;
+            if (v) return v;
+        }
+        return getAppearanceSettings().greetingLanguage || 'nepali';
+    }
+
+    /* Read-modify-write of the shared customizer key: only the listed keys move,
+       every other customizer value (fonts, colours, custom labels) is preserved. */
+    function patchCustomAppearanceValues(patch) {
+        let settings = getCustomAppearanceAndLangSettings();
+        for (let key in patch) settings[key] = patch[key];
+        KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
+        if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
+            applyCustomAppearanceAndLanguageSettings();
+        }
+    }
+
+    // Set a <select> only to a value it actually offers, so a legacy or unknown
+    // value can never leave the control blank.
+    function setSelectSafe(id, value, fallback) {
+        let el = document.getElementById(id);
+        if (!el) return;
+        let has = Array.prototype.some.call(el.options, function(o) { return o.value === value; });
+        el.value = has ? value : fallback;
+    }
+
+    /* Both appearance forms populate lazily, only when their customizer tab is
+       opened (switchCustomizerTab → loadAppearance*TabForm). These flags record
+       that, so the shared corner / density / language values are never written
+       from a form that is still holding its markup defaults. */
+    let appearanceFormsPopulated = { appearance: false, appearanceLang: false };
+
     // Apply specific classes of the appearance preset configurations
     function saveAppearanceSettings(settings) {
         KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
@@ -9633,18 +9716,21 @@ function openEditImportModal(idx) {
         body.classList.remove('theme-classic', 'theme-minimal', 'theme-pro', 'theme-focus');
         body.classList.add('theme-' + (settings.themeStyle || 'classic'));
 
-        // Overriding custom CSS root variables for border radius
-        let rVal = "16px";
-        let rSmVal = "10px";
-        if (settings.cardRadius === 'small') {
-            rVal = "6px"; rSmVal = "4px";
-        } else if (settings.cardRadius === 'medium') {
-            rVal = "16px"; rSmVal = "10px";
-        } else if (settings.cardRadius === 'large') {
-            rVal = "28px"; rSmVal = "18px";
-        }
-        document.documentElement.style.setProperty('--radius', rVal);
-        document.documentElement.style.setProperty('--radius-sm', rSmVal);
+        /* Border radius. The five steps are the same px pairs the ui-corner-*
+           rules in index.css declare, so the inline value on <html> (which the
+           older code path still writes) and the body class can never disagree.
+           The step itself comes from the canonical corner setting, i.e. from
+           whichever of the two panels the user saved last. */
+        const CORNER_RADIUS_PX = {
+            sharp:    ['8px',  '6px'],
+            subtle:   ['13px', '8px'],
+            balanced: ['18px', '10px'],
+            soft:     ['24px', '14px'],
+            round:    ['28px', '18px']
+        };
+        let rPair = CORNER_RADIUS_PX[getCanonicalCornerValue()] || CORNER_RADIUS_PX.balanced;
+        document.documentElement.style.setProperty('--radius', rPair[0]);
+        document.documentElement.style.setProperty('--radius-sm', rPair[1]);
 
         // Animation rules (animation-duration / transitions multipliers)
         if (settings.animationIntensity === 'off') {
@@ -9660,17 +9746,27 @@ function openEditImportModal(idx) {
 
     function loadAppearanceTabForm() {
         let s = getAppearanceSettings();
-        document.getElementById('app-density').value = getHomeSettings().compact ? 'compact' : 'balanced';
+        // Corners, density and language are shared with Home → Customize →
+        // Appearance & Language, so they are read through the canonical resolvers.
+        setSelectSafe('app-density', getCanonicalDensityValue(), 'comfortable');
+        setSelectSafe('app-radius', getCanonicalCornerValue(), 'balanced');
+        setSelectSafe('app-language', getCanonicalLanguageValue(), 'nepali');
         document.getElementById('app-theme').value = s.themeStyle || 'classic';
-        document.getElementById('app-radius').value = s.cardRadius || 'medium';
-        document.getElementById('app-language').value = s.greetingLanguage || 'nepali';
         document.getElementById('app-animations').value = s.animationIntensity || 'medium';
         document.getElementById('app-opt-mquote').checked = s.showMQuote !== false;
         document.getElementById('app-opt-agri').checked = s.showAgriQuote !== false;
         document.getElementById('app-opt-panims').checked = s.showProgressAnims !== false;
+        appearanceFormsPopulated.appearance = true;
     }
 
     function saveAppearanceFromForm() {
+        /* Both appearance forms populate lazily, so a form whose tab was never
+           opened still holds its markup defaults — nothing in it can be a user
+           choice. Writing it would silently reset saved values (this is what used
+           to flip Animations back to "Off" when Save was pressed from the Widgets
+           tab), so an unopened form is skipped instead. */
+        if (!appearanceFormsPopulated.appearance) return;
+
         let denseVal = document.getElementById('app-density').value;
         let themeVal = document.getElementById('app-theme').value;
         let radiusVal = document.getElementById('app-radius').value;
@@ -9684,11 +9780,26 @@ function openEditImportModal(idx) {
         homeSettings.compact = (denseVal === 'compact');
         saveHomeSettings(homeSettings);
 
+        /* Push the three shared values into the canonical customizer key, so the
+           other panel shows the same thing. */
+        patchCustomAppearanceValues({
+            cardCorners: radiusVal,
+            layoutDensity: denseVal,
+            languageMode: langVal
+        });
+
+        /* "Custom Labels Mode" has no greeting of its own, so the older dialect
+           is kept instead of being overwritten with the word "custom" — that way
+           the greeting stays as it was while the user edits UI strings. */
+        let greetVal = (langVal === 'custom')
+            ? (getAppearanceSettings().greetingLanguage || 'nepali')
+            : langVal;
+
         let s = {
             themeStyle: themeVal,
             animationIntensity: animVal,
             cardRadius: radiusVal,
-            greetingLanguage: langVal,
+            greetingLanguage: greetVal,
             quickActionLayout: 'grid',
             showMQuote: mquoteVal,
             showAgriQuote: agriVal,
@@ -9981,7 +10092,16 @@ function openEditImportModal(idx) {
         }
 
         // 7. Card surface: corner roundness, depth and density
-        applySurfaceStyleSettings(settings);
+        /* Corners and density are the shared values, so they come from the
+           canonical resolvers: an install that only ever used Settings →
+           Appearance keeps the radius and density it saved there, instead of
+           being reset to this key's defaults. When the customizer key exists the
+           resolvers return exactly settings.cardCorners / settings.layoutDensity. */
+        applySurfaceStyleSettings({
+            ...settings,
+            cardCorners: getCanonicalCornerValue(),
+            layoutDensity: getCanonicalDensityValue()
+        });
 
         // 8. Translate labels
         translateAppLabels();
@@ -10434,9 +10554,14 @@ document.querySelectorAll('button').forEach(btn => {
 
         toggleLanguageModeView();
         previewAppearanceAndLang();
+        appearanceFormsPopulated.appearanceLang = true;
     }
 
     function saveCustomAppearanceAndLanguageSettings() {
+        // Same reason as saveAppearanceFromForm(): an unopened form holds only
+        // markup defaults, so saving it would overwrite good values with them.
+        if (!appearanceFormsPopulated.appearanceLang) return;
+
         let fontSize = document.getElementById('cust-font-size').value;
         let fontWeight = document.getElementById('cust-font-weight').value;
         let fontFamily = document.getElementById('cust-font-family').value;
@@ -10476,13 +10601,50 @@ document.querySelectorAll('button').forEach(btn => {
 
         KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
         applyCustomAppearanceAndLanguageSettings();
+
+        /* The other view onto these same three values is Settings → Appearance.
+           Keep its two consumers in step: the widget renderer still reads
+           homeSettings.compact, and the older appearance key stays truthful so
+           both panels report the same thing. */
+        let homeSettings = getHomeSettings();
+        let wantCompact = (layoutDensity === 'compact');
+        if (homeSettings.compact !== wantCompact) {
+            homeSettings.compact = wantCompact;
+            saveHomeSettings(homeSettings);
+        }
+
+        let legacy = getAppearanceSettings();
+        // 'custom' has no greeting of its own — keep the dialect already stored.
+        let legacyGreeting = (languageMode === 'custom') ? (legacy.greetingLanguage || 'nepali') : languageMode;
+        if (legacy.cardRadius !== cardCorners || legacy.greetingLanguage !== legacyGreeting) {
+            legacy.cardRadius = cardCorners;
+            legacy.greetingLanguage = legacyGreeting;
+            saveAppearanceSettings(legacy);
+        }
     }
 
     function resetAppearanceAndLanguageSettings() {
         if (confirm('Are you sure you want to reset all appearance & language settings back to defaults?')) {
             KrishiStorage.removeItem('krishi_custom_appearance_settings');
+
+            /* Corners, density and language are mirrored into the older key and
+               into homeSettings.compact, and those become the fallback the moment
+               this key is gone. Put them back to their defaults too, otherwise
+               "reset" would keep whatever roundness or density was last saved. */
+            let legacy = getAppearanceSettings();
+            legacy.cardRadius = 'medium';        // → balanced (18px)
+            legacy.greetingLanguage = 'nepali';  // fresh-install greeting
+            KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(legacy));
+            let homeSettings = getHomeSettings();
+            if (homeSettings.compact) {
+                homeSettings.compact = false;    // → comfortable density
+                saveHomeSettings(homeSettings);
+            }
+
+            applyAppearanceSettings();
             applyCustomAppearanceAndLanguageSettings();
             loadAppearanceLangTabForm();
+            if (appearanceFormsPopulated.appearance) loadAppearanceTabForm();
             showToast('🔄 Appearance & language settings reset to defaults!');
             playSound('success');
         }

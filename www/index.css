@@ -2853,12 +2853,19 @@ body.ui-hier-strong {
 }
 
 /* ── 2. Corner roundness ─────────────────────────────────────────────
-   One radius per role, so sibling cards can never drift apart. */
-body.ui-corner-sharp    { --r-card:  8px; --r-control:  8px; }
-body.ui-corner-subtle   { --r-card: 13px; --r-control: 10px; }
-body.ui-corner-balanced { --r-card: 18px; --r-control: 12px; }
-body.ui-corner-soft     { --r-card: 24px; --r-control: 14px; }
-body.ui-corner-round    { --r-card: 28px; --r-control: 16px; }
+   One radius per role, so sibling cards can never drift apart.
+
+   --radius / --radius-sm are the older app-wide variables (generic cards,
+   list rows, sidebar links). They are re-declared here so ONE control moves
+   every corner in the app instead of Home cards only: :root declares them,
+   this rule sits on <body>, and the nearer declaration wins for every
+   descendant. Settings -> Appearance -> Round Corner Intensity now writes the
+   same setting, so the two panels can no longer disagree. */
+body.ui-corner-sharp    { --r-card:  8px; --r-control:  8px; --radius:  8px; --radius-sm:  6px; }
+body.ui-corner-subtle   { --r-card: 13px; --r-control: 10px; --radius: 13px; --radius-sm:  8px; }
+body.ui-corner-balanced { --r-card: 18px; --r-control: 12px; --radius: 18px; --radius-sm: 10px; }
+body.ui-corner-soft     { --r-card: 24px; --r-control: 14px; --radius: 24px; --radius-sm: 14px; }
+body.ui-corner-round    { --r-card: 28px; --r-control: 16px; --radius: 28px; --radius-sm: 18px; }
 
 /* ── 3. Card depth ───────────────────────────────────────────────────
    "Balanced" is intentionally absent: it inherits the :root / .dark ramp.

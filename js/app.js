@@ -9701,6 +9701,10 @@ function openEditImportModal(idx) {
         fontSize: 'medium',
         fontWeight: '400',
         fontFamily: 'Inter',
+        textHierarchy: 'balanced',
+        cardCorners: 'balanced',
+        cardDepth: 'balanced',
+        layoutDensity: 'comfortable',
         textColor: 'default',
         textColorCustom: '#1e293b',
         accentColor: 'emerald',
@@ -9852,6 +9856,37 @@ function openEditImportModal(idx) {
         }
     }
 
+    /* Surface / type-hierarchy presets from the Appearance & Language tab.
+       Each one is a <body> class whose values live in index.css (see the
+       "SURFACE, DEPTH & DENSITY CONTROLS" block), the same arrangement the
+       theme presets already use. Keeping the values in the stylesheet is what
+       lets every step carry its own light and dark variant. */
+    const SURFACE_STYLE_OPTIONS = {
+        textHierarchy: { prefix: 'ui-hier-',    steps: ['soft', 'balanced', 'strong'],                  fallback: 'balanced' },
+        cardCorners:   { prefix: 'ui-corner-',  steps: ['sharp', 'subtle', 'balanced', 'soft', 'round'], fallback: 'balanced' },
+        cardDepth:     { prefix: 'ui-depth-',   steps: ['flat', 'subtle', 'balanced', 'elevated'],       fallback: 'balanced' },
+        layoutDensity: { prefix: 'ui-density-', steps: ['compact', 'comfortable', 'spacious'],           fallback: 'comfortable' }
+    };
+
+    function applySurfaceStyleSettings(settings) {
+        if (!document.body) return;
+        let src = settings || {};
+        for (let key in SURFACE_STYLE_OPTIONS) {
+            let opt = SURFACE_STYLE_OPTIONS[key];
+            let active = opt.steps.indexOf(src[key]) !== -1 ? src[key] : opt.fallback;
+            opt.steps.forEach(function(step) {
+                document.body.classList.toggle(opt.prefix + step, step === active);
+            });
+        }
+    }
+
+    // Null-safe read of one customizer <select>, so a missing control can never
+    // break the live preview of the controls that are present.
+    function readCustSelect(id, fallback) {
+        let el = document.getElementById(id);
+        return (el && el.value) ? el.value : fallback;
+    }
+
     function applyCustomAppearanceAndLanguageSettings() {
         let settings = getCustomAppearanceAndLangSettings();
 
@@ -9945,7 +9980,10 @@ function openEditImportModal(idx) {
             document.documentElement.style.setProperty('--text-secondary', secHex);
         }
 
-        // 7. Translate labels
+        // 7. Card surface: corner roundness, depth and density
+        applySurfaceStyleSettings(settings);
+
+        // 8. Translate labels
         translateAppLabels();
     }
 
@@ -10152,6 +10190,10 @@ document.querySelectorAll('button').forEach(btn => {
             textColor: activeText,
             textColorCustom: document.getElementById('cust-text-picker').value,
             bgSoftness,
+            textHierarchy: readCustSelect('cust-text-hierarchy', 'balanced'),
+            cardCorners: readCustSelect('cust-card-corners', 'balanced'),
+            cardDepth: readCustSelect('cust-card-depth', 'balanced'),
+            layoutDensity: readCustSelect('cust-layout-density', 'comfortable'),
             languageMode: langMode,
             customLabels: {
                 home: document.getElementById('lbl-home').value,
@@ -10261,6 +10303,8 @@ document.querySelectorAll('button').forEach(btn => {
             document.documentElement.style.setProperty('--text-secondary', secHex);
         }
 
+        applySurfaceStyleSettings(settings);
+
         let mode = settings.languageMode;
         let labels = {};
         if (mode === 'english') labels = defaultLabels.english;
@@ -10362,6 +10406,15 @@ document.querySelectorAll('button').forEach(btn => {
         document.getElementById('cust-font-size').value = settings.fontSize || 'medium';
         document.getElementById('cust-font-weight').value = settings.fontWeight || '400';
 
+        let hierarchySel = document.getElementById('cust-text-hierarchy');
+        if (hierarchySel) hierarchySel.value = settings.textHierarchy || 'balanced';
+        let cornersSel = document.getElementById('cust-card-corners');
+        if (cornersSel) cornersSel.value = settings.cardCorners || 'balanced';
+        let depthSel = document.getElementById('cust-card-depth');
+        if (depthSel) depthSel.value = settings.cardDepth || 'balanced';
+        let densitySel = document.getElementById('cust-layout-density');
+        if (densitySel) densitySel.value = settings.layoutDensity || 'comfortable';
+
         document.getElementById('cust-accent-color').value = settings.accentColor || 'emerald';
         document.getElementById('cust-accent-picker').value = settings.accentColorCustom || '#059669';
         updateSwatchBorders('accent-swatch', settings.accentColor);
@@ -10393,6 +10446,10 @@ document.querySelectorAll('button').forEach(btn => {
         let textColorCustom = document.getElementById('cust-text-picker').value;
         let bgSoftness = document.getElementById('cust-bg-softness').value;
         let languageMode = document.getElementById('cust-language-mode').value;
+        let textHierarchy = readCustSelect('cust-text-hierarchy', 'balanced');
+        let cardCorners = readCustSelect('cust-card-corners', 'balanced');
+        let cardDepth = readCustSelect('cust-card-depth', 'balanced');
+        let layoutDensity = readCustSelect('cust-layout-density', 'comfortable');
 
         let customLabels = {};
         for (let key in defaultCustomSettings.customLabels) {
@@ -10409,6 +10466,10 @@ document.querySelectorAll('button').forEach(btn => {
             textColor,
             textColorCustom,
             bgSoftness,
+            textHierarchy,
+            cardCorners,
+            cardDepth,
+            layoutDensity,
             languageMode,
             customLabels
         };

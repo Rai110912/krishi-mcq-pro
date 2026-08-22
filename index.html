@@ -13,6 +13,65 @@
     <link rel="apple-touch-icon" href="./icon.svg">
     <!-- Local Offline Support for Tailwind CSS & Lucide Icons (Village Mode) -->
     <script src="./js/libs/tailwindcss.js"></script>
+    <script>
+        /* ============================================================
+           TAILWIND DESIGN TOKENS — presentation layer only.
+           Nothing here runs app logic; it only teaches Tailwind about
+           values the markup was already asking for.
+
+           1) darkMode: 'class'
+              Tailwind's default is 'media', so every `dark:` utility in
+              this app followed the OPERATING SYSTEM while `var(--text)`,
+              `var(--card)` etc. follow the in-app theme toggle. When the
+              two disagreed (app dark + OS light) a card kept its light
+              `bg-white` while the text switched to the near-white
+              `var(--text)` — unreadable. Binding `dark:` to the `.dark`
+              class that toggleDarkMode() already sets on <html> makes the
+              app's own theme the single source of truth.
+
+           2) Missing palette steps and shadows
+              The markup uses ~176 utilities that do not exist in Tailwind
+              3.4 (slate-150/705/750/850/955, emerald-350/450/650,
+              indigo-650, amber-450, shadow-xs, shadow-3xs,
+              backdrop-blur-xs). Tailwind emitted nothing for them, so
+              those borders and shadows were simply invisible and colours
+              fell back to the default gray-200 — which is why cards that
+              were meant to match visibly did not. Defining the steps
+              renders what the markup always intended.
+           ============================================================ */
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            150: '#eaeff5',
+                            705: '#313e52',
+                            750: '#293548',
+                            850: '#172032',
+                            955: '#01040f'
+                        },
+                        emerald: {
+                            350: '#4ade9f',
+                            450: '#22c58b',
+                            650: '#058560'
+                        },
+                        teal:   { 450: '#1cc3ac' },
+                        indigo: { 650: '#493fd7' },
+                        amber:  { 450: '#f8ae17' },
+                        rose:   { 450: '#fb4d69' }
+                    },
+                    boxShadow: {
+                        '3xs': '0 1px 1px 0 rgb(0 0 0 / 0.03)',
+                        'xs':  '0 1px 2px 0 rgb(0 0 0 / 0.05)'
+                    },
+                    backdropBlur: {
+                        'xs': '2px'
+                    }
+                }
+            }
+        };
+    </script>
     <script defer src="./js/libs/lucide.js"></script>
     <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
     <script src="./js/libs/qrcode.min.js"></script>
@@ -270,45 +329,48 @@
 
     <main>
         <!-- HOME PAGE -->
-        <div id="page-home" class="page active p-4 space-y-4 home-entrance">
+        <div id="page-home" class="page active p-4 space-y-3.5 home-entrance">
             <!-- Greeting & Settings Trigger -->
-            <div class="flex flex-col gap-3 bg-white dark:bg-slate-900/60 p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm relative overflow-hidden">
+            <div class="home-card flex flex-col gap-3.5 bg-white dark:bg-slate-900/60 p-4 border border-slate-100 dark:border-slate-800 relative overflow-hidden">
                 <!-- Ambient Glow -->
                 <div class="absolute -top-10 -right-10 w-24 h-24 bg-emerald-400/20 dark:bg-emerald-500/10 blur-2xl rounded-full pointer-events-none"></div>
-                
-                <div class="flex justify-between items-center relative z-10">
-                    <div class="flex items-center gap-3">
+
+                <div class="flex justify-between items-center gap-3 relative z-10">
+                    <div class="flex items-center gap-3 min-w-0">
                         <!-- Student Profile entry: real avatar (photo / initial), opens Profile page -->
                         <button id="home-avatar-btn" onclick="openProfilePage(); event.stopPropagation();" aria-label="प्रोफाइल खोल्नुहोस् (Open profile)" class="profile-avatar-btn relative flex-shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900">
-                            <div id="home-avatar-circle" class="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center overflow-hidden text-white font-extrabold text-sm shadow-md">🌾</div>
+                            <div id="home-avatar-circle" class="w-11 h-11 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center overflow-hidden text-white font-extrabold text-base shadow-md">🌾</div>
                             <span class="pointer-events-none absolute inset-0 rounded-full ring-1 ring-inset ring-white/25"></span>
                         </button>
-                        <div>
-                            <h2 class="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-1" id="home-greeting">नमस्ते, विद्यार्थी! 👋</h2>
-                            <p class="text-[10.5px] font-medium" style="color:var(--text-secondary);">आजको तयारीलाई गति दिऔं।</p>
+                        <div class="min-w-0">
+                            <h2 class="text-[15px] leading-tight font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-1 truncate" id="home-greeting">नमस्ते, विद्यार्थी! 👋</h2>
+                            <p class="text-[11.5px] leading-snug font-medium mt-0.5" style="color:var(--text-secondary);">आजको तयारीलाई गति दिऔं।</p>
                         </div>
                     </div>
                     <!-- Customizer configuration toggle: Isolated click trigger with stopPropagation to prevent any parent bubbling -->
-                    <button onclick="openHomeCustomizerModal(); event.stopPropagation();" id="btn-customize-home" class="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl transition duration-150 cursor-pointer active:scale-95 shadow-xs">
-                        ⚙️ Customize Home
+                    <button onclick="openHomeCustomizerModal(); event.stopPropagation();" id="btn-customize-home" class="flex-shrink-0 flex items-center gap-1 px-2.5 py-2 bg-slate-100/80 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-semibold text-[11px] rounded-xl transition duration-150 cursor-pointer active:scale-95 shadow-xs">
+                        <span class="text-[13px] leading-none">⚙️</span> Customize
                     </button>
                 </div>
-                
+
                 <!-- Futuristic Progression UI (Mobile) -->
-                <div class="prog-container-a11y flex flex-col gap-1.5 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 relative z-10" role="progressbar" aria-label="Level progress" aria-valuemin="0">
-                    <div class="flex justify-between items-end">
-                        <span class="prog-level-text text-[11px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest drop-shadow-sm">LEVEL 1</span>
-                        <span class="prog-xp-text text-[10px] font-extrabold text-slate-500 dark:text-slate-400">0 / 100 XP</span>
+                <div class="prog-container-a11y flex flex-col gap-2 pt-3.5 border-t border-slate-100 dark:border-slate-800/80 relative z-10" role="progressbar" aria-label="Level progress" aria-valuemin="0">
+                    <div class="flex justify-between items-baseline">
+                        <span class="prog-level-text text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-[0.14em]">LEVEL 1</span>
+                        <span class="prog-xp-text text-[11px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">0 / 100 XP</span>
                     </div>
-                    <div class="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden shadow-inner relative">
-                        <div class="prog-bar-fill h-full bg-gradient-to-r from-emerald-400 to-teal-400 rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(52,211,153,0.4)]" style="width:0%"></div>
+                    <div class="prog-track h-1.5 w-full bg-slate-150 dark:bg-slate-800 rounded-full overflow-hidden relative">
+                        <div class="prog-bar-fill h-full bg-gradient-to-r from-emerald-400 to-teal-400 rounded-full transition-all duration-700 ease-out" style="width:0%"></div>
                     </div>
-                    <p class="prog-remaining-text text-[9px] font-bold text-slate-400 text-right mt-0.5">100 XP to Level 2</p>
+                    <p class="prog-remaining-text text-[10.5px] font-medium text-slate-500 dark:text-slate-400 text-right tabular-nums">100 XP to Level 2</p>
                 </div>
             </div>
 
             <!-- Premium Hybrid Dashboard Segmented Control -->
-            <div id="hybrid-dashboard-segmented" class="premium-hybrid-show flex bg-slate-150/40 dark:bg-slate-900 rounded-xl p-1 mb-2 shadow-inner border border-slate-200/50 dark:border-slate-800 text-xs">
+            <!-- Appearance (container + both tabs) is defined in index.css under
+                 "Home segmented control", because switchHybridDashboardTab()
+                 rewrites the tab buttons' class attribute on every switch. -->
+            <div id="hybrid-dashboard-segmented" class="premium-hybrid-show flex">
                 <button onclick="switchHybridDashboardTab('tasks')" id="hybrid-dash-tab-tasks" class="flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer">
                     🌾 Daily Tasks
                 </button>
@@ -318,37 +380,39 @@
             </div>
 
             <!-- Goal Achievement Floating Badge Banner (Hidden mostly, show on streak updates) -->
-            <div id="streak-floating-banner" class="hidden transform transition duration-500 scale-95 p-3 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900 text-amber-800 dark:text-amber-200 flex items-center gap-2.5 shadow-md">
+            <div id="streak-floating-banner" class="home-card hidden transform transition duration-500 scale-95 p-4 border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900 text-amber-800 dark:text-amber-200 flex items-center gap-3">
                 <span class="text-2xl animate-bounce">🏆</span>
                 <div>
-                    <h4 class="font-extrabold text-xs">Achievement Badge Unlocked!</h4>
-                    <p class="text-[10px] opacity-90" id="streak-floating-banner-text">You earned the Dedicated Learner status.</p>
+                    <h4 class="font-bold text-[13px] leading-tight">Achievement Badge Unlocked!</h4>
+                    <p class="text-[11.5px] font-medium opacity-90 mt-0.5" id="streak-floating-banner-text">You earned the Dedicated Learner status.</p>
                 </div>
             </div>
 
             <!-- Active Exam Profile Card (Exam Target) - Audited parent container: has no generic openHomeCustomizerModal onclick logic -->
-            <div id="home-active-profile-card" class="p-4 bg-gradient-to-r from-emerald-50 to-teal-50/45 dark:from-slate-900/40 dark:to-slate-900 border border-emerald-100/50 dark:border-slate-800 rounded-3xl flex justify-between items-center transition relative overflow-hidden group active-profile-glow">
-                <div class="space-y-1">
-                    <span class="text-[9px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-450 flex items-center gap-1">🌱 ACTIVE EXAM TARGET <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span></span>
-                    <h3 id="hprofile-name" class="font-black text-slate-850 dark:text-white text-xs mt-1">Agriculture Civil Service Exam</h3>
-                    <p id="hprofile-meta" class="text-[10px] text-slate-500">5th Level • Bagmati Province</p>
-                    <div class="flex gap-2 items-center text-[9px] font-semibold text-slate-400 mt-2">
+            <div id="home-active-profile-card" class="home-card home-card-raised p-4 bg-gradient-to-r from-emerald-50 to-teal-50/45 dark:from-slate-900/40 dark:to-slate-900 border border-emerald-100/50 dark:border-slate-800 flex justify-between items-center gap-3 transition relative overflow-hidden group active-profile-glow">
+                <div class="min-w-0">
+                    <span class="home-eyebrow text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🌱 ACTIVE EXAM TARGET <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span></span>
+                    <h3 id="hprofile-name" class="font-bold text-slate-850 dark:text-white text-sm leading-snug mt-1.5">Agriculture Civil Service Exam</h3>
+                    <p id="hprofile-meta" class="text-[11.5px] font-medium text-slate-500 dark:text-slate-400 mt-0.5">5th Level • Bagmati Province</p>
+                    <div class="flex gap-2 items-center text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mt-2 tabular-nums">
                         <span id="hprofile-countdown">📅 -- days remaining</span>
-                        <span>•</span>
+                        <span class="opacity-40">•</span>
                         <span id="hprofile-targets">🎯 50 Daily</span>
                     </div>
                 </div>
-                <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-300 font-bold text-[10px] rounded-xl shadow-3xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
+                <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="flex-shrink-0 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] rounded-xl shadow-xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
             </div>
 
 
             <!-- Premium Hybrid Exams Shortcuts (shown in Exams tab) -->
-            <div id="hybrid-exams-shortcut-card" class="hidden p-5 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl space-y-4">
-                <span class="text-[9px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-450 block">📝 EXAM HUB SHORTCUTS</span>
-                <p class="text-[10.5px] text-slate-400">Launch standard civil service mock examinations instantly.</p>
+            <div id="hybrid-exams-shortcut-card" class="home-card hidden p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 space-y-3">
+                <div>
+                    <span class="home-eyebrow text-emerald-600 dark:text-emerald-450 block">📝 EXAM HUB SHORTCUTS</span>
+                    <p class="text-[11.5px] font-medium text-slate-500 dark:text-slate-400 mt-1">Launch standard civil service mock examinations instantly.</p>
+                </div>
                 <div class="grid grid-cols-1 gap-2.5">
-                    <button onclick="startMockTest(50,60)" class="w-full p-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-2xl font-black shadow-sm text-xs cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">📝 Start Full Mock (50 Qs, 60m)</button>
-                    <button onclick="startMockTest(25,30)" class="w-full p-3.5 bg-gradient-to-r from-teal-600 to-teal-500 text-white rounded-2xl font-black shadow-sm text-xs cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">⚡ Start Quick Mock (25 Qs, 30m)</button>
+                    <button onclick="startMockTest(50,60)" class="w-full p-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-2xl font-bold shadow-sm text-[12.5px] cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">📝 Start Full Mock (50 Qs, 60m)</button>
+                    <button onclick="startMockTest(25,30)" class="w-full p-3.5 bg-gradient-to-r from-teal-600 to-teal-500 text-white rounded-2xl font-bold shadow-sm text-[12.5px] cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">⚡ Start Quick Mock (25 Qs, 30m)</button>
                 </div>
             </div>
 
@@ -664,6 +728,58 @@
                                         <option value="600">Bold</option>
                                     </select>
                                 </div>
+                            </div>
+
+                            <!-- Heading Contrast (type hierarchy strength) -->
+                            <div class="space-y-1.5">
+                                <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Heading Contrast (Title vs Body Weight)</label>
+                                <select id="cust-text-hierarchy" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                    <option value="soft">Soft (Calm, Even Weights)</option>
+                                    <option value="balanced" selected>Balanced (Recommended Premium)</option>
+                                    <option value="strong">Strong (Bold Editorial Titles)</option>
+                                </select>
+                                <p class="text-[9.5px] text-slate-400 leading-snug">Controls how much heavier titles look than body text. Works together with Font Weight above.</p>
+                            </div>
+                        </div>
+
+                        <!-- Surface, Depth & Density Card -->
+                        <div class="p-4 bg-slate-50 dark:bg-slate-950/40 border border-slate-150 dark:border-slate-850 rounded-2xl space-y-3.5">
+                            <h4 class="font-extrabold text-[11px] uppercase tracking-wider text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🧊 Card Surface, Depth &amp; Spacing</h4>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <!-- Corner Roundness -->
+                                <div class="space-y-1.5">
+                                    <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Corner Roundness</label>
+                                    <select id="cust-card-corners" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                        <option value="sharp">Sharp (8px)</option>
+                                        <option value="subtle">Subtle (13px)</option>
+                                        <option value="balanced" selected>Balanced (18px)</option>
+                                        <option value="soft">Soft (24px)</option>
+                                        <option value="round">Extra Round (28px)</option>
+                                    </select>
+                                </div>
+
+                                <!-- Card Depth -->
+                                <div class="space-y-1.5">
+                                    <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Card Depth (Shadow)</label>
+                                    <select id="cust-card-depth" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                        <option value="flat">Flat (None)</option>
+                                        <option value="subtle">Subtle (Thin)</option>
+                                        <option value="balanced" selected>Balanced (Pro)</option>
+                                        <option value="elevated">Elevated (Deep)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Layout Density -->
+                            <div class="space-y-1.5">
+                                <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Layout Density (Card Padding &amp; Gaps)</label>
+                                <select id="cust-layout-density" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                    <option value="compact">Compact (More Content Per Screen)</option>
+                                    <option value="comfortable" selected>Comfortable (Recommended Premium)</option>
+                                    <option value="spacious">Spacious (Relaxed Breathing Room)</option>
+                                </select>
+                                <p class="text-[9.5px] text-slate-400 leading-snug">Applies to dashboard cards and the spacing between them. Text size stays exactly as set above.</p>
                             </div>
                         </div>
 

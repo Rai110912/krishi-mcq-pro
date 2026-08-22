@@ -9991,6 +9991,113 @@ function openEditImportModal(idx) {
         }
     }
 
+    /* --- ONE-TAP STYLE PRESETS (Appearance & Language tab) ----------------
+       A preset is one tap that fills the four surface <select>s below it and
+       nothing more: it owns no storage key of its own, so "Save and Apply
+       Dashboard" stays the only thing that persists anything. Every value used
+       here is a step that already exists in SURFACE_STYLE_OPTIONS. */
+    const STYLE_PRESETS = {
+        minimal: {
+            name: 'Minimal',
+            values: { textHierarchy: 'soft', cardCorners: 'subtle', cardDepth: 'flat', layoutDensity: 'compact' }
+        },
+        balanced: {
+            name: 'Balanced',
+            values: { textHierarchy: 'balanced', cardCorners: 'balanced', cardDepth: 'balanced', layoutDensity: 'comfortable' }
+        },
+        bold: {
+            name: 'Bold',
+            values: { textHierarchy: 'strong', cardCorners: 'soft', cardDepth: 'elevated', layoutDensity: 'comfortable' }
+        },
+        relaxed: {
+            name: 'Relaxed',
+            values: { textHierarchy: 'balanced', cardCorners: 'round', cardDepth: 'subtle', layoutDensity: 'spacious' }
+        }
+    };
+
+    const STYLE_PRESET_FIELDS = {
+        textHierarchy: 'cust-text-hierarchy',
+        cardCorners:   'cust-card-corners',
+        cardDepth:     'cust-card-depth',
+        layoutDensity: 'cust-layout-density'
+    };
+
+    // The four surface values exactly as the open form holds them right now.
+    function readStylePresetFormValues() {
+        let values = {};
+        for (let key in STYLE_PRESET_FIELDS) {
+            values[key] = readCustSelect(STYLE_PRESET_FIELDS[key], SURFACE_STYLE_OPTIONS[key].fallback);
+        }
+        return values;
+    }
+
+    // id of the preset those four values spell out, or null for a hand-made mix.
+    function matchStylePreset(values) {
+        for (let id in STYLE_PRESETS) {
+            let wanted = STYLE_PRESETS[id].values;
+            let same = true;
+            for (let key in wanted) {
+                if (values[key] !== wanted[key]) { same = false; break; }
+            }
+            if (same) return id;
+        }
+        return null;
+    }
+
+    /* Keeps the chip row honest: exactly one chip is lit when the four
+       controls match a preset, none when the user has their own mix. Called
+       from previewAppearanceAndLang(), so every path that changes a control —
+       manual, preset, form load, reset — refreshes it. */
+    function updateStylePresetChips() {
+        let row = document.getElementById('style-preset-row');
+        if (!row) return;
+        let active = matchStylePreset(readStylePresetFormValues());
+        let chips = row.querySelectorAll('[data-preset]');
+        Array.prototype.forEach.call(chips, function(chip) {
+            let on = chip.getAttribute('data-preset') === active;
+            chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+            chip.classList.toggle('bg-emerald-100', on);
+            chip.classList.toggle('dark:bg-emerald-950/40', on);
+            chip.classList.toggle('border-emerald-500', on);
+            chip.classList.toggle('ring-1', on);
+            chip.classList.toggle('ring-emerald-500/40', on);
+            chip.classList.toggle('bg-white', !on);
+            chip.classList.toggle('dark:bg-slate-900', !on);
+            chip.classList.toggle('border-slate-200', !on);
+            chip.classList.toggle('dark:border-slate-800', !on);
+        });
+        let note = document.getElementById('style-preset-note');
+        if (note) {
+            note.textContent = active
+                ? STYLE_PRESETS[active].name + ' preset is active. Change any of the four controls below and it becomes a custom mix.'
+                : 'Custom mix — your own combination. Tap a preset above to replace all four controls at once.';
+        }
+    }
+
+    function applyStylePreset(id) {
+        let preset = STYLE_PRESETS[id];
+        if (!preset) return;
+        let current = readStylePresetFormValues();
+        let currentId = matchStylePreset(current);
+        if (currentId === id) {
+            showToast('✅ ' + preset.name + ' preset is already selected.');
+            return;
+        }
+        /* A hand-made mix is the only thing a preset can take away, so that is
+           the only case that earns a confirm. */
+        if (!currentId && !confirm('Apply the ' + preset.name + ' preset?\n\nThis replaces your custom Heading Contrast, Corner Roundness, Card Depth and Layout Density.')) {
+            return;
+        }
+        for (let key in preset.values) {
+            setSelectSafe(STYLE_PRESET_FIELDS[key], preset.values[key], SURFACE_STYLE_OPTIONS[key].fallback);
+        }
+        // Same call a manual change makes: live preview plus the chip refresh.
+        previewAppearanceAndLang();
+        showToast('✨ ' + preset.name + ' preset ready — press Save and Apply Dashboard to keep it.');
+        playSound('click');
+    }
+    window.applyStylePreset = applyStylePreset;
+
     // Null-safe read of one customizer <select>, so a missing control can never
     // break the live preview of the controls that are present.
     function readCustSelect(id, fallback) {
@@ -10336,6 +10443,8 @@ document.querySelectorAll('button').forEach(btn => {
                 manage: document.getElementById('lbl-manage').value
             }
         });
+
+        updateStylePresetChips();
     }
 
     function applyLiveStyles(settings) {

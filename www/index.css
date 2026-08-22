@@ -16,6 +16,40 @@
             --app-font-weight: 400;
             --app-font-family: 'Inter', sans-serif;
             --primary-rgb: 5, 150, 105;
+
+            /* ── Type weight ladder ───────────────────────────────────────
+               The user's Appearance > Font Weight setting (--app-font-weight,
+               one of 300/400/500/600) shifts this whole ladder, so the control
+               keeps working exactly as before. Each step is clamped so the
+               hierarchy can never collapse into a single weight, and never
+               exceeds the heaviest weight Inter actually ships (900).
+               At the default 400 this yields the standard 400-900 scale.      */
+            --w-normal:    clamp(300, var(--app-font-weight, 400),             600);
+            --w-medium:    clamp(400, calc(var(--app-font-weight, 400) + 100), 700);
+            --w-semibold:  clamp(500, calc(var(--app-font-weight, 400) + 200), 700);
+            --w-bold:      clamp(600, calc(var(--app-font-weight, 400) + 300), 800);
+            --w-extrabold: clamp(700, calc(var(--app-font-weight, 400) + 400), 900);
+            --w-black:     clamp(800, calc(var(--app-font-weight, 400) + 500), 900);
+
+            /* ── Surface scale ────────────────────────────────────────────
+               One radius per role, so sibling cards stop mixing 12/16/24px.  */
+            --r-card: 18px;
+            --r-control: 12px;
+            --r-chip: 999px;
+            /* Elevation ramp: flat -> resting card -> raised card -> overlay */
+            --elev-1: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.05);
+            --elev-2: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 20px -8px rgba(15, 23, 42, 0.10);
+            --hairline: rgba(15, 23, 42, 0.07);
+            /* Density defaults = "Comfortable": 1rem card padding and the same
+               0.875rem vertical rhythm the markup already used (space-y-3.5). */
+            --card-pad: 1rem;
+            --stack-gap: 0.875rem;
+        }
+        .dark {
+            /* Dark-mode counterparts of the surface tokens declared in :root */
+            --elev-1: 0 1px 2px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.24);
+            --elev-2: 0 1px 2px rgba(0, 0, 0, 0.30), 0 10px 24px -8px rgba(0, 0, 0, 0.55);
+            --hairline: rgba(255, 255, 255, 0.08);
         }
         .dark {
             --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --text-secondary: #94a3b8;
@@ -35,12 +69,38 @@
             padding-bottom: 0;
             padding-top: env(safe-area-inset-top); -webkit-tap-highlight-color: transparent;
         }
+        /*
+           Font family is still forced on these tags (some UA stylesheets refuse
+           to inherit it). Font weight, however, is now inherited from <body>
+           instead of being forced here: the old `font-weight: ... !important`
+           on this tag list out-ranked every utility class and every component
+           rule, which flattened the whole UI to two weights.
+        */
         body, p, span, li, td, th, input, select, textarea, button {
             font-family: var(--app-font-family), inherit !important;
-            font-weight: var(--app-font-weight, inherit) !important;
         }
-        h1, h2, h3, h4, h5, h6, .font-bold, .font-extrabold, .font-black {
-            font-weight: calc(var(--app-font-weight, 400) + 200) !important;
+        body {
+            font-weight: var(--app-font-weight, 400);
+        }
+        /* Form controls don't inherit font-weight from their parent by default. */
+        input, select, textarea, button {
+            font-weight: inherit;
+        }
+        /*
+           Real weight ladder. Previously .font-bold / .font-extrabold /
+           .font-black all resolved to the same value, so nothing could stand
+           out. Each utility now maps to its own step of the ladder defined in
+           :root, which still tracks the user's Font Weight setting.
+        */
+        .font-normal    { font-weight: var(--w-normal)    !important; }
+        .font-medium    { font-weight: var(--w-medium)    !important; }
+        .font-semibold  { font-weight: var(--w-semibold)  !important; }
+        .font-bold      { font-weight: var(--w-bold)      !important; }
+        .font-extrabold { font-weight: var(--w-extrabold) !important; }
+        .font-black     { font-weight: var(--w-black)     !important; }
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: var(--w-bold);
+            letter-spacing: -0.011em;
         }
         
        /* Accent override rules to map Tailwind colors dynamically */
@@ -1643,9 +1703,12 @@ button, a, input, select, textarea {
         animation: slideUpSheet 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.1) forwards;
     }
     
-    /* Fluid Typography for headings on mobile */
-    h1 { font-size: clamp(1.25rem, 5vw, 1.5rem) !important; }
-    h2 { font-size: clamp(1.125rem, 4.5vw, 1.25rem) !important; }
+    /* Fluid Typography for headings on mobile.
+       Deliberately NOT !important: this is the fallback size for a heading that
+       declares none. When a heading carries an explicit size utility that
+       authored size wins, which is what makes a real type hierarchy possible. */
+    h1 { font-size: clamp(1.25rem, 5vw, 1.5rem); }
+    h2 { font-size: clamp(1.125rem, 4.5vw, 1.25rem); }
     
     /* Edge-to-edge content container adjustments */
     .page.active {
@@ -2624,4 +2687,232 @@ div[id^="creator-panel-"]:not(.hidden), div[id^="settings-tab-"]:not(.hidden), d
 
 
 .suppress-micro-interactions button:active, .suppress-micro-interactions .btn:active, .suppress-micro-interactions .option-btn:active { scale: 1 !important; transition: none !important; }
+
+/* =====================================================================
+   HOME — VISUAL POLISH LAYER (presentation only)
+   Everything below sets radius / spacing / weight / colour. No rule here
+   changes layout flow, visibility, or any behaviour hook. Backgrounds and
+   borders keep using --card / --border so the theme picker still owns them.
+   ===================================================================== */
+
+/* ── One radius and one elevation for every card on Home ──────────────
+   Previously siblings mixed 12 / 16 / 24px radii and 14 / 16px padding,
+   which is the single most visible "unfinished" cue on the page. */
+.home-card,
+#home-widgets-container .hover-card-trigger,
+#home-widgets-container > .slide-up-card > div {
+    border-radius: var(--r-card);
+    box-shadow: var(--elev-1);
+}
+/* The primary surface of the page sits one step higher. */
+.home-card-raised {
+    box-shadow: var(--elev-2);
+}
+/* Match the padding of the injected widget cards to the static ones.
+   Both now read the density token, so the two stay in step at every
+   Layout Density setting. */
+#home-widgets-container .hover-card-trigger {
+    padding: var(--card-pad);
+}
+/* Keep the existing hover lift on the widget cards that already had one —
+   the static cards deliberately get no new hover behaviour. */
+#home-widgets-container .hover-card-trigger:hover {
+    box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.06), 0 4px 6px -2px rgba(15, 23, 42, 0.05);
+}
+
+/* ── Micro label ("ACTIVE EXAM TARGET", "EXAM HUB SHORTCUTS") ─────────
+   10px at 700 with open tracking reads as a deliberate eyebrow; the old
+   9px/900 read as shouting. */
+.home-eyebrow {
+    font-size: 10px;
+    font-weight: var(--w-bold);
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+}
+
+/* ── Level progress bar ───────────────────────────────────────────────
+   The old track was slate-100 on white (invisible) with a neon glow on
+   the fill. Slightly darker track, softer glow, clearer edges. */
+.prog-track {
+    box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.prog-track .prog-bar-fill {
+    box-shadow: 0 0 6px rgba(52, 211, 153, 0.35);
+}
+
+/* ── Home segmented control (Daily Tasks / Mock Exams) ────────────────
+   Styled here rather than in the markup because switchHybridDashboardTab()
+   reassigns both buttons' class attribute on every switch, which would wipe
+   any utility classes added in index.html. Selectors are id-scoped so they
+   out-rank the utilities that function writes. */
+#hybrid-dashboard-segmented {
+    gap: 4px;
+    padding: 4px;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.045);
+    border: 1px solid var(--hairline);
+    box-shadow: none;
+}
+.dark #hybrid-dashboard-segmented {
+    background: rgba(255, 255, 255, 0.045);
+}
+#hybrid-dashboard-segmented > button {
+    padding: 9px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: var(--w-semibold) !important;
+    letter-spacing: 0.004em;
+    box-shadow: none;
+}
+#hybrid-dashboard-segmented > button:not(.bg-white) {
+    color: var(--text-secondary);
+}
+/* .bg-white is the active marker the tab switcher writes on the selected tab. */
+#hybrid-dashboard-segmented > button.bg-white {
+    background: var(--card);
+    font-weight: var(--w-bold) !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10), 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+.dark #hybrid-dashboard-segmented > button.bg-white {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+}
+
+/* ── Mobile header icon buttons ───────────────────────────────────────
+   The tap targets were already 48px but had no resting surface, so the
+   two glyphs read as loose emoji rather than controls. */
+#mobile-header > div:last-child button {
+    font-size: 17px;
+    line-height: 1;
+    background: rgba(15, 23, 42, 0.04);
+}
+.dark #mobile-header > div:last-child button {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Stats ribbon ─────────────────────────────────────────────────────
+   Label and value were both rendering at the same weight, so the numbers
+   didn't read as data. Two weights, a hairline divider, a little more air. */
+#stats-ribbon {
+    height: 34px;
+    gap: 2px;
+}
+.ribbon-stat {
+    font-size: 10.5px;
+    font-weight: var(--w-semibold);
+    letter-spacing: 0.005em;
+    padding: 0 11px;
+    gap: 5px;
+}
+.ribbon-stat + .ribbon-stat::before {
+    background: var(--hairline);
+    top: 30%;
+    height: 40%;
+}
+.ribbon-stat .ribbon-val {
+    font-weight: var(--w-extrabold);
+    font-variant-numeric: tabular-nums;
+}
+
+/* =====================================================================
+   SURFACE, DEPTH & DENSITY CONTROLS
+   (Home -> Customize Home -> Appearance & Language)
+
+   These <body> classes are written by applySurfaceStyleSettings() in
+   js/app.js from the saved krishi_custom_appearance_settings object, the
+   same way the theme presets already work. Keeping the values in CSS is
+   what lets each step keep its own light and dark variant.
+
+   The default step of every control ("Balanced" / "Comfortable") maps to
+   the values already declared in :root, so an install that has never
+   opened these selects renders byte-for-byte what it renders today.
+   Nothing below changes layout flow, visibility or behaviour: radius,
+   shadow, padding and font-weight only.
+   ===================================================================== */
+
+/* ── 1. Heading contrast (strength of the type hierarchy) ─────────────
+   The ladder is re-declared rather than nudged through a single "step"
+   variable, because a custom property is resolved where it is declared:
+   a descendant cannot retroactively change the maths of an inherited
+   one. Offsets stay on multiples of 100 so every step lands on a weight
+   the bundled fonts actually ship. The Font Weight select
+   (--app-font-weight) still shifts the whole ladder exactly as before. */
+body.ui-hier-soft {
+    --w-medium:    clamp(400, calc(var(--app-font-weight, 400) + 100), 600);
+    --w-semibold:  clamp(500, calc(var(--app-font-weight, 400) + 100), 600);
+    --w-bold:      clamp(500, calc(var(--app-font-weight, 400) + 200), 700);
+    --w-extrabold: clamp(600, calc(var(--app-font-weight, 400) + 300), 700);
+    --w-black:     clamp(700, calc(var(--app-font-weight, 400) + 300), 800);
+}
+body.ui-hier-strong {
+    --w-medium:    clamp(500, calc(var(--app-font-weight, 400) + 100), 700);
+    --w-semibold:  clamp(700, calc(var(--app-font-weight, 400) + 300), 800);
+    --w-bold:      clamp(800, calc(var(--app-font-weight, 400) + 400), 900);
+    --w-extrabold: clamp(900, calc(var(--app-font-weight, 400) + 500), 900);
+    --w-black:     clamp(900, calc(var(--app-font-weight, 400) + 500), 900);
+}
+
+/* ── 2. Corner roundness ─────────────────────────────────────────────
+   One radius per role, so sibling cards can never drift apart.
+
+   --radius / --radius-sm are the older app-wide variables (generic cards,
+   list rows, sidebar links). They are re-declared here so ONE control moves
+   every corner in the app instead of Home cards only: :root declares them,
+   this rule sits on <body>, and the nearer declaration wins for every
+   descendant. Settings -> Appearance -> Round Corner Intensity now writes the
+   same setting, so the two panels can no longer disagree. */
+body.ui-corner-sharp    { --r-card:  8px; --r-control:  8px; --radius:  8px; --radius-sm:  6px; }
+body.ui-corner-subtle   { --r-card: 13px; --r-control: 10px; --radius: 13px; --radius-sm:  8px; }
+body.ui-corner-balanced { --r-card: 18px; --r-control: 12px; --radius: 18px; --radius-sm: 10px; }
+body.ui-corner-soft     { --r-card: 24px; --r-control: 14px; --radius: 24px; --radius-sm: 14px; }
+body.ui-corner-round    { --r-card: 28px; --r-control: 16px; --radius: 28px; --radius-sm: 18px; }
+
+/* ── 3. Card depth ───────────────────────────────────────────────────
+   "Balanced" is intentionally absent: it inherits the :root / .dark ramp.
+   Cards keep their border in every step, so "Flat" still reads as a card. */
+body.ui-depth-flat {
+    --elev-1: none;
+    --elev-2: none;
+}
+body.ui-depth-subtle {
+    --elev-1: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --elev-2: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+body.ui-depth-elevated {
+    --elev-1: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 16px -6px rgba(15, 23, 42, 0.12);
+    --elev-2: 0 2px 4px rgba(15, 23, 42, 0.06), 0 18px 36px -12px rgba(15, 23, 42, 0.20);
+}
+.dark body.ui-depth-subtle {
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.26);
+    --elev-2: 0 2px 6px rgba(0, 0, 0, 0.34);
+}
+.dark body.ui-depth-elevated {
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.34), 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+    --elev-2: 0 2px 4px rgba(0, 0, 0, 0.34), 0 20px 40px -12px rgba(0, 0, 0, 0.70);
+}
+
+/* ── 4. Layout density ───────────────────────────────────────────────
+   rem, not px, so density still compounds correctly with Font Size. */
+body.ui-density-compact     { --card-pad: 0.75rem; --stack-gap: 0.625rem; }
+body.ui-density-comfortable { --card-pad: 1rem;    --stack-gap: 0.875rem; }
+body.ui-density-spacious    { --card-pad: 1.25rem; --stack-gap: 1.125rem; }
+
+/* Cards on Home take their padding from the density token. The id in the
+   selector is what lets this out-rank the p-4 utility in the markup. */
+#page-home .home-card {
+    padding: var(--card-pad);
+}
+/* Vertical rhythm of the Home stack. The markup's space-y-3.5 is 0.875rem,
+   which is exactly the "Comfortable" value, so the default is unchanged. */
+#page-home > :not([hidden]) ~ :not([hidden]) {
+    margin-top: var(--stack-gap);
+}
+
+/* The customizer's own preview card mirrors the three surface controls, so
+   corners, depth and density are visible before the user saves. */
+#custom-live-preview-box {
+    border-radius: var(--r-card);
+    box-shadow: var(--elev-2);
+    padding: var(--card-pad);
+}
 

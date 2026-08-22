@@ -21,4 +21,4 @@ Checking for npm/bin/npm-cli install at C:\Users\pc\.cache\firebase\tools\lib\no
 Checking for npm/bin/npm-cli install at C:\Users\pc\.cache\firebase\tools\node_modules\npm\bin\npm-cli
 Checking for npm/bin/npm-cli install at C:\snapshot\firepit\node_modules\npm\bin\npm-cli
 Found npm/bin/npm-cli install.
-ShellJSInternalError: EPERM: operation not permitted, chmod 'C:\Users\pc\CACHE~1\firebase\runtime\shell'
+ShellJSInternalError: ENOENT: no such file or directory, chmod 'C:\Users\pc\CACHE~1\firebase\runtime\npm'

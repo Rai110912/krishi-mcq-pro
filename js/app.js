@@ -752,6 +752,17 @@ async function loadStaticQuestions() {
     };
 
     // Resume session logic
+    // Single source of truth for "can this saved session still be continued?". Both the
+    // save path and every restore path go through this, so a session that has run to the
+    // end can never be persisted, uploaded, or offered for resume on another device.
+    // Before this existed, a completed session was offered on the peer device and tapping
+    // the offer replayed it — which re-saved it and bounced the offer back, forever.
+    window.isResumableSession = function(session) {
+        if (!session || session.isCleared) return false;
+        if (!Array.isArray(session.questions) || session.questions.length === 0) return false;
+        return (session.currentIndex || 0) < session.questions.length;
+    };
+
     window.lastPromptedSessionKey = window.lastPromptedSessionKey || null;
     window.checkAndPromptResumeSession = function() {
         let activePage = document.querySelector('.page.active');
@@ -765,6 +776,13 @@ async function loadStaticQuestions() {
 
         function triggerPrompt(session, isCloud = false) {
             if (!session) return;
+            // A finished session must never be advertised. It used to reach here, and
+            // because questions[currentIndex] is undefined once the index has run past the
+            // end, the fallback below presented it as a fresh Q1.
+            if (!window.isResumableSession(session)) {
+                console.log('[Resumption] Ignoring a session that is already complete.');
+                return;
+            }
             
             // Generate a unique key for this session state
             let sessionKey = session.updatedAt || session.score || 0;
@@ -907,10 +925,13 @@ async function loadStaticQuestions() {
                                 }
                             }
 
-                            if (cloudTime > localTime && cloudSession.questions && cloudSession.questions.length > 0) {
+                            // Test resumability, not merely "has questions". A completed
+                            // cloud session with a newer timestamp used to win here and
+                            // shadow a local session that really could be continued.
+                            if (cloudTime > localTime && window.isResumableSession(cloudSession)) {
                                 console.log('[Resumption] Resolving to cloud active session progress.');
                                 triggerPrompt(cloudSession, true);
-                            } else if (localSessionObj && localSessionObj.questions && localSessionObj.questions.length > 0) {
+                            } else if (window.isResumableSession(localSessionObj)) {
                                 console.log('[Resumption] Resolving to local active session progress (newer).');
                                 triggerPrompt(localSessionObj, false);
                             }
@@ -2642,9 +2663,16 @@ function loadData(){
 
     // Single greeting builder shared by Home, the sidebar and Profile (no duplicated logic)
     function getGreetingText(username) {
-        const appearance = getAppearanceSettings();
-        if (appearance.greetingLanguage === 'nepali') return `नमस्ते, ${username}`;
-        if (appearance.greetingLanguage === 'sanskrit') return `शुभमस्तु, ${username}`;
+        /* Language lives in ONE place now (see getCanonicalLanguageValue): the
+           customizer's languageMode drives the UI labels and this greeting
+           together. 'custom' has no greeting of its own, so it keeps using the
+           older Appearance-tab dialect — as does any install that has never saved
+           the customizer, which is why existing users see no change. */
+        let lang = getCanonicalLanguageValue();
+        if (lang === 'custom') lang = getAppearanceSettings().greetingLanguage || 'nepali';
+        if (lang === 'nepali') return `नमस्ते, ${username}`;
+        if (lang === 'sanskrit') return `शुभमस्तु, ${username}`;
+        if (lang === 'mixed') return `नमस्ते (Welcome), ${username}`;
         return `Welcome back, ${username}`;
     }
 
@@ -3418,17 +3446,47 @@ function loadData(){
     }
     window.pairWithPin = pairWithPin;
 
+    // A session id is regenerated on every app launch, so it cannot identify a *device*:
+    // after finishing a quiz and reopening the app, the phone saw its own leftover handoff
+    // doc as a "peer" and offered to resume the quiz it had just completed. This id is
+    // persistent, so a device can always recognise its own broadcast and ignore it.
+    function getStableDeviceId() {
+        let id = KrishiStorage.getItem('krishi_device_id');
+        if (!id) {
+            id = 'dev-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
+            KrishiStorage.setItem('krishi_device_id', id);
+        }
+        return id;
+    }
+
     function listenForRemoteHandoff(uid, firestore) {
         if (window.handoffListenerUnsubscribe) {
             window.handoffListenerUnsubscribe();
         }
+        const myDeviceId = getStableDeviceId();
         window.handoffListenerUnsubscribe = firestore.collection('users').doc(uid).collection('handoff').doc('current')
             .onSnapshot(doc => {
                 if (!doc || !doc.exists) return;
                 const data = doc.data();
-                if (!data || data.sessionId === currentSessionId || !data.active) return;
+                if (!data) return;
+                // The broadcasting device retired the session (finishSession -> clearQuizHandoff
+                // writes active:false). Tear down any banner still on screen instead of just
+                // ignoring the update, otherwise a banner rendered while the quiz was live
+                // lingers after it finished and its Resume button replays the done session.
+                if (!data.active || data.sessionId === currentSessionId) {
+                    if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+                    return;
+                }
+                // Ignore this device's own broadcast, whatever session it came from.
+                if (data.deviceId && data.deviceId === myDeviceId) {
+                    if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+                    return;
+                }
                 if (Date.now() - (data.updatedAt || 0) < 600000) {
                     renderHandoffBanner(data);
+                } else if (typeof window.dismissHandoffBanner === 'function') {
+                    // Stale broadcast (older than 10 min) — make sure no old banner survives.
+                    window.dismissHandoffBanner();
                 }
             }, err => console.warn('[Handoff] Listener error:', err));
     }
@@ -3461,6 +3519,7 @@ function loadData(){
             const firestore = firebase.firestore(firebaseApp);
             const payload = {
                 sessionId: currentSessionId,
+                deviceId: getStableDeviceId(),
                 deviceName: KrishiStorage.getItem('krishi_custom_device_name') || 'Peer Device',
                 subject: quizState.subject || (state ? state.selectedSubject : 'All Subjects') || 'Quiz',
                 questionIdx: typeof quizState.questionIdx !== 'undefined' ? quizState.questionIdx : (state ? state.currentIndex : 0),
@@ -3473,6 +3532,28 @@ function loadData(){
         } catch(e){}
     }
     window.broadcastQuizHandoff = broadcastQuizHandoff;
+
+    // renderMCQ() broadcasts `active: true` on every question, but nothing ever wrote the
+    // closing record, so the handoff doc stayed "active" forever. Every peer therefore kept
+    // offering to resume a quiz that had already been completed, and because the banner's
+    // Resume button just navigates to the practice page, tapping it replayed the finished
+    // session — the loop reported on the tablet.
+    function clearQuizHandoff() {
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return;
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            firestore.collection('users').doc(uid).collection('handoff').doc('current').set({
+                sessionId: currentSessionId,
+                deviceId: getStableDeviceId(),
+                active: false,
+                updatedAt: Date.now()
+            }, { merge: true }).catch(e => console.warn('[Handoff] Clear failed:', e));
+        } catch (e) { /* clearing is best-effort; never block finishing a quiz */ }
+        // Also drop any banner already on screen for the session that just ended.
+        if (typeof window.dismissHandoffBanner === 'function') window.dismissHandoffBanner();
+    }
+    window.clearQuizHandoff = clearQuizHandoff;
 
     function scheduleMidnightCloudVault() {
         const today = new Date().toISOString().split('T')[0];
@@ -3812,9 +3893,33 @@ function loadData(){
     }
     window.syncSettingsToCloud = syncSettingsToCloud;
 
+    // Per-setting write clocks.
+    //
+    // The document-level `updatedAt` cannot order an individual toggle: collectAllAppData()
+    // re-stamps it with Date.now() on every single read, so `useCloud` in
+    // mergeCloudAndLocalData() is effectively always false and the cloud could never win a
+    // scalar. That is why turning dark mode ON propagated (the peer held no value, so
+    // `local ?? cloud` had to fall through to the cloud) but turning it back OFF never did
+    // (the peer now held 'true', so local always won and re-pushed its own stale value).
+    // Each toggle therefore carries its own timestamp and merges on that clock alone.
+    const SETTING_STAMPS_KEY = 'krishi_setting_stamps';
+    function getSettingStamps() {
+        const s = safeJsonParse(KrishiStorage.getItem(SETTING_STAMPS_KEY), {});
+        return (s && typeof s === 'object' && !Array.isArray(s)) ? s : {};
+    }
+    function stampSetting(field) {
+        try {
+            const stamps = getSettingStamps();
+            stamps[field] = Date.now();
+            KrishiStorage.setItem(SETTING_STAMPS_KEY, JSON.stringify(stamps));
+        } catch (e) { /* a failed stamp must never block the setting itself */ }
+    }
+    window.stampSetting = stampSetting;
+
     function toggleDarkMode(){
         document.documentElement.classList.toggle('dark');
         KrishiStorage.setItem('krishi_dark', document.documentElement.classList.contains('dark'));
+        stampSetting('dark');
         syncSettingsToCloud('Dark mode toggled');
         if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
             applyCustomAppearanceAndLanguageSettings();
@@ -5994,6 +6099,9 @@ function loadData(){
        state.isFinishing = true;
        activePlanSequenceHTML = ''; // Clear stale recommendation plan
        clearPracticeProgress();
+       // Retire the cross-device handoff record: this session is over, so no peer should
+       // still be offering to resume it.
+       if (typeof clearQuizHandoff === 'function') { try { clearQuizHandoff(); } catch(e){} }
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
             state.perQuestionTimerInterval = null;
@@ -6352,6 +6460,20 @@ function loadData(){
         });
     }
 
+    // Subject add/remove write clocks, in the same shape as bookmarkedLog/wrongLog so
+    // mergeCRDTLogs() can order them. Without a 'remove' record the merge unions the two
+    // devices' lists and a deletion can never propagate — the peer would simply hand the
+    // subject straight back. Keyed by name because that is the subject's only identity.
+    const SUBJECT_LOG_KEY = 'krishi_custom_subjects_log';
+    function logSubjectChange(name, action) {
+        try {
+            const log = safeJsonParse(KrishiStorage.getItem(SUBJECT_LOG_KEY), {}) || {};
+            const rev = (log[name] && log[name]._rev) || 0;
+            log[name] = { action: action, timestamp: Date.now(), _rev: rev + 1 };
+            KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(log));
+        } catch (e) { /* never block the subject edit itself */ }
+    }
+
     function addSubject(){
         let input = document.getElementById('new-subject-input'); let val = input.value.trim();
         if(!val) { showToast('Subject name empty!'); return; }
@@ -6370,8 +6492,14 @@ function loadData(){
         if(getAllSubjects().includes(val)) { showToast('Duplicate names not allowed!'); return; }
         custom.push(val);
         KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        logSubjectChange(val, 'add');
         input.value = '';
         renderSubjectList();
+        // This write previously reached localStorage only. Nothing called saveData() or
+        // scheduleCloudSync(), so the new subject sat locally until some unrelated save
+        // happened to flush it — the "takes lots of time" symptom.
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+        if (typeof scheduleCloudSync === 'function') scheduleCloudSync('Subject added');
         showToast('Subject Added!');
     }
 
@@ -6390,7 +6518,10 @@ function loadData(){
         }
         custom = custom.filter(s=>s!==name);
         KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(custom));
+        logSubjectChange(name, 'remove');
         renderSubjectList();
+        KrishiStorage.setItem('krishi_last_updated_at', Date.now());
+        if (typeof scheduleCloudSync === 'function') scheduleCloudSync('Subject removed');
         showToast('Subject removed!');
     }
 
@@ -6948,6 +7079,10 @@ function loadData(){
             });
             newCustom = [...new Set(newCustom)];
             KrishiStorage.setItem('krishi_custom_subjects', JSON.stringify(newCustom));
+            // Log these as adds too. A subject removed on another device carries a 'remove'
+            // tombstone, and without a newer 'add' here the merge would keep deleting a
+            // subject that this device's questions still reference.
+            newCustom.forEach(s => logSubjectChange(s, 'add'));
             console.log('[PWA Safety] Auto-registered custom subjects:', newCustom);
             
             // Dynamic refresh of subjects UI lists
@@ -9491,6 +9626,82 @@ function openEditImportModal(idx) {
         }
     }
 
+    /* ── ONE source of truth for corners / density / language ────────────────
+       These three settings used to exist twice: here (Settings → Appearance,
+       key krishi_appearance_settings) and in Home → Customize → Appearance &
+       Language (key krishi_custom_appearance_settings), so the two panels could
+       disagree and the last one saved silently won.
+
+       The customizer key is now the canonical one, and this tab is a second view
+       onto the same values. The maps below translate the older vocabulary
+       (small/medium/large, balanced density) into the canonical steps, so an
+       install saved before this change keeps the exact look it already had. */
+    const LEGACY_RADIUS_TO_CORNERS = { small: 'sharp', medium: 'balanced', large: 'round' };
+    const LEGACY_DENSITY_TO_CANON  = { compact: 'compact', balanced: 'comfortable', detailed: 'spacious' };
+
+    // True once the customizer has been saved at least once on this device.
+    // Until then every canonical read falls back to the older Appearance-tab
+    // value, so existing installs see zero change.
+    function hasCustomAppearanceKey() {
+        return !!KrishiStorage.getItem('krishi_custom_appearance_settings');
+    }
+
+    function getCanonicalCornerValue() {
+        let steps = SURFACE_STYLE_OPTIONS.cardCorners.steps;
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().cardCorners;
+            if (steps.indexOf(v) !== -1) return v;
+        }
+        let legacy = getAppearanceSettings().cardRadius;
+        if (steps.indexOf(legacy) !== -1) return legacy;
+        return LEGACY_RADIUS_TO_CORNERS[legacy] || SURFACE_STYLE_OPTIONS.cardCorners.fallback;
+    }
+
+    function getCanonicalDensityValue() {
+        let steps = SURFACE_STYLE_OPTIONS.layoutDensity.steps;
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().layoutDensity;
+            if (steps.indexOf(v) !== -1) return v;
+        }
+        // Older installs only stored the compact on/off flag used by the widgets.
+        return getHomeSettings().compact ? 'compact'
+                                        : (LEGACY_DENSITY_TO_CANON.balanced || SURFACE_STYLE_OPTIONS.layoutDensity.fallback);
+    }
+
+    function getCanonicalLanguageValue() {
+        if (hasCustomAppearanceKey()) {
+            let v = getCustomAppearanceAndLangSettings().languageMode;
+            if (v) return v;
+        }
+        return getAppearanceSettings().greetingLanguage || 'nepali';
+    }
+
+    /* Read-modify-write of the shared customizer key: only the listed keys move,
+       every other customizer value (fonts, colours, custom labels) is preserved. */
+    function patchCustomAppearanceValues(patch) {
+        let settings = getCustomAppearanceAndLangSettings();
+        for (let key in patch) settings[key] = patch[key];
+        KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
+        if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
+            applyCustomAppearanceAndLanguageSettings();
+        }
+    }
+
+    // Set a <select> only to a value it actually offers, so a legacy or unknown
+    // value can never leave the control blank.
+    function setSelectSafe(id, value, fallback) {
+        let el = document.getElementById(id);
+        if (!el) return;
+        let has = Array.prototype.some.call(el.options, function(o) { return o.value === value; });
+        el.value = has ? value : fallback;
+    }
+
+    /* Both appearance forms populate lazily, only when their customizer tab is
+       opened (switchCustomizerTab → loadAppearance*TabForm). These flags record
+       that, so the shared corner / density / language values are never written
+       from a form that is still holding its markup defaults. */
+    let appearanceFormsPopulated = { appearance: false, appearanceLang: false };
+
     // Apply specific classes of the appearance preset configurations
     function saveAppearanceSettings(settings) {
         KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(settings));
@@ -9505,18 +9716,21 @@ function openEditImportModal(idx) {
         body.classList.remove('theme-classic', 'theme-minimal', 'theme-pro', 'theme-focus');
         body.classList.add('theme-' + (settings.themeStyle || 'classic'));
 
-        // Overriding custom CSS root variables for border radius
-        let rVal = "16px";
-        let rSmVal = "10px";
-        if (settings.cardRadius === 'small') {
-            rVal = "6px"; rSmVal = "4px";
-        } else if (settings.cardRadius === 'medium') {
-            rVal = "16px"; rSmVal = "10px";
-        } else if (settings.cardRadius === 'large') {
-            rVal = "28px"; rSmVal = "18px";
-        }
-        document.documentElement.style.setProperty('--radius', rVal);
-        document.documentElement.style.setProperty('--radius-sm', rSmVal);
+        /* Border radius. The five steps are the same px pairs the ui-corner-*
+           rules in index.css declare, so the inline value on <html> (which the
+           older code path still writes) and the body class can never disagree.
+           The step itself comes from the canonical corner setting, i.e. from
+           whichever of the two panels the user saved last. */
+        const CORNER_RADIUS_PX = {
+            sharp:    ['8px',  '6px'],
+            subtle:   ['13px', '8px'],
+            balanced: ['18px', '10px'],
+            soft:     ['24px', '14px'],
+            round:    ['28px', '18px']
+        };
+        let rPair = CORNER_RADIUS_PX[getCanonicalCornerValue()] || CORNER_RADIUS_PX.balanced;
+        document.documentElement.style.setProperty('--radius', rPair[0]);
+        document.documentElement.style.setProperty('--radius-sm', rPair[1]);
 
         // Animation rules (animation-duration / transitions multipliers)
         if (settings.animationIntensity === 'off') {
@@ -9532,17 +9746,27 @@ function openEditImportModal(idx) {
 
     function loadAppearanceTabForm() {
         let s = getAppearanceSettings();
-        document.getElementById('app-density').value = getHomeSettings().compact ? 'compact' : 'balanced';
+        // Corners, density and language are shared with Home → Customize →
+        // Appearance & Language, so they are read through the canonical resolvers.
+        setSelectSafe('app-density', getCanonicalDensityValue(), 'comfortable');
+        setSelectSafe('app-radius', getCanonicalCornerValue(), 'balanced');
+        setSelectSafe('app-language', getCanonicalLanguageValue(), 'nepali');
         document.getElementById('app-theme').value = s.themeStyle || 'classic';
-        document.getElementById('app-radius').value = s.cardRadius || 'medium';
-        document.getElementById('app-language').value = s.greetingLanguage || 'nepali';
         document.getElementById('app-animations').value = s.animationIntensity || 'medium';
         document.getElementById('app-opt-mquote').checked = s.showMQuote !== false;
         document.getElementById('app-opt-agri').checked = s.showAgriQuote !== false;
         document.getElementById('app-opt-panims').checked = s.showProgressAnims !== false;
+        appearanceFormsPopulated.appearance = true;
     }
 
     function saveAppearanceFromForm() {
+        /* Both appearance forms populate lazily, so a form whose tab was never
+           opened still holds its markup defaults — nothing in it can be a user
+           choice. Writing it would silently reset saved values (this is what used
+           to flip Animations back to "Off" when Save was pressed from the Widgets
+           tab), so an unopened form is skipped instead. */
+        if (!appearanceFormsPopulated.appearance) return;
+
         let denseVal = document.getElementById('app-density').value;
         let themeVal = document.getElementById('app-theme').value;
         let radiusVal = document.getElementById('app-radius').value;
@@ -9556,11 +9780,26 @@ function openEditImportModal(idx) {
         homeSettings.compact = (denseVal === 'compact');
         saveHomeSettings(homeSettings);
 
+        /* Push the three shared values into the canonical customizer key, so the
+           other panel shows the same thing. */
+        patchCustomAppearanceValues({
+            cardCorners: radiusVal,
+            layoutDensity: denseVal,
+            languageMode: langVal
+        });
+
+        /* "Custom Labels Mode" has no greeting of its own, so the older dialect
+           is kept instead of being overwritten with the word "custom" — that way
+           the greeting stays as it was while the user edits UI strings. */
+        let greetVal = (langVal === 'custom')
+            ? (getAppearanceSettings().greetingLanguage || 'nepali')
+            : langVal;
+
         let s = {
             themeStyle: themeVal,
             animationIntensity: animVal,
             cardRadius: radiusVal,
-            greetingLanguage: langVal,
+            greetingLanguage: greetVal,
             quickActionLayout: 'grid',
             showMQuote: mquoteVal,
             showAgriQuote: agriVal,
@@ -9573,6 +9812,10 @@ function openEditImportModal(idx) {
         fontSize: 'medium',
         fontWeight: '400',
         fontFamily: 'Inter',
+        textHierarchy: 'balanced',
+        cardCorners: 'balanced',
+        cardDepth: 'balanced',
+        layoutDensity: 'comfortable',
         textColor: 'default',
         textColorCustom: '#1e293b',
         accentColor: 'emerald',
@@ -9724,6 +9967,37 @@ function openEditImportModal(idx) {
         }
     }
 
+    /* Surface / type-hierarchy presets from the Appearance & Language tab.
+       Each one is a <body> class whose values live in index.css (see the
+       "SURFACE, DEPTH & DENSITY CONTROLS" block), the same arrangement the
+       theme presets already use. Keeping the values in the stylesheet is what
+       lets every step carry its own light and dark variant. */
+    const SURFACE_STYLE_OPTIONS = {
+        textHierarchy: { prefix: 'ui-hier-',    steps: ['soft', 'balanced', 'strong'],                  fallback: 'balanced' },
+        cardCorners:   { prefix: 'ui-corner-',  steps: ['sharp', 'subtle', 'balanced', 'soft', 'round'], fallback: 'balanced' },
+        cardDepth:     { prefix: 'ui-depth-',   steps: ['flat', 'subtle', 'balanced', 'elevated'],       fallback: 'balanced' },
+        layoutDensity: { prefix: 'ui-density-', steps: ['compact', 'comfortable', 'spacious'],           fallback: 'comfortable' }
+    };
+
+    function applySurfaceStyleSettings(settings) {
+        if (!document.body) return;
+        let src = settings || {};
+        for (let key in SURFACE_STYLE_OPTIONS) {
+            let opt = SURFACE_STYLE_OPTIONS[key];
+            let active = opt.steps.indexOf(src[key]) !== -1 ? src[key] : opt.fallback;
+            opt.steps.forEach(function(step) {
+                document.body.classList.toggle(opt.prefix + step, step === active);
+            });
+        }
+    }
+
+    // Null-safe read of one customizer <select>, so a missing control can never
+    // break the live preview of the controls that are present.
+    function readCustSelect(id, fallback) {
+        let el = document.getElementById(id);
+        return (el && el.value) ? el.value : fallback;
+    }
+
     function applyCustomAppearanceAndLanguageSettings() {
         let settings = getCustomAppearanceAndLangSettings();
 
@@ -9817,7 +10091,19 @@ function openEditImportModal(idx) {
             document.documentElement.style.setProperty('--text-secondary', secHex);
         }
 
-        // 7. Translate labels
+        // 7. Card surface: corner roundness, depth and density
+        /* Corners and density are the shared values, so they come from the
+           canonical resolvers: an install that only ever used Settings →
+           Appearance keeps the radius and density it saved there, instead of
+           being reset to this key's defaults. When the customizer key exists the
+           resolvers return exactly settings.cardCorners / settings.layoutDensity. */
+        applySurfaceStyleSettings({
+            ...settings,
+            cardCorners: getCanonicalCornerValue(),
+            layoutDensity: getCanonicalDensityValue()
+        });
+
+        // 8. Translate labels
         translateAppLabels();
     }
 
@@ -10024,6 +10310,10 @@ document.querySelectorAll('button').forEach(btn => {
             textColor: activeText,
             textColorCustom: document.getElementById('cust-text-picker').value,
             bgSoftness,
+            textHierarchy: readCustSelect('cust-text-hierarchy', 'balanced'),
+            cardCorners: readCustSelect('cust-card-corners', 'balanced'),
+            cardDepth: readCustSelect('cust-card-depth', 'balanced'),
+            layoutDensity: readCustSelect('cust-layout-density', 'comfortable'),
             languageMode: langMode,
             customLabels: {
                 home: document.getElementById('lbl-home').value,
@@ -10133,6 +10423,8 @@ document.querySelectorAll('button').forEach(btn => {
             document.documentElement.style.setProperty('--text-secondary', secHex);
         }
 
+        applySurfaceStyleSettings(settings);
+
         let mode = settings.languageMode;
         let labels = {};
         if (mode === 'english') labels = defaultLabels.english;
@@ -10234,6 +10526,15 @@ document.querySelectorAll('button').forEach(btn => {
         document.getElementById('cust-font-size').value = settings.fontSize || 'medium';
         document.getElementById('cust-font-weight').value = settings.fontWeight || '400';
 
+        let hierarchySel = document.getElementById('cust-text-hierarchy');
+        if (hierarchySel) hierarchySel.value = settings.textHierarchy || 'balanced';
+        let cornersSel = document.getElementById('cust-card-corners');
+        if (cornersSel) cornersSel.value = settings.cardCorners || 'balanced';
+        let depthSel = document.getElementById('cust-card-depth');
+        if (depthSel) depthSel.value = settings.cardDepth || 'balanced';
+        let densitySel = document.getElementById('cust-layout-density');
+        if (densitySel) densitySel.value = settings.layoutDensity || 'comfortable';
+
         document.getElementById('cust-accent-color').value = settings.accentColor || 'emerald';
         document.getElementById('cust-accent-picker').value = settings.accentColorCustom || '#059669';
         updateSwatchBorders('accent-swatch', settings.accentColor);
@@ -10253,9 +10554,14 @@ document.querySelectorAll('button').forEach(btn => {
 
         toggleLanguageModeView();
         previewAppearanceAndLang();
+        appearanceFormsPopulated.appearanceLang = true;
     }
 
     function saveCustomAppearanceAndLanguageSettings() {
+        // Same reason as saveAppearanceFromForm(): an unopened form holds only
+        // markup defaults, so saving it would overwrite good values with them.
+        if (!appearanceFormsPopulated.appearanceLang) return;
+
         let fontSize = document.getElementById('cust-font-size').value;
         let fontWeight = document.getElementById('cust-font-weight').value;
         let fontFamily = document.getElementById('cust-font-family').value;
@@ -10265,6 +10571,10 @@ document.querySelectorAll('button').forEach(btn => {
         let textColorCustom = document.getElementById('cust-text-picker').value;
         let bgSoftness = document.getElementById('cust-bg-softness').value;
         let languageMode = document.getElementById('cust-language-mode').value;
+        let textHierarchy = readCustSelect('cust-text-hierarchy', 'balanced');
+        let cardCorners = readCustSelect('cust-card-corners', 'balanced');
+        let cardDepth = readCustSelect('cust-card-depth', 'balanced');
+        let layoutDensity = readCustSelect('cust-layout-density', 'comfortable');
 
         let customLabels = {};
         for (let key in defaultCustomSettings.customLabels) {
@@ -10281,19 +10591,60 @@ document.querySelectorAll('button').forEach(btn => {
             textColor,
             textColorCustom,
             bgSoftness,
+            textHierarchy,
+            cardCorners,
+            cardDepth,
+            layoutDensity,
             languageMode,
             customLabels
         };
 
         KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(settings));
         applyCustomAppearanceAndLanguageSettings();
+
+        /* The other view onto these same three values is Settings → Appearance.
+           Keep its two consumers in step: the widget renderer still reads
+           homeSettings.compact, and the older appearance key stays truthful so
+           both panels report the same thing. */
+        let homeSettings = getHomeSettings();
+        let wantCompact = (layoutDensity === 'compact');
+        if (homeSettings.compact !== wantCompact) {
+            homeSettings.compact = wantCompact;
+            saveHomeSettings(homeSettings);
+        }
+
+        let legacy = getAppearanceSettings();
+        // 'custom' has no greeting of its own — keep the dialect already stored.
+        let legacyGreeting = (languageMode === 'custom') ? (legacy.greetingLanguage || 'nepali') : languageMode;
+        if (legacy.cardRadius !== cardCorners || legacy.greetingLanguage !== legacyGreeting) {
+            legacy.cardRadius = cardCorners;
+            legacy.greetingLanguage = legacyGreeting;
+            saveAppearanceSettings(legacy);
+        }
     }
 
     function resetAppearanceAndLanguageSettings() {
         if (confirm('Are you sure you want to reset all appearance & language settings back to defaults?')) {
             KrishiStorage.removeItem('krishi_custom_appearance_settings');
+
+            /* Corners, density and language are mirrored into the older key and
+               into homeSettings.compact, and those become the fallback the moment
+               this key is gone. Put them back to their defaults too, otherwise
+               "reset" would keep whatever roundness or density was last saved. */
+            let legacy = getAppearanceSettings();
+            legacy.cardRadius = 'medium';        // → balanced (18px)
+            legacy.greetingLanguage = 'nepali';  // fresh-install greeting
+            KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(legacy));
+            let homeSettings = getHomeSettings();
+            if (homeSettings.compact) {
+                homeSettings.compact = false;    // → comfortable density
+                saveHomeSettings(homeSettings);
+            }
+
+            applyAppearanceSettings();
             applyCustomAppearanceAndLanguageSettings();
             loadAppearanceLangTabForm();
+            if (appearanceFormsPopulated.appearance) loadAppearanceTabForm();
             showToast('🔄 Appearance & language settings reset to defaults!');
             playSound('success');
         }
@@ -12180,6 +12531,9 @@ document.querySelectorAll('button').forEach(btn => {
         KrishiStorage.setItem('krishi_intensity_mode', intensity);
         KrishiStorage.setItem('krishi_difficulty_bias', difficultyBias);
         KrishiStorage.setItem('krishi_retry_delay', retryDelay);
+        stampSetting('intensityMode');
+        stampSetting('difficultyBias');
+        stampSetting('retryDelay');
         
         let studyHours = parseFloat(document.getElementById('planner-config-study-hours').value) || 2;
         let newRatio = parseInt(document.getElementById('planner-config-new-ratio').value) || 50;
@@ -12332,6 +12686,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.intensity = mode;
         } else {
             KrishiStorage.setItem('krishi_intensity_mode', mode);
+            stampSetting('intensityMode');
         }
         let configs = {
             relaxed: {target:20, hint:'🐢 Relaxed: 20 MCQs/day. Low pressure, steady pace.'},
@@ -12369,6 +12724,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.difficultyBias = bias;
         } else {
             KrishiStorage.setItem('krishi_difficulty_bias', bias);
+            stampSetting('difficultyBias');
         }
         let colors = {easy:'#10b981', balanced:'#f59e0b', hard:'#ef4444'};
         ['easy','balanced','hard'].forEach(b => {
@@ -12391,6 +12747,7 @@ document.querySelectorAll('button').forEach(btn => {
             window.draftSettings.retryDelay = days;
         } else {
             KrishiStorage.setItem('krishi_retry_delay', days);
+            stampSetting('retryDelay');
         }
         [1,3,7].forEach(d => {
             let btn = document.getElementById('retry-' + d);
@@ -12736,6 +13093,7 @@ document.querySelectorAll('button').forEach(btn => {
     function setPlanMode(mode) {
         activePlanMode = mode;
         KrishiStorage.setItem('krishi_active_plan_mode', mode); // Persist plan mode selection (Bug 8)
+        stampSetting('activePlanMode');
         ['quick', 'normal', 'deep', 'full'].forEach(m => {
             let btn = document.getElementById('pm-tab-' + m);
             if (btn) {
@@ -14191,11 +14549,24 @@ ${text}`;
             payload.timingLog = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []);
             payload.mockScores = safeJsonParse(KrishiStorage.getItem('krishi_mockScores'), []);
             payload.practiceRecent = safeJsonParse(KrishiStorage.getItem('krishi_practice_recent'), []);
+            payload.goalSettings = safeJsonParse(KrishiStorage.getItem('krishi_goal_settings'), {});
+            payload.customSubjects = safeJsonParse(KrishiStorage.getItem('krishi_custom_subjects'), []);
+            payload.customSubjectsLog = safeJsonParse(KrishiStorage.getItem(SUBJECT_LOG_KEY), {});
+            payload.layoutBackups = safeJsonParse(KrishiStorage.getItem('krishi_layout_backups'), []);
+            payload.lastPracticeConfig = safeJsonParse(KrishiStorage.getItem('krishi_last_practice_config'), {});
             payload.soundEnabled = KrishiStorage.getItem('krishi_sound_enabled');
             payload.soundMuted = KrishiStorage.getItem('krishi_sound_muted');
             payload.soundVolume = KrishiStorage.getItem('krishi_sound_volume');
             payload.dark = KrishiStorage.getItem('krishi_dark');
             payload.batterySaver = KrishiStorage.getItem('krishi_battery_saver');
+            payload.hapticEnabled = KrishiStorage.getItem('krishi_haptic_enabled');
+            payload.eliteAnimations = KrishiStorage.getItem('krishi_elite_animations');
+            payload.difficultyBias = KrishiStorage.getItem('krishi_difficulty_bias');
+            payload.intensityMode = KrishiStorage.getItem('krishi_intensity_mode');
+            payload.activePlanMode = KrishiStorage.getItem('krishi_active_plan_mode');
+            payload.retryDelay = KrishiStorage.getItem('krishi_retry_delay');
+            // Per-setting write clocks travel with the settings they order.
+            payload.settingStamps = getSettingStamps();
         }
 
         if (window.currentAuthUser && window.currentAuthUser.uid) {
@@ -14353,6 +14724,30 @@ ${text}`;
             if (data.batterySaver !== undefined && data.batterySaver !== null) {
                 KrishiStorage.setItem('krishi_battery_saver', data.batterySaver);
             }
+
+            if (data.goalSettings) KrishiStorage.setItem('krishi_goal_settings', JSON.stringify(data.goalSettings));
+            if (data.lastPracticeConfig) KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(data.lastPracticeConfig));
+            setJSONArraySafely('krishi_custom_subjects', data.customSubjects, 'customSubjects');
+            if (data.customSubjectsLog && typeof data.customSubjectsLog === 'object') {
+                KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(data.customSubjectsLog));
+            }
+            // Persist the merged write clocks, otherwise the next merge on this device
+            // compares the incoming value against a stale stamp and flips it straight back.
+            if (data.settingStamps && typeof data.settingStamps === 'object') {
+                KrishiStorage.setItem(SETTING_STAMPS_KEY, JSON.stringify(data.settingStamps));
+            }
+            setJSONArraySafely('krishi_layout_backups', data.layoutBackups, 'layoutBackups');
+
+            [['hapticEnabled',  'krishi_haptic_enabled'],
+             ['eliteAnimations','krishi_elite_animations'],
+             ['difficultyBias', 'krishi_difficulty_bias'],
+             ['intensityMode',  'krishi_intensity_mode'],
+             ['activePlanMode', 'krishi_active_plan_mode'],
+             ['retryDelay',     'krishi_retry_delay']].forEach(([field, key]) => {
+                if (data[field] !== undefined && data[field] !== null) {
+                    KrishiStorage.setItem(key, data[field]);
+                }
+            });
         }
         
         // Reload state into active memory (no DOM involvement)
@@ -14653,6 +15048,57 @@ ${text}`;
         merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
         merged.soundVolume = useCloud ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
 
+        // Object config packs — same document-clock LWW as the interface configs above.
+        merged.goalSettings = useCloud ? (cloud.goalSettings || local.goalSettings) : (local.goalSettings || cloud.goalSettings);
+        merged.lastPracticeConfig = useCloud ? (cloud.lastPracticeConfig || local.lastPracticeConfig) : (local.lastPracticeConfig || cloud.lastPracticeConfig);
+
+        // Custom subjects merge through their own CRDT log, exactly like bookmarks. A plain
+        // union can only ever grow the list, so a removal on one device was silently undone
+        // by the next merge with a peer that still had it.
+        const subjectKey = s => (typeof s === 'string' ? s : JSON.stringify(s));
+        const subjectSet = new Set();
+        (cloud.customSubjects || []).forEach(s => { if (s) subjectSet.add(subjectKey(s)); });
+        (local.customSubjects || []).forEach(s => { if (s) subjectSet.add(subjectKey(s)); });
+        const mergedSubjectLog = mergeCRDTLogs(local.customSubjectsLog, cloud.customSubjectsLog);
+        Object.entries(mergedSubjectLog).forEach(([name, info]) => {
+            if (!info) return;
+            if (info.action === 'add') subjectSet.add(name);
+            else if (info.action === 'remove') subjectSet.delete(name);
+        });
+        merged.customSubjectsLog = mergedSubjectLog;
+        merged.customSubjects = Array.from(subjectSet);
+
+        const layoutKey = b => ((b && (b.timestamp ?? b.id)) ?? JSON.stringify(b));
+        const layoutMap = new Map();
+        (cloud.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
+        (local.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
+        merged.layoutBackups = Array.from(layoutMap.values());
+
+        // Scalar toggles. These merge on their own per-field clock (settingStamps), NOT on
+        // the document clock: collectAllAppData() rewrites `updatedAt` to Date.now() on
+        // every read, so `useCloud` is essentially always false and the cloud side could
+        // never win. That is what stopped a dark-mode OFF from ever reaching the peer while
+        // the initial OFF->ON still appeared to work.
+        // Where neither side has a stamp yet (settings written before this existed, or
+        // toggles with no UI setter) fall back to the old document-clock behaviour.
+        // Assigned only when defined — an undefined value in a Firestore write throws.
+        const localStamps = (local.settingStamps && typeof local.settingStamps === 'object') ? local.settingStamps : {};
+        const cloudStamps = (cloud.settingStamps && typeof cloud.settingStamps === 'object') ? cloud.settingStamps : {};
+        const mergedStamps = {};
+        ['dark', 'batterySaver', 'hapticEnabled', 'eliteAnimations',
+         'difficultyBias', 'intensityMode', 'activePlanMode', 'retryDelay'].forEach(k => {
+            const ls = Number(localStamps[k] || 0);
+            const cs = Number(cloudStamps[k] || 0);
+            let takeCloud;
+            if (cs !== ls) takeCloud = cs > ls;       // per-field clock decides
+            else takeCloud = useCloud;                 // no stamps to compare: legacy path
+            const v = takeCloud ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
+            if (v !== undefined) merged[k] = v;
+            const stamp = Math.max(ls, cs);
+            if (stamp > 0) mergedStamps[k] = stamp;
+        });
+        merged.settingStamps = mergedStamps;
+
         merged.updatedAt = Math.max(local.updatedAt || 0, cloudUpdatedAt);
         return merged;
     }
@@ -14670,6 +15116,13 @@ ${text}`;
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
             'timingLog', 'mockScores', 'practiceRecent',
             'soundEnabled', 'soundMuted', 'soundVolume',
+            // dark and batterySaver were missing here, so even once the merge carried them
+            // the delta writer would still never have shipped a change to either.
+            'dark', 'batterySaver',
+            'goalSettings', 'customSubjects', 'customSubjectsLog', 'layoutBackups', 'lastPracticeConfig',
+            'hapticEnabled', 'eliteAnimations', 'difficultyBias',
+            'intensityMode', 'activePlanMode', 'retryDelay',
+            'settingStamps',
             'userProfile',
             'ownerUid', 'isCompressed'
         ];
@@ -15059,6 +15512,7 @@ function restoreUIStateIfCached() {
 function toggleHapticSetting() {
     let isEnabled = document.getElementById('haptic-enabled').checked;
     KrishiStorage.setItem('krishi_haptic_enabled', isEnabled);
+    stampSetting('hapticEnabled');
     if(isEnabled) {
         document.getElementById('haptic-test-area').classList.remove('hidden');
         triggerHaptic('correct'); // टोगल गर्दा सानो भाइब्रेसन दिने
@@ -16036,6 +16490,15 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
 // एकीकृत सुरक्षित अभ्यास प्रोग्रेस सेभर (Unified Secure Practice Progress Saver)
 function savePracticeProgress() {
     try {
+        // A session that has ended must never be persisted again. finishSession() clears the
+        // saved-practice record and then calls saveData(), and saveData() calls back into
+        // this function — so without these two guards the finished session was written
+        // straight back over its own tombstone, both locally and (via the debounce below)
+        // to Firestore. That resurrected record is what the other device then offered as a
+        // "live session on peer device", and resuming it re-saved it, looping forever.
+        if (state && state.isFinishing) return;
+        if (state && state.questions && state.currentIndex >= state.questions.length) return;
+
         if (state && state.questions && state.questions.length > 0 && !state.answered) {
             // Abort saving if it's a completely fresh, untouched session (0% progress)
             // This prevents "ghost popups" from appearing if the user accidentally clicks a subject and leaves immediately.
@@ -16134,6 +16597,14 @@ function savePracticeProgress() {
 // २. सुरक्षित राखिएको अधुरो अभ्यासलाई हटाउने फङ्सन
 function clearPracticeProgress() {
     try {
+        // Cancel any autosave that savePracticeProgress() scheduled but has not yet flushed.
+        // That write is debounced 3000ms; if it fires after we set the tombstone below it
+        // re-uploads the full (now finished) session and undoes the clear — the exact race
+        // that made a completed session reappear as "live on peer device".
+        if (window.cloudSavePracticeTimeout) {
+            clearTimeout(window.cloudSavePracticeTimeout);
+            window.cloudSavePracticeTimeout = null;
+        }
         KrishiStorage.setItem('krishi_local_session_tombstone', Date.now());
         KrishiStorage.removeItem('krishi_saved_practice');
         
@@ -16393,6 +16864,7 @@ window.toggleEliteAnimationsSetting = function() {
     if (!checkbox) return;
     let isEnabled = checkbox.checked;
     KrishiStorage.setItem('krishi_elite_animations', isEnabled ? 'true' : 'false');
+    stampSetting('eliteAnimations');
     
     let bgCanvasEl = document.getElementById('weather-ambient-canvas');
     if (bgCanvasEl) {

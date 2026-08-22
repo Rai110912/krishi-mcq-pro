@@ -6,6 +6,12 @@
       "runtimeExecutable": "firebase",
       "runtimeArgs": ["serve", "--only", "hosting", "--port", "5000"],
       "port": 5000
+    },
+    {
+      "name": "krishi-source-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5500"],
+      "port": 5500
     }
   ]
 }

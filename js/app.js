@@ -2394,6 +2394,27 @@ function loadData(){
         } catch (e) {}
     }
 
+    // ── Live version badge ────────────────────────────────────────────────────
+    // The settings badge used to be hand-written HTML that no build step
+    // updated, so it drifted dozens of versions behind. version.json is the
+    // single source of truth the OTA engine already trusts.
+    window.__krishiAppVersion = null;
+    (function initVersionBadge() {
+        const render = (v) => {
+            const el = document.getElementById('app-version-badge');
+            if (!el || !v) return;
+            const compact = String(v.buildTime || '').replace(/[^0-9]/g, '').slice(0, 12);
+            el.textContent = 'App Version: ' + (v.version || '?') + '-' + (v.gitHash || '') +
+                (compact ? ' (' + compact + ')' : '');
+        };
+        try {
+            fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+                .then(r => r.ok ? r.json() : null)
+                .then(v => { if (v && v.version) { window.__krishiAppVersion = v; render(v); } })
+                .catch(() => {});
+        } catch (e) {}
+    })();
+
     async function handleGoogleLogin() {
         try {
             showToast('⏳ Opening Google Sign-in...');
@@ -13059,9 +13080,9 @@ document.querySelectorAll('button').forEach(btn => {
 
     function exportStudyReport() {
         try {
-            let report = {
-                exportDate: new Date().toISOString(),
-                appVersion: 'Krishi MCQ Pro v28',
+let report = {
+exportDate: new Date().toISOString(),
+appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAppVersion.version || '') + (window.__krishiAppVersion.gitHash ? '-' + window.__krishiAppVersion.gitHash : '')) : 'version-unknown'),
                 settings: getPlannerSettings(),
                 stats: localData.stats || {},
                 wrongQuestions: getValidWrongCount(),

@@ -1,3 +1,23 @@
+// ─── Silent-failure telemetry ─────────────────────────────────────────────
+// Central sink for intentionally-swallowed errors (storage fallbacks,
+// migration guards). Resilience is preserved — failures stay non-fatal —
+// but they become visible: a rate-limited console.warn plus an in-memory
+// ring buffer inspectable via krishiGetSilentFailures() in DevTools.
+const KRISHI_SILENT_FAILURE_LOG = [];
+const KRISHI_SILENT_WARN_BUDGET = Object.create(null);
+window.krishiLogSilent = function (context, err) {
+    try {
+        const ctx = String(context || 'unknown');
+        KRISHI_SILENT_FAILURE_LOG.push({ at: Date.now(), context: ctx, message: err && err.message ? err.message : String(err) });
+        if (KRISHI_SILENT_FAILURE_LOG.length > 50) KRISHI_SILENT_FAILURE_LOG.shift();
+        if ((KRISHI_SILENT_WARN_BUDGET[ctx] || 0) < 3) {
+            KRISHI_SILENT_WARN_BUDGET[ctx] = (KRISHI_SILENT_WARN_BUDGET[ctx] || 0) + 1;
+            console.warn('[KrishiSilent]', ctx + ':', err && err.message ? err.message : err);
+        }
+    } catch (_) {}
+};
+window.krishiGetSilentFailures = function () { return KRISHI_SILENT_FAILURE_LOG.slice(); };
+
 function initLiveOTAUpdateEngine() {
     let isApplyingOTA = false;
 
@@ -40,7 +60,7 @@ function initLiveOTAUpdateEngine() {
                 if ('serviceWorker' in navigator) {
                     navigator.serviceWorker.getRegistrations().then(regs => {
                         regs.forEach(reg => {
-                            try { reg.update(); } catch (e) {}
+                            try { reg.update(); } catch (e) { window.krishiLogSilent && krishiLogSilent('sw.update', e); }
                         });
                     });
                 }
@@ -420,7 +440,7 @@ async function checkAndSyncDeltaQuestions() {
             if (window.KrishiPreCachePriorityManager) {
                 await window.KrishiPreCachePriorityManager.processHighPriorityTextSync(newItemsToInsert);
             } else if (window.KrishiSQLite && typeof window.KrishiSQLite.saveQuestions === 'function') {
-                try { await window.KrishiSQLite.saveQuestions(newItemsToInsert); } catch(e) {}
+                try { await window.KrishiSQLite.saveQuestions(newItemsToInsert); } catch(e) { window.krishiLogSilent && krishiLogSilent('delta.sqlite_save', e); }
             }
 
             // Priority Tier 2: Defer Non-Essential Media & Diagram Pre-Caching to Network Idle
@@ -563,8 +583,8 @@ class KrishiSM2Engine {
                     dataMigrated = true;
                 }
             });
-            if (dataMigrated) this._saveData(data);
-        } catch(e) {}
+        if (dataMigrated) this._saveData(data);
+    } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.migrate', e); }
         
         // Backward compatibility migration from legacy krishi_review
         try {
@@ -602,7 +622,7 @@ class KrishiSM2Engine {
     static _saveData(data) {
         try {
             localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
-        } catch(e) {}
+        } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.save', e); }
     }
 
     static recordAnswer(questionId, isCorrect, timeSpentSec = 10) {
@@ -754,8 +774,8 @@ class KrishiSM2Engine {
     static recordDailyReview(isCorrect = null) {
         let log = {};
         try {
-            log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
-        } catch(e) {}
+        log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
+    } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_read', e); }
         
         const dateStr = new Date().toISOString().split('T')[0];
         if (!log[dateStr]) log[dateStr] = { total: 0, correct: 0 };
@@ -768,7 +788,7 @@ class KrishiSM2Engine {
         
         try {
             localStorage.setItem('krishi_sm2_daily_log', JSON.stringify(log));
-        } catch(e) {}
+        } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_write', e); }
     }
 
     static getRetentionRate() {
@@ -787,70 +807,6 @@ class KrishiSM2Engine {
 window.KrishiSM2Engine = KrishiSM2Engine;
 window.KrishiDeltaMerge = KrishiDeltaMerge;
 
-class KrishiE2EEEngine {
-    static async _getKey(passphrase) {
-        const enc = new TextEncoder();
-        const keyMaterial = await window.crypto.subtle.importKey(
-            'raw',
-            enc.encode(passphrase || 'KRISHI-DEFAULT-PASSPHRASE'),
-            { name: 'PBKDF2' },
-            false,
-            ['deriveKey']
-        );
-        return window.crypto.subtle.deriveKey(
-            {
-                name: 'PBKDF2',
-                salt: enc.encode('krishi-mcq-pro-salt-2026'),
-                iterations: 10000,
-                hash: 'SHA-256'
-            },
-            keyMaterial,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['encrypt', 'decrypt']
-        );
-    }
-
-    static async encryptPayload(payloadObj, passphrase) {
-        if (!window.crypto || !window.crypto.subtle) return payloadObj;
-        try {
-            const key = await this._getKey(passphrase);
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const jsonStr = JSON.stringify(payloadObj);
-            const encoded = new TextEncoder().encode(jsonStr);
-            const cipher = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-
-            const cipherB64 = btoa(String.fromCharCode(...new Uint8Array(cipher)));
-            const ivB64 = btoa(String.fromCharCode(...iv));
-
-            return { __e2ee__: true, v: 1, cipher: cipherB64, iv: ivB64, updatedAt: payloadObj.updatedAt || Date.now() };
-        } catch(e) {
-            console.warn('[E2EE] Encryption fallback:', e);
-            return payloadObj;
-        }
-    }
-
-    static async decryptPayload(envelopeObj, passphrase) {
-        if (!envelopeObj || !envelopeObj.__e2ee__ || !envelopeObj.cipher || !envelopeObj.iv) {
-            return envelopeObj;
-        }
-        if (!window.crypto || !window.crypto.subtle) return envelopeObj;
-
-        try {
-            const key = await this._getKey(passphrase);
-            const cipherBytes = Uint8Array.from(atob(envelopeObj.cipher), c => c.charCodeAt(0));
-            const ivBytes = Uint8Array.from(atob(envelopeObj.iv), c => c.charCodeAt(0));
-
-            const decryptedBuffer = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, cipherBytes);
-            const jsonStr = new TextDecoder().decode(decryptedBuffer);
-            return JSON.parse(jsonStr);
-        } catch(e) {
-            console.warn('[E2EE] Decryption bypass:', e);
-            return envelopeObj;
-        }
-    }
-}
-
 function generatePairingPin() {
     if (typeof window.generatePairingPin === 'function' && window.generatePairingPin !== generatePairingPin) {
         return window.generatePairingPin();
@@ -863,6 +819,5 @@ function pairWithPin(pinInput) {
     }
 }
 
-window.KrishiE2EEEngine = KrishiE2EEEngine;
 window.showUpdateProgressHUD = showUpdateProgressHUD;
 window.checkAndSyncDeltaQuestions = checkAndSyncDeltaQuestions;

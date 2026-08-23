@@ -141,7 +141,7 @@ const KrishiStorage = (() => {
             if (worker) {
                 worker.postMessage({ type: 'set', key, value: valStr });
             } else {
-                try { localStorage.setItem(key, valStr); } catch(e){} // Fallback
+                try { localStorage.setItem(key, valStr); } catch(e){ window.krishiLogSilent && window.krishiLogSilent('idb.ls_set', e); } // Fallback
             }
         },
         removeItem(key) {
@@ -150,7 +150,7 @@ const KrishiStorage = (() => {
             if (worker) {
                 worker.postMessage({ type: 'remove', key });
             } else {
-                try { localStorage.removeItem(key); } catch(e){} // Fallback
+                try { localStorage.removeItem(key); } catch(e){ window.krishiLogSilent && window.krishiLogSilent('idb.ls_remove', e); } // Fallback
             }
         },
         clear() {
@@ -159,7 +159,7 @@ const KrishiStorage = (() => {
             if (worker) {
                 worker.postMessage({ type: 'clear' });
             } else {
-                try { localStorage.clear(); } catch(e){} // Fallback
+                try { localStorage.clear(); } catch(e){ window.krishiLogSilent && window.krishiLogSilent('idb.ls_clear', e); } // Fallback
             }
         }
     };

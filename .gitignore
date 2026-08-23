@@ -28,6 +28,7 @@ android/.idea/
 android/keystore.properties
 
 # Build artifacts
+www/
 android/app/src/main/assets/public/
 
 # Firebase

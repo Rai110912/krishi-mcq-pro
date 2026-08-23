@@ -243,6 +243,19 @@
     // 2. 🧠 Premium 3D Holographic Syllabus Mastery Dome
     window.init3DSyllabusDome = function(canvas) {
         if (!canvas) return;
+
+        // The call site rebuilds the analytics card's innerHTML before re-init,
+        // so the previous canvas (and any cleanup stored on it) is destroyed.
+        // Keep the teardown in module-level slots as well so the previous
+        // instance's window listeners and RAF loop are always released.
+        if (typeof window._krishiDomeCleanup === 'function') {
+            try { window._krishiDomeCleanup(); } catch (e) {}
+            window._krishiDomeCleanup = null;
+        }
+        if (canvas._krishi3DCleanup) {
+            canvas._krishi3DCleanup();
+        }
+
         let ctx = canvas.getContext('2d');
         let thetaX = -0.15;
         let thetaY = 0.5;
@@ -279,14 +292,25 @@
         canvas.addEventListener('touchmove', onMove, {passive: true});
         window.addEventListener('touchend', onUp);
 
+        function cleanupDome() {
+            canvas.removeEventListener('mousedown', onDown);
+            canvas.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.removeEventListener('touchstart', onDown);
+            canvas.removeEventListener('touchmove', onMove);
+            window.removeEventListener('touchend', onUp);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        }
+        canvas._krishi3DCleanup = cleanupDome;
+        window._krishiDomeCleanup = cleanupDome;
+
         let subjects = typeof window.getAllSubjects === 'function' ? window.getAllSubjects().slice(0, 5) : ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Path'];
         if (subjects.length < 3) subjects = ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Path'];
 
         function draw() {
             if (!canvas.parentNode) {
-                window.removeEventListener('mouseup', onUp);
-                window.removeEventListener('touchend', onUp);
-                cancelAnimationFrame(animationFrameId);
+                if (window._krishiDomeCleanup === cleanupDome) window._krishiDomeCleanup = null;
+                cleanupDome();
                 return;
             }
             let isElite = localStorage.getItem('krishi_elite_animations') !== 'false';
@@ -375,7 +399,7 @@
 
             // Glowing synaptic lasers traveling along connection lines
             let baseFreq = (window.EliteAnimsConfig && typeof window.EliteAnimsConfig.laserSignalFrequency !== 'undefined') ? window.EliteAnimsConfig.laserSignalFrequency : 1.0;
-            let activeFreq = window.EliteAnimsConfig.throttled ? baseFreq * 0.5 : baseFreq;
+            let activeFreq = (window.EliteAnimsConfig && window.EliteAnimsConfig.throttled) ? baseFreq * 0.5 : baseFreq;
             let tPulse = (Date.now() * 0.002 * activeFreq) % 1.0;
             
             for (let i = 1; i < projected.length; i++) {

@@ -16,10 +16,32 @@ service cloud.firestore {
       }
     }
 
-    // ─── Pairing Pins: Authenticated users only, for device pairing ───────────
-    // Pins are short-lived (15 minutes). Only authenticated users can create.
+    // ─── Pairing Pins: Short-lived, owner-controlled ─────────────────────────
+    // Pins are 6-digit codes (15-minute validity) used to link a second device.
+    //   - CREATE: only the authenticated creator, who must stamp their own UID
+    //     as ownerUid. Overwriting someone else's existing pin via set()
+    //     fails because an existing doc evaluates against the update rule.
+    //   - GET: any authenticated user may fetch a specific pin by ID (required
+    //     for pairing), but expired pins become unreadable server-side, which
+    //     bounds the exposure window of the embedded sync key.
+    //   - LIST: denied — pins must be known by ID, so the collection cannot be
+    //     enumerated to discover other users' pairing attempts.
+    //   - UPDATE/DELETE: owner only — no client code writes to pins today,
+    //     but this blocks tampering with someone else's active pin.
     match /sync_pins/{pin} {
-      allow read, write: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.syncKey is string
+                    && request.resource.data.expiresAt is number;
+
+      allow get: if request.auth != null
+                 && (!('expiresAt' in resource.data)
+                     || resource.data.expiresAt > request.time.toMillis());
+
+      allow list: if false;
+
+      allow update, delete: if request.auth != null
+                            && resource.data.ownerUid == request.auth.uid;
     }
 
     // ─── Legacy sync_keys: Permanently denied ────────────────────────────────

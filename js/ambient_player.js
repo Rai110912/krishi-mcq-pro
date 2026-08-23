@@ -534,7 +534,7 @@
     };
 
     function _loadCustomSounds() {
-        try { return JSON.parse(KrishiStorage.getItem('krishi_ambient_custom') || '[]'); } catch { return []; }
+        try { return JSON.parse(KrishiStorage.getItem('krishi_ambient_custom') || '[]'); } catch (e) { window.krishiLogSilent && window.krishiLogSilent('ambient.custom_sounds', e); return []; }
     }
 
     // ─── PERSISTENT STATE ────────────────────────────────────────────────────
@@ -547,9 +547,38 @@
     }
 
     // ─── DRAWER RENDERER (now exposed as ambientRenderGrid for settings tab) ──────────────────────────────────────────
+    // Custom sound labels/URLs are user input: they are HTML-escaped and all
+    // interactions run through delegated listeners on data-* attributes, never
+    // through string-interpolated inline handlers.
+    function _escAttr(v) {
+        return String(v == null ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
     window.ambientRenderGrid = function() {
         const container = document.getElementById('ambient-sounds-grid');
         if (!container) return;
+
+        if (!container.__krishiAmbientWired) {
+            container.__krishiAmbientWired = true;
+            container.addEventListener('click', function(ev) {
+                const card = ev.target.closest('.ambient-sound-card');
+                if (!card) return;
+                if (ev.target.closest('[data-role="remove"]')) {
+                    ev.stopPropagation();
+                    window.ambientRemoveCustomSound(card.dataset.id);
+                    return;
+                }
+                if (!ev.target.closest('.ambient-card-top')) return;
+                window.ambientToggleSound(card.dataset.id, card.dataset.url || '');
+            });
+            container.addEventListener('input', function(ev) {
+                if (!ev.target.matches('[data-role="volume"]')) return;
+                const card = ev.target.closest('.ambient-sound-card');
+                if (card) window.ambientSetVolume(card.dataset.id, ev.target.value);
+            });
+        }
 
         const customs = _loadCustomSounds();
         const allSounds = [...window.KrishiAmbientSounds, ...customs];
@@ -559,19 +588,18 @@
             const vol = activeSources[sound.id] ? activeSources[sound.id].gainNode.gain.value : 0.5;
             const isCustom = sound.id.startsWith('custom_');
             return `
-            <div class="ambient-sound-card ${playing ? 'ambient-card-active' : ''}" style="--accent:${sound.color}">
-                <div class="ambient-card-top" onclick="ambientToggleSound('${sound.id}','${sound.url || ''}')">
+            <div class="ambient-sound-card ${playing ? 'ambient-card-active' : ''}" style="--accent:${_escAttr(sound.color)}" data-id="${_escAttr(sound.id)}"${isCustom ? ` data-url="${_escAttr(sound.url || '')}"` : ''}>
+                <div class="ambient-card-top">
                     <span class="ambient-card-icon">${playing ? '⏸️' : '▶️'}</span>
-                    <span class="ambient-card-label">${sound.label}</span>
-                    ${isCustom ? `<button class="ambient-remove-btn" onclick="event.stopPropagation();ambientRemoveCustomSound('${sound.id}')">✕</button>` : ''}
+                    <span class="ambient-card-label">${_escAttr(sound.label)}</span>
+                    ${isCustom ? `<button class="ambient-remove-btn" data-role="remove">✕</button>` : ''}
                 </div>
                 ${playing ? `
                 <div class="ambient-vol-row">
                     <span class="ambient-vol-icon">🔊</span>
                     <input type="range" min="0" max="1" step="0.01" value="${vol}"
-                        class="ambient-vol-slider"
-                        oninput="ambientSetVolume('${sound.id}', this.value)"
-                        style="accent-color:${sound.color}">
+                        class="ambient-vol-slider" data-role="volume"
+                        style="accent-color:${_escAttr(sound.color)}">
                 </div>` : ''}
             </div>`;
         }).join('');

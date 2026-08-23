@@ -1,7 +1,0 @@
-{
-  "version": "1.0",
-  "timestamp": 1786028800000,
-  "count": 0,
-  "added_questions": [],
-  "_note": "Delta payload emptied on 2026-08-23: previous entries contained unrecoverable encoding corruption (mojibake) and duplicate answer options. Re-add future question batches here with proper UTF-8 encoding."
-}

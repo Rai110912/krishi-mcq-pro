@@ -20,7 +20,7 @@ if "%deploy_mode%"=="1" (
     set FIREBASE_CMD=firebase hosting:channel:deploy staging
     echo =^> Selected: Staging Preview
 ) else (
-    set FIREBASE_CMD=firebase deploy --only hosting
+    set FIREBASE_CMD=firebase deploy --only hosting,firestore:rules
     echo =^> Selected: Live Production
 )
 echo.
@@ -31,6 +31,15 @@ if %ERRORLEVEL% neq 0 (
     echo [ERROR] JSON Database QA Test Failed! Fix the database before deploying.
     goto error_exit
 )
+echo.
+
+echo [2.5/8] Running Unit Test Suite (FSRS + Merge Engine)...
+call npm test
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Unit tests failed! Deploy aborted.
+    goto error_exit
+)
+echo  =^> All tests passed!
 echo.
 
 echo [3/8] Running Syntax Verification...

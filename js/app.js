@@ -16160,7 +16160,14 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         bgCanvas.width = window.innerWidth;
         bgCanvas.height = window.innerHeight;
     }
-    window.addEventListener('resize', initBgCanvas);
+    // Debounced: mobile keyboards and rotation fire this in bursts; each run
+    // reallocates the full-screen buffer. The draw loop also self-corrects
+    // size on the next frame, so a short delay is safe.
+    let _krishiBgResizeTimer = null;
+    window.addEventListener('resize', function() {
+        if (_krishiBgResizeTimer) clearTimeout(_krishiBgResizeTimer);
+        _krishiBgResizeTimer = setTimeout(initBgCanvas, 150);
+    });
     initBgCanvas();
 
     function drawAmbientBackground() {

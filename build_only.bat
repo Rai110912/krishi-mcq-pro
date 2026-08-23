@@ -28,6 +28,15 @@ if %ERRORLEVEL% neq 0 (
 echo  =^> Syntax OK!
 echo.
 
+echo [1.5/5] Running Unit Test Suite (FSRS + Merge Engine)...
+call npm test
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Unit tests failed! Build aborted.
+    exit /b 1
+)
+echo  =^> All tests passed!
+echo.
+
 echo [2/5] Bumping Version + Cache Tokens...
 call node bump_version.js
 if %ERRORLEVEL% neq 0 (

@@ -15,6 +15,7 @@ const FILES_TO_COPY = [
 ];
 
 const DIRS_TO_COPY = [
+    'assets',
     'js'
 ];
 

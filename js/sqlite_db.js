@@ -121,9 +121,9 @@
             // Parse stored JSON fields back to objects
             return result.values.map(row => {
                 let parsedOpts = [];
-                try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; }
+                try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; window.krishiLogSilent && window.krishiLogSilent('sqlite.parse_options', e); }
                 let parsedTags = [];
-                try { parsedTags = row.tags ? (typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags) : []; } catch(e){ parsedTags = []; }
+                try { parsedTags = row.tags ? (typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags) : []; } catch(e){ parsedTags = []; window.krishiLogSilent && window.krishiLogSilent('sqlite.parse_tags', e); }
                 return {
                     id: row.id,
                     sub: row.subject,
@@ -222,7 +222,7 @@
                 if (result && result.values) {
                     return result.values.map(row => {
                         let parsedOpts = [];
-                        try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; }
+                        try { parsedOpts = typeof row.options === 'string' ? JSON.parse(row.options) : (row.options || []); } catch(e){ parsedOpts = []; window.krishiLogSilent && window.krishiLogSilent('sqlite.parse_options', e); }
                         return {
                             id: row.id,
                             sub: row.subject,
@@ -258,7 +258,7 @@
                 queue.push({ action, payload, timestamp: Date.now() });
                 localStorage.setItem('krishi_offline_sync_queue', JSON.stringify(queue));
                 console.log(`[OfflineSync] Action '${action}' queued locally.`);
-            } catch(e) {}
+            } catch(e) { window.krishiLogSilent && window.krishiLogSilent('sqlite.queue_push', e); }
         },
         async drain() {
             if (!navigator.onLine) return;
@@ -270,7 +270,7 @@
                 if (window.syncCloudNow) {
                     await window.syncCloudNow(true);
                 }
-            } catch(e) {}
+            } catch(e) { window.krishiLogSilent && window.krishiLogSilent('sqlite.queue_drain', e); }
         }
     };
 

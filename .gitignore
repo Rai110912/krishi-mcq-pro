@@ -5,6 +5,16 @@ npm-debug.log*
 # Logs (regenerated on every run; only useful right after a failure)
 *.log
 
+# ADB / tooling debug dumps (large, regenerable)
+adblog*.txt
+firepit-log.txt
+firebase_deploy_log.txt
+deploy_history.txt
+extracted_*.txt
+
+# Temp / scratch artifacts
+temp.html
+
 # Capacitor
 android/.gradle/
 android/app/build/

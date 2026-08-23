@@ -1492,14 +1492,21 @@ function loadData(){
     }
 
     function updateOfflineQueueBadge() {
+        // Legacy placeholder from an older badge design; keep it hidden.
+        const legacyBadge = document.getElementById('krishi-offline-queue-badge');
+        if (legacyBadge) {
+            legacyBadge.classList.add('hidden');
+            legacyBadge.style.display = 'none';
+        }
+
         const btn = document.getElementById('btn-sync-now');
         if (!btn) return;
-        
+
         let oldBadge = document.getElementById('sync-pending-badge');
         if (oldBadge) {
             oldBadge.remove();
         }
-        
+
         const count = parseInt(KrishiStorage.getItem('krishi_sync_pending_count') || '0');
         if (count > 0) {
             const badge = document.createElement('span');
@@ -1509,6 +1516,9 @@ function loadData(){
             btn.appendChild(badge);
         }
     }
+    window.updateOfflineQueueBadge = updateOfflineQueueBadge;
+    window.addEventListener('online', updateOfflineQueueBadge);
+    window.addEventListener('offline', updateOfflineQueueBadge);
 
     function toggleSelectiveSyncSetting(type) {
         if (type === 'bookmarks') {
@@ -1923,6 +1933,17 @@ function loadData(){
         const display = document.getElementById('active-sync-key-display');
         const timeTxt = document.getElementById('sync-time-txt');
 
+        // Backup size meter: makes the invisible 900 KB ceiling visible before
+        // it ever blocks a sync. Cheap enough — runs only on sync UI events.
+        try {
+            const meterEl = document.getElementById('krishi-backup-meter');
+            if (meterEl) {
+                const probeKB = Math.round(JSON.stringify(collectAllAppData()).length / 1024);
+                meterEl.textContent = '💾 Backup size: ~' + probeKB + ' KB / 900 KB limit';
+                meterEl.style.color = probeKB > 750 ? '#ef4444' : (probeKB > 550 ? '#d97706' : '');
+            }
+        } catch (e) {}
+
         if (key) {
             if (setupPanel) setupPanel.classList.add('hidden');
             if (activePanel) activePanel.classList.remove('hidden');
@@ -2328,6 +2349,51 @@ function loadData(){
         }
     }
 
+    // Anonymous→permanent upgrade: linking preserves the CURRENT uid, so any
+    // progress already synced under the auto-created anonymous account keeps
+    // living in the same cloud document instead of being orphaned forever.
+    async function krishiLinkIfAnonymousOrSignIn(auth, { provider, credential } = {}) {
+        const user = auth.currentUser;
+        if (user && user.isAnonymous) {
+            try {
+                if (credential) return await user.linkWithCredential(credential);
+                return await user.linkWithPopup(provider);
+            } catch (linkErr) {
+                // This Google identity already owns another Firebase account.
+                // Fall back to a normal sign-in; local data rides along and the
+                // first sync pushes it into that account.
+                if (provider && linkErr.code === 'auth/credential-already-in-use' ||
+                    provider && linkErr.code === 'auth/email-already-in-use') {
+                    return await auth.signInWithPopup(provider);
+                }
+                throw linkErr;
+            }
+        }
+        if (credential) return await auth.signInWithCredential(credential);
+        return await auth.signInWithPopup(provider);
+    }
+
+    // Gentle one-per-week reminder for auto-created anonymous accounts whose
+    // progress is device-bound until they link a real login.
+    function krishiMaybeNudgeLogin() {
+        try {
+            const user = window.currentAuthUser || (firebaseAuth && firebaseAuth.currentUser);
+            if (!user || !user.isAnonymous) return;
+            if (!navigator.onLine) return;
+            const now = Date.now();
+            const last = parseInt(KrishiStorage.getItem('krishi_anon_nudge_at') || '0');
+            if (now - last < 7 * 24 * 60 * 60 * 1000) return;
+            let solved = 0;
+            const ss = localData && localData.stats && localData.stats.subjectStats;
+            if (ss && typeof ss === 'object') {
+                Object.keys(ss).forEach(k => { solved += (ss[k] && ss[k].solved) || 0; });
+            }
+            if (solved < 100) return;
+            KrishiStorage.setItem('krishi_anon_nudge_at', String(now));
+            showToast('💾 ' + solved + '+ questions solved, but this progress lives only on this device! Login with Google to keep it safe forever.', 9000);
+        } catch (e) {}
+    }
+
     async function handleGoogleLogin() {
         try {
             showToast('⏳ Opening Google Sign-in...');
@@ -2354,7 +2420,7 @@ function loadData(){
                         if (result && result.idToken) {
                             showToast('🔐 Exchanging tokens with server...');
                             const credential = firebase.auth.GoogleAuthProvider.credential(result.idToken);
-                            await auth.signInWithCredential(credential);
+                            await krishiLinkIfAnonymousOrSignIn(auth, { credential: credential });
                             showToast('✅ Logged in successfully with Google!');
                             nativeSuccess = true;
                             try {
@@ -2368,10 +2434,14 @@ function loadData(){
                 if (!nativeSuccess) {
                     showToast('🔄 Opening Web Google Sign-In...');
                     try {
-                        await auth.signInWithPopup(provider);
+                        await krishiLinkIfAnonymousOrSignIn(auth, { provider: provider });
                     } catch(popupErr) {
                         if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/popup-closed-by-user') {
-                            await auth.signInWithRedirect(provider);
+                            if (auth.currentUser && auth.currentUser.isAnonymous) {
+                                await auth.currentUser.linkWithRedirect(provider);
+                            } else {
+                                await auth.signInWithRedirect(provider);
+                            }
                             return;
                         }
                         throw popupErr;
@@ -2385,7 +2455,7 @@ function loadData(){
                 // Clear One Tap suppression flag on manual login attempt!
                 KrishiStorage.removeItem('krishi_one_tap_disabled');
                 // Trigger popup instantly on Web / PWA
-                await auth.signInWithPopup(provider);
+                await krishiLinkIfAnonymousOrSignIn(auth, { provider: provider });
                 showToast('✅ Logged in successfully with Google!');
                 try {
                     if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
@@ -2459,7 +2529,7 @@ function loadData(){
             await initFirebaseAuth();
             if (!firebaseAuth) throw new Error("Firebase SDK load failed");
             const credential = firebase.auth.GoogleAuthProvider.credential(response.credential);
-            const userCredential = await firebaseAuth.signInWithCredential(credential);
+            const userCredential = await krishiLinkIfAnonymousOrSignIn(firebaseAuth, { credential: credential });
             if (userCredential && userCredential.user) {
                 showToast('✅ Logged in successfully with Google One Tap!');
             }
@@ -3097,6 +3167,42 @@ function loadData(){
                 sessionTouchInterval = setInterval(updateSessionDoc, 30000);
             });
 
+            // ── Session hygiene: prune stale presence docs ────────────────────
+            // Every boot mints a fresh random session id, so crashed/closed
+            // sessions would otherwise accumulate forever and inflate every
+            // presence snapshot read. Once per page-load: keep the newest few,
+            // batch-delete the rest. Fire-and-forget — never blocks sync.
+            if (!window.__krishiSessionPruneDone__) {
+                window.__krishiSessionPruneDone__ = true;
+                (async () => {
+                    try {
+                        const KRISHI_SESSION_KEEP = 10;
+                        const snap = await firestore.collection('users').doc(uid)
+                            .collection('sessions').get();
+                        const docs = [];
+                        snap.forEach(d => docs.push(d));
+                        if (docs.length <= KRISHI_SESSION_KEEP) return;
+                        const lastActiveMs = d => {
+                            const v = d.data() && d.data().lastActive;
+                            if (v && typeof v.toMillis === 'function') return v.toMillis();
+                            if (v instanceof Date) return v.getTime();
+                            return 0; // unknown age sorts oldest
+                        };
+                        docs.sort((a, b) => lastActiveMs(b) - lastActiveMs(a));
+                        const doomed = docs.slice(KRISHI_SESSION_KEEP)
+                            .filter(d => d.id !== currentSessionId);
+                        for (let i = 0; i < doomed.length; i += 400) {
+                            const batch = firestore.batch();
+                            doomed.slice(i, i + 400).forEach(d => batch.delete(d.ref));
+                            await batch.commit();
+                        }
+                        console.log('[Presence] Pruned ' + doomed.length + ' stale session doc(s).');
+                    } catch (e) {
+                        console.warn('[Presence] Session pruning skipped:', e);
+                    }
+                })();
+            }
+
             // Listen for remote disconnect events on this device's session
             if (window.deviceDisconnectListenerUnsubscribe) {
                 window.deviceDisconnectListenerUnsubscribe();
@@ -3343,6 +3449,7 @@ function loadData(){
                         // Without this, any throw in the merge left syncInProgress latched
                         // true for the rest of the session, silently killing all sync.
                         console.error('[Cloud Sync] Snapshot handler failed:', e);
+                        if (isPayloadTooBigError(e)) handlePayloadTooBigError(e);
                         setSyncStatus('Sync failed');
                     } finally {
                         if (ownsSyncLock) syncInProgress = false;
@@ -3580,17 +3687,6 @@ function loadData(){
     }
     window.performMidnightVaultBackup = performMidnightVaultBackup;
 
-    function updateOfflineQueueBadge() {
-        const badge = document.getElementById('krishi-offline-queue-badge');
-        if (badge) {
-            badge.classList.add('hidden');
-            badge.style.display = 'none';
-        }
-    }
-    window.updateOfflineQueueBadge = updateOfflineQueueBadge;
-    window.addEventListener('online', updateOfflineQueueBadge);
-    window.addEventListener('offline', updateOfflineQueueBadge);
-
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();
         // Legacy manual key input: this function is replaced by Firebase Authentication.
@@ -3764,6 +3860,7 @@ function loadData(){
         }
     } catch(e) {
         console.error('Manual sync failed:', e);
+        if (isPayloadTooBigError(e)) handlePayloadTooBigError(e);
         if (!silent) showToast('❌ Cloud connection error!');
     } finally {
         if (!silent && spinner) {
@@ -6099,6 +6196,7 @@ function loadData(){
        state.isFinishing = true;
        activePlanSequenceHTML = ''; // Clear stale recommendation plan
        clearPracticeProgress();
+       krishiMaybeNudgeLogin();
        // Retire the cross-device handoff record: this session is over, so no peer should
        // still be offering to resume it.
        if (typeof clearQuizHandoff === 'function') { try { clearQuizHandoff(); } catch(e){} }
@@ -14910,7 +15008,7 @@ ${text}`;
         // string reach .forEach() below threw an uncaught TypeError that latched
         // syncInProgress and silently killed sync for the rest of the session, and
         // substituting [] would push the local copy over the cloud's real history.
-        ['timingLog', 'mockScores'].forEach(field => {
+        ['timingLog', 'mockScores', 'customQuestions'].forEach(field => {
             if (typeof cloud[field] === 'string') {
                 if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
                     throw new Error('[Sync] Cannot read compressed ' + field + ': LZString unavailable. Sync skipped to protect existing history.');
@@ -15296,6 +15394,70 @@ ${text}`;
         }
     }
 
+    // Turns the hard payload-size stop from a silent "Sync failed" into an
+    // actionable message: without this, heavy users permanently lose backup
+    // with no hint that trimming custom MCQs / timing history resumes it.
+    function isPayloadTooBigError(e) {
+        return !!(e && typeof e.message === 'string' &&
+            e.message.indexOf('safe limit for one Firestore document') !== -1);
+    }
+    function handlePayloadTooBigError(e) {
+        const m = (e && e.message || '').match(/is (\d+) KB/);
+        const kb = m ? m[1] : '?';
+        KrishiStorage.setItem('krishi_sync_payload_too_big', kb);
+        showToast('⚠️ Backup paused: data (~' + kb + ' KB) crosses the 900 KB cloud-document limit. Delete old custom MCQs to resume backup.', 9000);
+    }
+
+    // ── Manual backup export / import ─────────────────────────────────────────
+    // Cloud-independent safety net: a user-readable JSON of everything
+    // collectAllAppData() would sync, restorable on any device.
+    window.krishiExportBackup = function () {
+        try {
+            const payload = collectAllAppData();
+            delete payload.ownerUid;
+            const stamp = new Date().toISOString().slice(0, 10);
+            const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'krishi-backup-' + stamp + '.json';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+            showToast('💾 Backup file downloaded!');
+        } catch (e) {
+            console.error('[Backup] Export failed:', e);
+            showToast('❌ Backup export failed: ' + e.message, 6000);
+        }
+    };
+
+    window.krishiImportBackup = async function (input) {
+        const file = input && input.files && input.files[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            let data;
+            try { data = JSON.parse(text); } catch (parseErr) {
+                throw new Error('File is not valid JSON.');
+            }
+            if (!data || typeof data !== 'object' ||
+                (!data.bookmarked && !data.wrong && !data.customQuestions && !data.stats && !data.streak)) {
+                throw new Error('This does not look like a Krishi MCQ Pro backup file.');
+            }
+            if (!confirm('Restore this backup?\n\nYour current progress will be MERGED with the file contents and synced to cloud. Continue?')) {
+                return;
+            }
+            applyAllAppData(data);
+            KrishiStorage.setItem('krishi_sync_pending', 'true');
+            if (typeof scheduleCloudSync === 'function') scheduleCloudSync('Manual backup restored');
+            showToast('✅ Backup restored & syncing!');
+        } catch (e) {
+            console.error('[Backup] Import failed:', e);
+            showToast('❌ Restore failed: ' + e.message, 7000);
+        } finally {
+            if (input) input.value = '';
+        }
+    };
+
     async function performCloudSync() {
         const uid = getCloudUID();
         if (!uid) return;
@@ -15354,6 +15516,7 @@ ${text}`;
                     if (typeof LZString !== 'undefined') {
                         if (delta.timingLog) delta.timingLog = LZString.compressToUTF16(JSON.stringify(delta.timingLog));
                         if (delta.mockScores) delta.mockScores = LZString.compressToUTF16(JSON.stringify(delta.mockScores));
+                        if (delta.customQuestions) delta.customQuestions = LZString.compressToUTF16(JSON.stringify(delta.customQuestions));
                         delta.isCompressed = true;
                     }
                     assertPayloadFits(delta, 'Sync delta');
@@ -15412,6 +15575,7 @@ ${text}`;
                 if (typeof LZString !== 'undefined') {
                     if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
                     if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
+                    if (localDataPayload.customQuestions) localDataPayload.customQuestions = LZString.compressToUTF16(JSON.stringify(localDataPayload.customQuestions));
                     localDataPayload.isCompressed = true;
                 }
                 assertPayloadFits(localDataPayload, 'Initial full sync payload');
@@ -15429,6 +15593,7 @@ ${text}`;
             }
         } catch (err) {
             console.error('[Cloud Sync] Sync execution error:', err);
+            if (isPayloadTooBigError(err)) handlePayloadTooBigError(err);
             setSyncStatus('Sync failed');
         } finally {
             // Without this, any throw above latched syncInProgress true for the rest of

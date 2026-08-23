@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=msx5vk9" rel="stylesheet">
+    <link href="./index.css?v=zucafny" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2038,10 +2038,16 @@
                 <!-- Signed-in account controls (Profile-side; mirrors auth state, adds no listener) -->
                 <div id="profile-loggedin-controls" class="hidden space-y-2.5">
                     <div id="profile-sync-actions" class="hidden space-y-2">
-                        <button onclick="syncCloudNow()" id="btn-sync-now" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95 shadow-sm">
-                            <span id="sync-spinner" class="hidden animate-spin">⏳</span> Sync Now
-                        </button>
-                        <p id="sync-time-txt" class="text-[8px] text-center text-slate-400">Last Synced: Never</p>
+<button onclick="syncCloudNow()" id="btn-sync-now" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer flex justify-center items-center gap-1.5 transition active:scale-95 shadow-sm">
+<span id="sync-spinner" class="hidden animate-spin">?</span> Sync Now
+</button>
+<p id="sync-time-txt" class="text-[8px] text-center text-slate-400">Last Synced: Never</p>
+<div id="krishi-backup-meter" class="text-[9px] text-center text-slate-400 dark:text-slate-500"></div>
+<div class="flex gap-2">
+    <button type="button" onclick="if(window.krishiExportBackup) krishiExportBackup()" class="flex-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">⬇️ Backup File</button>
+    <button type="button" onclick="document.getElementById('krishi-import-input').click()" class="flex-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">⬆️ Restore</button>
+    <input type="file" id="krishi-import-input" accept=".json,application/json" class="hidden" onchange="if(window.krishiImportBackup) krishiImportBackup(this)" />
+</div>
                     </div>
                     <div id="profile-sync-inactive-hint" class="hidden p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100/40 text-[9px] font-bold text-amber-700 dark:text-amber-400 text-center">
                         Auto-Sync अझै सक्रिय छैन — Settings ▸ Cloud Sync बाट पेयर गर्नुहोस्।
@@ -3725,14 +3731,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=msx5vk9" defer></script>
-    <script src="./js/elite_3d_engine.js?v=msx5vk9" defer></script>
-    <script src="./js/canvas_charts.js?v=msx5vk9" defer></script>
+    <script src="./js/elite_animations_controller.js?v=zucafny" defer></script>
+    <script src="./js/elite_3d_engine.js?v=zucafny" defer></script>
+    <script src="./js/canvas_charts.js?v=zucafny" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=msx5vk9" defer></script>
-    <script src="./js/sqlite_db.js?v=msx5vk9" defer></script>
-    <script src="./js/krishi_idb.js?v=msx5vk9"></script>
-    <script src="./js/app.js?v=msx5vk9" defer></script>
+    <script src="./js/pwa_helpers.js?v=zucafny" defer></script>
+    <script src="./js/sqlite_db.js?v=zucafny" defer></script>
+    <script src="./js/krishi_idb.js?v=zucafny"></script>
+    <script src="./js/app.js?v=zucafny" defer></script>
 
 
     <!--
@@ -3760,7 +3766,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=msx5vk9" defer></script>
+    <script src="./js/voice_assistant.js?v=zucafny" defer></script>
 </body>
 </html>
 

@@ -82,6 +82,21 @@
             `);
 
             _ready = true;
+
+            // One-time heal: purge known-corrupted delta question batch
+            // (delta_agri_2026_01/02 shipped with unrecoverable mojibake text and
+            // duplicate answer options; see delta_questions.json note, Aug 2026)
+            try {
+                const HEAL_KEY = 'krishi_delta_corruption_heal_v1';
+                if (!localStorage.getItem(HEAL_KEY)) {
+                    await deleteQuestionsByIds(['delta_agri_2026_01', 'delta_agri_2026_02']);
+                    localStorage.setItem(HEAL_KEY, String(Date.now()));
+                    console.log('[SQLite] Delta corruption heal applied ✅');
+                }
+            } catch(healErr) {
+                console.warn('[SQLite] Corruption heal bypassed:', healErr);
+            }
+
             console.log('[SQLite] Database ready ✅ — Native SQLite active.');
             return true;
         } catch(e) {
@@ -168,6 +183,24 @@
     }
 
     /**
+     * Delete questions by explicit ids (used for corruption heals / targeted removals).
+     * @param {string[]} ids
+     * @returns {Promise<boolean>}
+     */
+    async function deleteQuestionsByIds(ids) {
+        if (!_ready || !_db || !Array.isArray(ids) || ids.length === 0) return false;
+        try {
+            const placeholders = ids.map(() => '?').join(',');
+            await _db.query(`DELETE FROM ${TABLE_QUESTIONS} WHERE id IN (${placeholders})`, ids);
+            console.log(`[SQLite] Purged ${ids.length} question id(s) from local DB.`);
+            return true;
+        } catch(e) {
+            console.warn('[SQLite] deleteQuestionsByIds failed:', e);
+            return false;
+        }
+    }
+
+    /**
      * Ultra-Fast Local Database & Memory Search Engine (< 3ms)
      */
     async function searchQuestions(keyword, subject) {
@@ -249,6 +282,7 @@
         isAvailable: () => _ready,
         getQuestions,
         saveQuestions,
+        deleteQuestionsByIds,
         getCount,
         searchQuestions,
         enqueueOfflineAction: (act, payload) => OfflineQueue.enqueue(act, payload),

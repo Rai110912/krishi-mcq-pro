@@ -352,6 +352,34 @@ function newfeat_showNotification(message, type) {
         }, 4000);
     }
 
+/**
+ * Pure, testable merge logic used by the incremental delta question sync.
+ * Dedupe key: question id, falling back to question text when id is absent.
+ */
+class KrishiDeltaMerge {
+    /**
+     * Mutates and returns the target pool (same semantics as the original inline loop).
+     * @param {Array} pool - existing questions array (mutated in place)
+     * @param {Array} addedQuestions - incoming delta items
+     * @returns {{pool: Array, inserted: Array}}
+     */
+    static mergeInto(pool, addedQuestions) {
+        const target = Array.isArray(pool) ? pool : [];
+        const seen = new Set(target.map(q => q && (q.id || q.q)));
+        const inserted = [];
+        const incoming = Array.isArray(addedQuestions) ? addedQuestions : [];
+        incoming.forEach(newQ => {
+            const key = newQ && (newQ.id || newQ.q);
+            if (!seen.has(key)) {
+                target.push(newQ);
+                inserted.push(newQ);
+                seen.add(key);
+            }
+        });
+        return { pool: target, inserted };
+    }
+}
+
 async function checkAndSyncDeltaQuestions() {
     try {
         const deltaUrl = './delta_questions.json?t=' + Date.now();
@@ -377,17 +405,9 @@ async function checkAndSyncDeltaQuestions() {
             window.allQuestions = [];
         }
 
-        const existingMap = new Set(window.allQuestions.map(q => q.id || q.q));
-        const newItemsToInsert = [];
-
-        data.added_questions.forEach(newQ => {
-            const qKey = newQ.id || newQ.q;
-            if (!existingMap.has(qKey)) {
-                window.allQuestions.push(newQ);
-                newItemsToInsert.push(newQ);
-                existingMap.add(qKey);
-            }
-        });
+        const mergeResult = KrishiDeltaMerge.mergeInto(window.allQuestions, data.added_questions);
+        window.allQuestions = mergeResult.pool;
+        const newItemsToInsert = mergeResult.inserted;
 
         if (data.timestamp) {
             localStorage.setItem('krishi_last_delta_sync_time', String(data.timestamp));
@@ -765,6 +785,7 @@ class KrishiSM2Engine {
 }
 
 window.KrishiSM2Engine = KrishiSM2Engine;
+window.KrishiDeltaMerge = KrishiDeltaMerge;
 
 class KrishiE2EEEngine {
     static async _getKey(passphrase) {

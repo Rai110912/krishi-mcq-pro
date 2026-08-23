@@ -5,6 +5,7 @@
   "main": "js/app.js",
   "scripts": {
     "build": "node bump_version.js && node sync-assets.js && npx -y terser www/js/app.js -o www/js/app.js -c -m && npx -y terser www/js/pwa_helpers.js -o www/js/pwa_helpers.js -c -m",
+    "test": "node --test \"tests/*.test.js\"",
     "capacitor:init": "npx cap init \"Krishi MCQ Pro\" \"com.krishimcqpro.app\" --web-dir=.",
     "capacitor:add-android": "npx cap add android",
     "capacitor:sync": "npx cap sync"

@@ -2916,3 +2916,300 @@ body.ui-density-spacious    { --card-pad: 1.25rem; --stack-gap: 1.125rem; }
     padding: var(--card-pad);
 }
 
+/* =====================================================================
+   PRACTICE & RESULT — VISUAL POLISH LAYER (presentation only)
+   Same contract as the HOME layer above: radius, elevation, padding,
+   rhythm, weight and tint only. No rule here changes layout flow,
+   visibility or a behaviour hook, and every value is read from the
+   surface tokens (--r-card / --r-control / --radius-sm / --elev-* /
+   --card-pad / --stack-gap), so Home -> Customize -> Appearance &
+   Language now drives Practice and the Session Report exactly the way
+   it already drives Home.
+   Selectors are id-scoped on purpose: the Tailwind CDN injects its
+   <style> after this file, so a plain class here would lose to an
+   equally specific utility.
+   ===================================================================== */
+
+/* ── Section eyebrows ("⚡ Smart Practice Engine", "🕒 Recent ...") ────
+   The four group labels rendered at 12px/700 with default tracking,
+   which reads as body copy rather than as a label. Colour is left to
+   the inline var(--text-secondary) that is already on the markup. */
+#page-practice .section-eyebrow {
+    font-size: 11px;
+    font-weight: var(--w-bold);
+    letter-spacing: 0.12em;
+    line-height: 1.25;
+    /* First declaration is the exact colour these headings used before
+       (the theme's own secondary text token) and stays the value on any
+       engine without color-mix. The second pulls the label a third of the
+       way toward --text, which lifts 11px/700 from 4.1:1 to ~6:1 in light
+       mode and does the same in dark, without inventing a new colour. */
+    color: var(--text-secondary);
+    color: color-mix(in srgb, var(--text-secondary) 65%, var(--text));
+}
+
+/* ── Vertical rhythm ─────────────────────────────────────────────────
+   Practice stacks at space-y-4 (1rem) and the report at space-y-5
+   (1.25rem) — 1.143x and 1.43x the "Comfortable" token. The ratio is
+   kept instead of the absolute value, so the default renders exactly as
+   it does today while Layout Density still moves both stacks. */
+#page-practice > :not([hidden]) ~ :not([hidden]),
+#practice-active-state-panels > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 1.143);
+}
+#practice-result-panel > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 1.43);
+}
+
+/* ── One radius + one elevation ladder for every Practice surface ─────
+   Cards read --r-card, small tiles read --r-control and list rows read
+   --radius-sm, so siblings can no longer disagree at any Corner
+   Roundness setting. The padding multipliers reproduce today's
+   p-3 / p-3.5 / p-4 / p-5 exactly at the "Comfortable" default. */
+#page-practice #recommended-practice-banner,
+#page-practice .practice-cta-card,
+#page-practice #practice-empty-state,
+#smart-engine-container .engine-tile,
+#practice-result-panel #result-card-container,
+#practice-result-panel .res-card {
+    border-radius: var(--r-card);
+    box-shadow: var(--elev-1);
+}
+#page-practice #recommended-practice-banner,
+#page-practice .practice-cta-card,
+#smart-engine-container .engine-tile,
+#practice-result-panel .res-card {
+    padding: var(--card-pad);
+}
+#page-practice #practice-empty-state,
+#practice-result-panel #result-card-container {
+    padding: calc(var(--card-pad) * 1.25);
+}
+#page-practice .practice-mode-tile,
+#page-practice .practice-subject-card {
+    border-radius: var(--r-control);
+    box-shadow: var(--elev-1);
+}
+#page-practice .practice-mode-tile   { padding: calc(var(--card-pad) * 0.75); }
+/* The tiles are flex rows (icon + text). Without min-width:0 the text
+   column is sized by its longest word, so at 375px the second line of
+   "Focus low-accuracy topics" ran past the tile edge and was clipped.
+   This lets the caption wrap inside the tile instead. */
+#page-practice .practice-mode-tile > div { min-width: 0; }
+#page-practice .practice-subject-card { padding: calc(var(--card-pad) * 0.875); }
+/* Subject-card footer: two 9px labels on one row. At 375px they do not
+   both fit, and the browser was breaking them mid-phrase ("NOT /
+   PRACTICED", "Configure / ➔"). Letting the row wrap keeps each label
+   whole — one row on wide screens, two on a narrow phone. */
+#page-practice .practice-subject-card .mt-3 {
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    min-width: 0;
+}
+#page-practice .practice-subject-card .mt-3 > span { white-space: nowrap; }
+#practice-result-panel .res-tile     { border-radius: var(--r-control); }
+#page-practice .practice-history-row { border-radius: var(--radius-sm); }
+
+/* The two surfaces that already lift on hover keep doing so, one step up
+   the same ladder — so "Flat" depth silences them too instead of leaving
+   a hard-coded shadow behind. Nothing gains a NEW hover behaviour. */
+#page-practice .practice-subject-card:hover,
+#smart-engine-container .engine-tile:hover {
+    box-shadow: var(--elev-2);
+}
+
+/* ── Tints the glass engine currently erases ──────────────────────────
+   Two rules use the `background` SHORTHAND on these elements — the
+   blanket "#page-practice .grid > div" rule further up, and the inline
+   style="background:var(--card)" on the JS-built engine tiles — and a
+   shorthand drops the gradient the markup declares, so four tinted
+   surfaces render as plain cards today. Re-declaring the tint as
+   `linear-gradient(tint), var(--card)` keeps the theme surface (and its
+   opacity) underneath, so the frosted look and the tint coexist.
+   Selector weight is deliberate: two ids, or class+class, is the least
+   it takes to out-rank those two rules. */
+#page-practice #sm2-dashboard-card,
+#smart-engine-container .engine-tile.engine-tile--quick {
+    background: linear-gradient(90deg, rgba(16, 185, 129, 0.10), rgba(20, 184, 166, 0.10)), var(--card) !important;
+    border-color: rgba(16, 185, 129, 0.30) !important;
+}
+.dark #page-practice #sm2-dashboard-card,
+.dark #smart-engine-container .engine-tile.engine-tile--quick {
+    background: linear-gradient(90deg, rgba(6, 78, 59, 0.34), rgba(19, 78, 74, 0.34)), var(--card) !important;
+}
+#page-practice #hybrid-tinder-swiper-btn {
+    background: linear-gradient(90deg, rgba(16, 185, 129, 0.08), rgba(20, 184, 166, 0.05)), var(--card) !important;
+    border-color: rgba(16, 185, 129, 0.22) !important;
+}
+.dark #page-practice #hybrid-tinder-swiper-btn {
+    background: linear-gradient(90deg, rgba(6, 78, 59, 0.22), rgba(19, 78, 74, 0.16)), var(--card) !important;
+}
+#smart-engine-container .engine-tile.engine-tile--mock {
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.10), rgba(59, 130, 246, 0.10)), var(--card) !important;
+    border-color: rgba(99, 102, 241, 0.28) !important;
+}
+.dark #smart-engine-container .engine-tile.engine-tile--mock {
+    background: linear-gradient(90deg, rgba(49, 46, 129, 0.34), rgba(30, 58, 138, 0.30)), var(--card) !important;
+}
+
+/* ── Accent-coloured titles on Practice ──────────────────────────────
+   These three labels are painted by the app-wide accent layer
+   (.custom-accent-active ... { color: var(--primary) !important }), and
+   the raw accent is 3.4:1 on a light card / 3.9:1 on a dark one at
+   12px/900 — under AA either way, and the markup's dark:text-emerald-400
+   never gets a chance because of that !important. Rather than re-tinting
+   the shared accent layer (which would move every accent text in the
+   app), the accent is nudged per surface here: the SAME hue the user
+   picked, pushed toward black on light and toward white on dark. The
+   plain var(--primary) line above each mix is the fallback for engines
+   without color-mix, i.e. exactly today's colour. */
+#page-practice #sm2-dashboard-card p:first-child,
+#page-practice #hybrid-tinder-swiper-btn p:first-child,
+#page-practice .practice-subject-card .mt-3 span:last-child {
+    color: var(--primary) !important;
+    color: color-mix(in srgb, var(--primary) 72%, #000000) !important;
+}
+.dark #page-practice #sm2-dashboard-card p:first-child,
+.dark #page-practice #hybrid-tinder-swiper-btn p:first-child,
+.dark #page-practice .practice-subject-card .mt-3 span:last-child {
+    color: var(--primary) !important;
+    color: color-mix(in srgb, var(--primary) 62%, #ffffff) !important;
+}
+
+/* ── Session Report stat tiles ───────────────────────────────────────
+   Correct / Wrong / Skipped / Weighted Score are the one place on the
+   page where colour carries meaning, so their tint is restored (the
+   blanket rule flattened all four to var(--card)) and nudged from /5 to
+   /7 with a visible border. Translucent on purpose: one declaration
+   reads correctly on both the light and the dark surface. */
+#practice-result-panel .res-tile.res-tile--correct {
+    background: linear-gradient(rgba(16, 185, 129, 0.07), rgba(16, 185, 129, 0.07)), var(--card) !important;
+    border-color: rgba(16, 185, 129, 0.22) !important;
+}
+#practice-result-panel .res-tile.res-tile--wrong {
+    background: linear-gradient(rgba(244, 63, 94, 0.07), rgba(244, 63, 94, 0.07)), var(--card) !important;
+    border-color: rgba(244, 63, 94, 0.22) !important;
+}
+#practice-result-panel .res-tile.res-tile--skipped {
+    background: linear-gradient(rgba(100, 116, 139, 0.07), rgba(100, 116, 139, 0.07)), var(--card) !important;
+    border-color: rgba(100, 116, 139, 0.20) !important;
+}
+#practice-result-panel .res-tile.res-tile--score {
+    background: linear-gradient(rgba(99, 102, 241, 0.07), rgba(99, 102, 241, 0.07)), var(--card) !important;
+    border-color: rgba(99, 102, 241, 0.22) !important;
+}
+
+/* ── Press feedback on the six Smart Practice tiles ───────────────────
+   The markup asks for it with `active:scale-97`, but 97 is not in the
+   Tailwind scale so nothing was ever generated and the tiles felt dead
+   under the thumb. Implemented here with the same property, value ramp
+   and easing the app already uses for buttons (see "PREMIUM
+   MICRO-INTERACTIONS" above) — including the two switches that turn it
+   off, since the tiles are <div>s and the button-only rules never
+   reached them. */
+#page-practice .practice-mode-tile:active {
+    scale: 0.97;
+    transition: scale 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.suppress-micro-interactions #page-practice .practice-mode-tile:active {
+    scale: 1;
+    transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    #page-practice .practice-mode-tile:active {
+        scale: 1;
+        transition: none;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   QUIZ GAMEPLAY (#page-mcq) — VISUAL POLISH LAYER (presentation only)
+   Same contract as the Practice layer above: no markup structure, no
+   behaviour, no JS, no new features. Selectors are id-scoped because
+   the Tailwind CDN injects its utility <style> AFTER this file, so a
+   plain class rule here would lose to `.shadow-sm` / `.rounded-2xl`
+   at equal specificity.
+
+   Why it exists: the question card was the one large surface that
+   ignored Home ▸ Customize ▸ Appearance & Language completely —
+   radius was frozen at Tailwind's rounded-2xl (16px) while Corner
+   asked for up to 28px, the shadow stayed shadow-sm whatever Depth
+   said, and padding was pinned by an !important mobile rule whatever
+   Density said.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Corner + Depth. `.rounded-2xl` and `.shadow-sm` are single-class
+   utilities, so one id is enough to take the properties over. */
+#mcq-card-container {
+    border-radius: var(--r-card);
+    box-shadow: var(--elev-1);
+}
+
+/* Density. The p-5 (1.25rem) look is preserved exactly at the default
+   "Comfortable" (--card-pad: 1rem x 1.25 = 1.25rem); Compact and
+   Spacious move it to 15px / 25px. Two ids + !important are needed
+   only because the <=767px block near the top of this file pins this
+   card to `padding: 1.25rem !important` ("3. Question Card sizing") —
+   and 1.25rem is exactly what Comfortable still computes, so phones
+   keep today's spacing unless the user changes Density on purpose. */
+#page-mcq #mcq-card-container {
+    padding: calc(var(--card-pad) * 1.25) !important;
+}
+
+/* Vertical rhythm. space-y-4 (1rem) on the page and on the card, and
+   space-y-2.5 (0.625rem) between answer options, become multiples of
+   --stack-gap. Both multipliers are picked so the default
+   "Comfortable" (0.875rem) reproduces 1rem and 0.625rem exactly, i.e.
+   nothing moves until the user changes Density.
+   #q-options keeps its own <=767px margin (the "4. MCQ page spacing"
+   block) on purpose — that is a deliberate mobile compaction. */
+#page-mcq > :not([hidden]) ~ :not([hidden]),
+#mcq-card-container > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 1.143);
+}
+#page-mcq #q-options > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 0.714);
+}
+
+/* Controls follow Corner as well, so nothing on the screen disagrees
+   with anything else: answer buttons, the explanation panel and the
+   three action buttons all read the same ladder as the card.
+   The !important + 2 ids on .option-btn are what it takes to out-rank
+   `.premium-hybrid-active .option-btn { border-radius: 14px !important }`
+   and the <=767px `.option-btn { border-radius: 12px !important }` —
+   the two hard-coded values that made Corner a no-op inside the quiz.
+   var(--r-control) is 12px at the default Corner, which is what the
+   phone rule already produced, so mobile is unchanged by default. */
+#page-mcq #q-options .option-btn {
+    border-radius: var(--r-control) !important;
+}
+#page-mcq #submit-btn,
+#page-mcq #next-btn,
+#page-mcq #finish-btn {
+    border-radius: var(--r-control) !important;
+}
+#page-mcq #q-explanation {
+    border-radius: var(--r-control);
+}
+
+/* ── The growth decoration was swallowing taps meant for ⚠️ Report ───
+   #plant-growth-indicator is appended to this card by
+   setupPlantAndIrrigationUI() as `position:absolute; top:10px;
+   right:50px; z-index:10`, which lands it exactly on top of the badge
+   / Hint / Report / bookmark row. Measured at 375px: plant occupied
+   x257-312 y266-321 against the Report button's x258-319 y260-308, and
+   document.elementFromPoint() at the button's own centre returned the
+   plant's <svg> — so the tap never reached the button.
+
+   Raising the control row one step above the decoration (it is z-index
+   10, this is 11) is enough: the row does not move, the decoration
+   does not move, and the plant keeps the hover/active wiggle it
+   already has, because only the overlapping sliver changes hands.
+   `pointer-events: none` on the plant would have fixed the tap too but
+   would have silently deleted that wiggle, so it is not used. */
+#mcq-card-container > div:first-child {
+    position: relative;
+    z-index: 11;
+}
+
+

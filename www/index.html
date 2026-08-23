@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=m68ouib" rel="stylesheet">
+    <link href="./index.css?v=ez60acn" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1012,15 +1012,15 @@
         <div id="page-practice" class="page p-4 space-y-4 animate-slide-up">
             <h2 class="text-lg font-black" style="color:var(--text); display: flex; justify-content: space-between; align-items: center;">
                 <span>📚 Practice Suite</span>
-                <span id="practice-quick-count-badge" class="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 rounded-full">0 MCQs</span>
+                <span id="practice-quick-count-badge" class="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-slate-800 text-indigo-800 dark:text-indigo-300 rounded-full">0 MCQs</span>
             </h2>
 
             <!-- Empty State Warning if question pool is blank -->
             <div id="practice-empty-state" class="hidden p-5 text-center border-2 border-dashed rounded-2xl bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 space-y-2.5">
                 <span class="text-3xl block">📭</span>
                 <h3 class="font-bold text-sm text-slate-750 dark:text-slate-200">No Practice Questions Found</h3>
-                <p class="text-[10px] text-slate-500 leading-relaxed">Your application's question bank is currently empty. Head over to the MCQ Creator tab or import custom databases to begin training.</p>
-                <button onclick="navigate('page-mcq-creator')" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-black cursor-pointer shadow-sm transition">Go to MCQ Creator</button>
+                <p class="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">Your application's question bank is currently empty. Head over to the MCQ Creator tab or import custom databases to begin training.</p>
+                <button onclick="navigate('page-mcq-creator')" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-black cursor-pointer shadow-sm transition active:scale-95">Go to MCQ Creator</button>
             </div>
 
             <!-- Active State Panels Wrapper -->
@@ -1034,73 +1034,73 @@
                 </div>
                 <h3 class="font-bold text-xs" id="recommended-text-insight">Analyzing metrics to suggest target review...</h3>
                 <p class="text-[9px] text-emerald-100" id="recommended-explanation-insight">Build accuracy in difficult concepts using our Smart Mode.</p>
-                <button id="recommended-action-btn" onclick="startRecommendedTopicPractice()" class="bg-white text-emerald-700 font-extrabold text-[9px] px-3 py-1.5 rounded-lg active:scale-95 transition cursor-pointer">PRACTICE RECOMMENDED</button>
+                <button id="recommended-action-btn" onclick="startRecommendedTopicPractice()" class="bg-white text-emerald-800 font-extrabold text-[11px] px-3.5 py-2 rounded-lg active:scale-95 transition cursor-pointer">PRACTICE RECOMMENDED</button>
             </div>
 
 
 
             <!-- CUSTOM SETUP BUTTON -->
-            <button onclick="openPracticeSetupPage('all', 'all'); playSound('click');" class="w-full p-4 rounded-2xl border text-left flex justify-between items-center bg-indigo-50 dark:bg-indigo-950/20 border-indigo-150/50 hover:bg-indigo-100/30 transition shadow-xs cursor-pointer">
+            <button onclick="openPracticeSetupPage('all', 'all'); playSound('click');" class="practice-cta-card w-full p-4 rounded-2xl border text-left flex justify-between items-center bg-indigo-100 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-900/60 hover:border-indigo-300 dark:hover:border-indigo-700 transition shadow-xs cursor-pointer">
                 <div>
-                    <p class="font-black text-xs text-indigo-700 dark:text-indigo-400">⚙️ Advanced Custom Practice Setup</p>
-                    <p class="text-[9px] text-indigo-500 dark:text-indigo-400">Pick specific categories, limiters, timers, negative marking and filters</p>
+                    <p class="font-black text-xs text-indigo-900 dark:text-indigo-100">⚙️ Advanced Custom Practice Setup</p>
+                    <p class="text-[9.5px] text-indigo-800 dark:text-indigo-300">Pick specific categories, limiters, timers, negative marking and filters</p>
                 </div>
                 <span class="text-xs bg-indigo-600 text-white font-black px-2.5 py-1 rounded-lg">Configure</span>
             </button>
 
             <!-- SMART PRACTICE MODES -->
             <div class="space-y-2">
-                <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider" style="color:var(--text-secondary);">⚡ Smart Practice Engine</h3>
+                <h3 class="section-eyebrow font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">⚡ Smart Practice Engine</h3>
                 <div class="grid grid-cols-2 gap-2.5">
                     <!-- SM-2 Memory Refresh Spaced Repetition Drill -->
-                    <div id="sm2-dashboard-card" onclick="startSmartPracticeMode('sm2'); playSound('click');" class="p-3 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 dark:from-emerald-900/30 dark:to-teal-900/30 border border-emerald-500/30 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-500 transition active:scale-97 col-span-2">
+                    <div id="sm2-dashboard-card" onclick="startSmartPracticeMode('sm2'); playSound('click');" class="practice-mode-tile p-3 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 dark:from-emerald-900/30 dark:to-teal-900/30 border border-emerald-500/30 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-500 transition active:scale-97 col-span-2">
                         <span class="text-xl">🧠</span>
                         <div class="flex-1 flex justify-between items-center">
                             <div>
                                 <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">SM-2 Spaced Repetition Memory Refresh</p>
-                                <p class="text-[8.5px] text-slate-500 dark:text-slate-400">कण्ठ गर्नुपर्ने प्रश्नहरू (Scientific Spaced Review)</p>
+                                <p class="text-[9.5px] text-slate-500 dark:text-slate-400">कण्ठ गर्नुपर्ने प्रश्नहरू (Scientific Spaced Review)</p>
                             </div>
                             <span class="bg-emerald-600 text-white font-mono font-bold text-[10px] px-2 py-0.5 rounded-full shadow-sm" id="sm2-due-badge-count">0</span>
                         </div>
                     </div>
                     <!-- Weak Topic -> based on stats -->
-                    <div onclick="startSmartPracticeMode('weak'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">📉</span>
+                    <div onclick="startSmartPracticeMode('weak'); playSound('click');" class="practice-mode-tile p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
+                        <span class="text-xl">📉</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Weak Topics</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Focus low-accuracy topics</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400">Focus low-accuracy topics</p>
                         </div>
                     </div>
                     <!-- Bookmark Practice -->
-                    <div onclick="startSmartPracticeMode('bookmark'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">★</span>
+                    <div onclick="startSmartPracticeMode('bookmark'); playSound('click');" class="practice-mode-tile p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
+                        <span class="text-xl">★</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Bookmarks</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-bookmark-count-lbl">0 saved items</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400" id="smart-bookmark-count-lbl">0 saved items</p>
                         </div>
                     </div>
                     <!-- Speed practice -->
-                    <div onclick="startSmartPracticeMode('speed'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">⏱</span>
+                    <div onclick="startSmartPracticeMode('speed'); playSound('click');" class="practice-mode-tile p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
+                        <span class="text-xl">⏱</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Speed Practice</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">30s per-question sprint</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400">30s per-question sprint</p>
                         </div>
                     </div>
                     <!-- Daily Target -->
-                    <div onclick="startSmartPracticeMode('daily'); playSound('click');" class="p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
-                        <span class="text-lg">🎯</span>
+                    <div onclick="startSmartPracticeMode('daily'); playSound('click');" class="practice-mode-tile p-3 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-705 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition active:scale-97">
+                        <span class="text-xl">🎯</span>
                         <div>
                             <p class="font-black text-xs text-slate-800 dark:text-slate-100">Daily Target</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400" id="smart-daily-count-lbl">Practice to hit target</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400" id="smart-daily-count-lbl">Practice to hit target</p>
                         </div>
                     </div>
                     <!-- Tinder Flashcard Swiper (Permanently Active) -->
-                    <div id="hybrid-tinder-swiper-btn" onclick="startFlashcardSwiper(); playSound('click');" class="p-3 bg-gradient-to-r from-emerald-50 to-teal-50/50 dark:from-emerald-950/10 dark:to-teal-950/10 border border-emerald-500/20 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-400 transition active:scale-97 col-span-2">
-                        <span class="text-lg">🎴</span>
+                    <div id="hybrid-tinder-swiper-btn" onclick="startFlashcardSwiper(); playSound('click');" class="practice-mode-tile p-3 bg-gradient-to-r from-emerald-50 to-teal-50/50 dark:from-emerald-950/10 dark:to-teal-950/10 border border-emerald-500/20 rounded-xl flex gap-2.5 items-center cursor-pointer hover:border-emerald-400 transition active:scale-97 col-span-2">
+                        <span class="text-xl">🎴</span>
                         <div>
                             <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">Premium Flashcard Swiper</p>
-                            <p class="text-[8px] text-slate-500 dark:text-slate-400">Swipe right if you know it, left to study later — fast mobile learning cards</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400">Swipe right if you know it, left to study later — fast mobile learning cards</p>
                         </div>
                     </div>
                 </div>
@@ -1110,15 +1110,15 @@
             <div class="space-y-2">
 
                 
-                <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider" style="color:var(--text-secondary);">📚 Subjects Grid</h3>
+                <h3 class="section-eyebrow font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">📚 Subjects Grid</h3>
                 <div class="grid grid-cols-2 gap-3" id="subject-buttons-container"></div>
             </div>
 
             <!-- RECENT PRACTICE LOG -->
             <div class="space-y-2">
-                <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider" style="color:var(--text-secondary);">🕒 Recent Practice History</h3>
+                <h3 class="section-eyebrow font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">🕒 Recent Practice History</h3>
                 <div id="practice-recent-list" class="space-y-2 text-xs">
-                    <p class="text-[10px] text-slate-450 dark:text-slate-500 italic">No recent sessions completed today.</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400 italic">No recent sessions completed today.</p>
                 </div>
             </div>
             </div>
@@ -1130,7 +1130,7 @@
                 </h2>
                 
                 <div id="result-card-container" class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-150 dark:border-slate-705 shadow-sm space-y-4">
-                    <p class="text-[9px] font-black uppercase text-slate-400 tracking-wider">Overall Accuracy Evaluation</p>
+                    <p class="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 tracking-wider">Overall Accuracy Evaluation</p>
                     <div class="relative w-28 h-28 mx-auto flex items-center justify-center">
                         <svg class="w-full h-full transform -rotate-90">
                             <circle cx="56" cy="56" r="46" stroke="var(--border)" stroke-width="6" fill="transparent" class="text-slate-100 dark:text-slate-700" />
@@ -1139,94 +1139,94 @@
                         </svg>
                         <div class="absolute flex flex-col items-center">
                             <span id="res-accuracy" class="text-2xl font-black text-slate-800 dark:text-slate-100">0%</span>
-                            <span class="text-[7px] text-slate-400 font-bold uppercase tracking-widest">Accuracy</span>
+                            <span class="text-[9px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Accuracy</span>
                         </div>
                     </div>
                     
                     <p class="text-[11px] text-slate-600 dark:text-slate-400" id="res-detail">Analyzing efforts...</p>
                     
                     <div class="grid grid-cols-2 gap-2 text-xs">
-                        <div class="p-2 bg-emerald-500/5 rounded-xl border border-emerald-500/10 text-center">
-                            <span class="text-[8px] font-bold text-slate-400 block uppercase">Correct</span>
-                            <span class="text-sm font-black text-emerald-600" id="res-correct">0</span>
+                        <div class="res-tile res-tile--correct p-2.5 bg-emerald-500/5 rounded-xl border border-emerald-500/10 text-center">
+                            <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Correct</span>
+                            <span class="text-sm font-black text-emerald-800 dark:text-emerald-400" id="res-correct">0</span>
                         </div>
-                        <div class="p-2 bg-rose-500/5 rounded-xl border border-rose-500/10 text-center">
-                            <span class="text-[8px] font-bold text-slate-400 block uppercase">Wrong</span>
-                            <span class="text-sm font-black text-rose-500" id="res-wrong">0</span>
+                        <div class="res-tile res-tile--wrong p-2.5 bg-rose-500/5 rounded-xl border border-rose-500/10 text-center">
+                            <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Wrong</span>
+                            <span class="text-sm font-black text-rose-600 dark:text-rose-400" id="res-wrong">0</span>
                         </div>
-                        <div class="p-2 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-150 dark:border-slate-750 text-center">
-                            <span class="text-[8px] font-bold text-slate-400 block uppercase">Skipped</span>
-                            <span class="text-sm font-black text-slate-500 dark:text-slate-350" id="res-skipped">0</span>
+                        <div class="res-tile res-tile--skipped p-2.5 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-150 dark:border-slate-750 text-center">
+                            <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Skipped</span>
+                            <span class="text-sm font-black text-slate-600 dark:text-slate-300" id="res-skipped">0</span>
                         </div>
-                        <div class="p-2 bg-indigo-500/5 rounded-xl border border-indigo-505/10 text-center">
-                            <span class="text-[8px] font-bold text-slate-400 block uppercase">Weighted Score</span>
-                            <span class="text-sm font-black text-indigo-600 dark:text-indigo-400" id="res-weighted-score">0.00</span>
+                        <div class="res-tile res-tile--score p-2.5 bg-indigo-500/5 rounded-xl border border-indigo-500/20 text-center">
+                            <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Weighted Score</span>
+                            <span class="text-sm font-black text-indigo-800 dark:text-indigo-300" id="res-weighted-score">0.00</span>
                         </div>
                     </div>
                 </div>
 
                 <!-- Detailed metrics card -->
-                <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 text-left">
-                    <span class="text-[9px] font-black text-slate-400 uppercase tracking-widest block border-b border-slate-100 dark:border-slate-705 pb-1">⏱ Timing Diagnostics</span>
+                <div class="res-card bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-3 text-left">
+                    <span class="text-[9.5px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest block border-b border-slate-150 dark:border-slate-705 pb-1.5">⏱ Timing Diagnostics</span>
                     <div class="grid grid-cols-2 gap-2 text-[11px]">
                         <div>
-                            <span class="text-slate-500 block text-[9px]">Total Time:</span>
+                            <span class="text-slate-500 dark:text-slate-400 block text-[9.5px]">Total Time:</span>
                             <b class="text-slate-800 dark:text-slate-200" id="res-total-time">0s</b>
                         </div>
                         <div>
-                            <span class="text-slate-500 block text-[9px]">Avg time per question:</span>
+                            <span class="text-slate-500 dark:text-slate-400 block text-[9.5px]">Avg time per question:</span>
                             <b class="text-slate-800 dark:text-slate-200" id="res-avg-time">0s</b>
                         </div>
                         <div>
-                            <span class="text-emerald-600 block text-[9px]">Fastest correct:</span>
+                            <span class="text-emerald-800 dark:text-emerald-400 block text-[9.5px]">Fastest correct:</span>
                             <b class="text-slate-800 dark:text-slate-200" id="res-fastest-q">0s</b>
                         </div>
                         <div>
-                            <span class="text-rose-500 block text-[9px]">Slowest correct/wrong:</span>
+                            <span class="text-rose-600 dark:text-rose-400 block text-[9.5px]">Slowest correct/wrong:</span>
                             <b class="text-slate-800 dark:text-slate-200" id="res-slowest-q">0s</b>
                         </div>
                     </div>
                 </div>
 
                 <!-- Subject wise matrix progress -->
-                <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-2 text-left">
-                    <span class="text-[9px] font-black text-slate-400 uppercase tracking-widest block border-b border-slate-100 dark:border-slate-705 pb-1">📂 Subject Metrics Matrix</span>
+                <div class="res-card bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-2 text-left">
+                    <span class="text-[9.5px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest block border-b border-slate-150 dark:border-slate-705 pb-1.5">📂 Subject Metrics Matrix</span>
                     <div id="res-subject-matrix" class="space-y-1.5 text-[11px]">
                         <!-- template -->
                     </div>
                 </div>
 
                 <!-- Recommendations & Weak areas -->
-                <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-2.5 text-left">
-                    <span class="text-[9px] font-black text-slate-400 uppercase tracking-widest block border-b border-slate-100 dark:border-slate-705 pb-1">🔮 AI Intelligence Feedback</span>
+                <div class="res-card bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-2.5 text-left">
+                    <span class="text-[9.5px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest block border-b border-slate-150 dark:border-slate-705 pb-1.5">🔮 AI Intelligence Feedback</span>
                     <div class="space-y-2 text-[11px]">
                         <div>
-                            <span class="text-red-500 font-bold block text-[9px] uppercase">Weakest Topic:</span>
+                            <span class="text-rose-600 dark:text-rose-400 font-bold block text-[9.5px] uppercase tracking-wide">Weakest Topic:</span>
                             <b class="text-slate-800 dark:text-slate-200" id="res-topic-weakness">None detected.</b>
                         </div>
                         <div>
-                            <span class="text-slate-500 font-bold block text-[9px] uppercase">Mistake Pattern:</span>
-                            <p class="text-slate-600 dark:text-slate-400 text-[10px]" id="res-mistake-pattern">Solving speed remains steady, focus is advised.</p>
+                            <span class="text-slate-500 dark:text-slate-400 font-bold block text-[9.5px] uppercase tracking-wide">Mistake Pattern:</span>
+                            <p class="text-slate-600 dark:text-slate-300 text-[10.5px]" id="res-mistake-pattern">Solving speed remains steady, focus is advised.</p>
                         </div>
-                        <div class="p-2 bg-emerald-50 dark:bg-black border border-emerald-100 dark:border-emerald-900/50 rounded-xl">
-                            <span class="text-emerald-600 dark:text-emerald-500 font-black text-[9px] uppercase block mb-0.5">Recommended focus:</span>
-                            <p id="res-recommended-mode" class="font-bold text-slate-800 dark:text-slate-200 text-xs">Spaced Review on agronomy definitions</p>
+                        <div class="p-2.5 bg-emerald-100 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 rounded-xl">
+                            <span class="text-emerald-800 dark:text-emerald-300 font-black text-[9.5px] uppercase block mb-0.5 tracking-wide">Recommended focus:</span>
+                            <p id="res-recommended-mode" class="font-bold text-slate-800 dark:text-slate-100 text-xs">Spaced Review on agronomy definitions</p>
                         </div>
                     </div>
                 </div>
 
                 <!-- Buttons Grid -->
                 <div class="grid grid-cols-1 gap-2.5 pb-6">
-                    <button onclick="retryWrongSession(); playSound('click');" id="retry-wrong-btn" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button onclick="retryWrongSession(); playSound('click');" id="retry-wrong-btn" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-3 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition active:scale-95">
                         🔁 Retry Wrong items
                     </button>
-                    <button id="res-btn-practice-weak" onclick="practiceWeakestSubjectFromResult(); playSound('click');" class="w-full bg-amber-600 hover:bg-amber-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button id="res-btn-practice-weak" onclick="practiceWeakestSubjectFromResult(); playSound('click');" class="w-full bg-amber-600 hover:bg-amber-700 text-white py-3 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition active:scale-95">
                         🎯 Practice Weak subject topic
                     </button>
-                    <button onclick="saveResultToAnalyticsDashboard(); playSound('click');" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button onclick="saveResultToAnalyticsDashboard(); playSound('click');" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition active:scale-95">
                         💾 Save result to analytics Log
                     </button>
-                    <button onclick="closeSessionResults(); playSound('click');" class="w-full bg-white dark:bg-white text-slate-200 py-2.5 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition">
+                    <button onclick="closeSessionResults(); playSound('click');" class="w-full bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-750 py-3 rounded-xl font-bold text-xs cursor-pointer shadow-sm transition active:scale-95">
                         ← Back to Practice Selectors
                     </button>
                 </div>
@@ -1240,28 +1240,28 @@
 
                 <!-- Premium Hybrid Duolingo-style Progress Header -->
                 <div id="hybrid-duo-header" class="premium-hybrid-show flex items-center justify-between gap-3 text-xs mb-1 bg-white dark:bg-slate-900 py-1.5 z-10">
-                    <button onclick="confirmExitExam()" class="text-sm font-black text-slate-400 hover:text-rose-500 dark:text-slate-500 dark:hover:text-rose-400 cursor-pointer">✕</button>
+                    <button onclick="confirmExitExam()" class="text-sm font-black text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 cursor-pointer">✕</button>
                     <div class="flex-1 h-3 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-800 border border-slate-200/20 relative">
                         <div id="hybrid-progress-bar" class="h-full bg-gradient-to-r from-emerald-400 to-teal-400 rounded-full transition-all duration-300" style="width: 10%;"></div>
                     </div>
                     <div class="flex items-center gap-1.5">
-                        <span id="hybrid-streak-badge" class="font-bold flex items-center gap-1 bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded-full text-[10px]">🔥 <span id="hybrid-streak-count">0</span></span>
-                        <span id="hybrid-hearts-badge" class="font-bold flex items-center gap-1 bg-rose-500/10 text-rose-500 px-2 py-0.5 rounded-full text-[10px] transition-transform duration-300">❤️ <span id="hybrid-hearts-count">5</span></span>
+                        <span id="hybrid-streak-badge" class="font-bold flex items-center gap-1 bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full text-[10px]">🔥 <span id="hybrid-streak-count">0</span></span>
+                        <span id="hybrid-hearts-badge" class="font-bold flex items-center gap-1 bg-rose-500/10 text-rose-700 dark:text-rose-400 px-2 py-0.5 rounded-full text-[10px] transition-transform duration-300">❤️ <span id="hybrid-hearts-count">5</span></span>
                         <!-- Premium real-time autosave state indicator HUD -->
-                        <div id="game-autosave-indicator" class="flex items-center gap-1 text-[9px] font-black text-slate-400 dark:text-slate-500 transition-all duration-300">
-                            <span class="w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300" style="display:inline-block; box-shadow:0 0 0 0 rgba(100,116,139,0.4);"></span>
+                        <div id="game-autosave-indicator" class="flex items-center gap-1 text-[9px] font-black text-slate-500 dark:text-slate-400 transition-all duration-300">
+                            <span class="w-1.5 h-1.5 rounded-full bg-slate-500 dark:bg-slate-400 transition-colors duration-300" style="display:inline-block; box-shadow:0 0 0 0 rgba(100,116,139,0.4);"></span>
                             <span class="indicator-text">Ready</span>
                         </div>
                     </div>
                 </div>
 
-                <div class="flex justify-between items-center text-xs font-semibold text-slate-500">
+                <div class="flex justify-between items-center text-xs font-semibold text-slate-600 dark:text-slate-300">
                     <span id="q-progress" class="premium-hybrid-hide font-bold bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">Question 1/10</span>
                     <div class="flex gap-2.5 items-center ml-auto">
                         <span id="q-timer-display" class="hidden font-bold text-slate-700 bg-slate-100 dark:bg-slate-800 dark:text-slate-200 px-2 py-1 rounded-lg">⏱️ 30:00</span>
-                        <span id="per-q-timer-display" class="hidden font-mono font-bold text-red-500 bg-red-50 dark:bg-red-950/20 px-2 py-1 rounded-lg">⏱️ Q: 15s</span>
+                        <span id="per-q-timer-display" class="hidden font-mono font-bold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/20 px-2 py-1 rounded-lg">⏱️ Q: 15s</span>
                         <button onclick="skipQuestion()" class="premium-hybrid-hide px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-lg text-[10px] font-bold transition cursor-pointer">⏭️ Skip</button>
-                        <button id="q-review-later-btn" onclick="reviewLaterQuestion()" class="premium-hybrid-hide px-2.5 py-1 bg-amber-500/10 text-amber-600 rounded-lg text-[10px] font-bold hover:bg-amber-500/20 transition cursor-pointer">🕒 Review Later</button>
+                        <button id="q-review-later-btn" onclick="reviewLaterQuestion()" class="premium-hybrid-hide px-2.5 py-1 bg-amber-500/10 text-amber-800 dark:text-amber-400 rounded-lg text-[10px] font-bold hover:bg-amber-500/20 transition cursor-pointer">🕒 Review Later</button>
                     </div>
                 </div>
 
@@ -1273,13 +1273,13 @@
                 <div id="mcq-card-container" class="p-5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-4 relative">
                     <div class="flex justify-between items-center gap-1.5 flex-wrap">
                         <div class="flex gap-1.5 items-center">
-                            <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-700 dark:text-indigo-400" id="q-subject-badge">General</span>
+                            <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-800 dark:text-indigo-300" id="q-subject-badge">General</span>
                             <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400" id="q-topic-badge">General Topic</span>
                             <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-orange-500/10 text-orange-700 dark:text-orange-400" id="q-difficulty-badge">Easy</span>
                         </div>
                         <div class="flex items-center gap-2">
                             <button id="q-hint-btn" onclick="showQuizHint()" class="hidden px-2 py-0.5 text-[9px] font-black bg-teal-500/10 text-teal-700 dark:text-teal-400 hover:bg-teal-500/20 rounded cursor-pointer transition">💡 Hint</button>
-                            <button id="q-report-btn" onclick="reportAnswerIssue()" class="px-2 py-0.5 text-[9px] font-black text-rose-600 dark:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded cursor-pointer transition">⚠️ Report</button>
+                            <button id="q-report-btn" onclick="reportAnswerIssue()" class="px-2 py-0.5 text-[9px] font-black text-rose-700 dark:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded cursor-pointer transition">⚠️ Report</button>
                             <button id="bookmark-btn" onclick="toggleBookmarkCurrent()" class="text-lg hover:scale-115 transition select-none cursor-pointer">☆</button>
                         </div>
                     </div>
@@ -1291,7 +1291,7 @@
                     <div id="confidence-selector-container" class="hidden"></div>
 
                     <div id="q-explanation-container" class="hidden pt-4 border-t border-dashed border-slate-200 dark:border-slate-700">
-                        <div id="q-explanation" class="text-xs p-3.5 rounded-xl border leading-relaxed bg-slate-50 border-slate-150 dark:bg-slate-900 dark:border-slate-750 text-slate-750 dark:text-slate-350"></div>
+                        <div id="q-explanation" class="text-xs p-3.5 rounded-xl border leading-relaxed bg-slate-50 border-slate-150 dark:bg-slate-900 dark:border-slate-750 text-slate-750 dark:text-slate-300"></div>
                     </div>
                 </div>
 
@@ -3725,14 +3725,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=m68ouib" defer></script>
-    <script src="./js/elite_3d_engine.js?v=m68ouib" defer></script>
-    <script src="./js/canvas_charts.js?v=m68ouib" defer></script>
+    <script src="./js/elite_animations_controller.js?v=ez60acn" defer></script>
+    <script src="./js/elite_3d_engine.js?v=ez60acn" defer></script>
+    <script src="./js/canvas_charts.js?v=ez60acn" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=m68ouib" defer></script>
-    <script src="./js/sqlite_db.js?v=m68ouib" defer></script>
-    <script src="./js/krishi_idb.js?v=m68ouib"></script>
-    <script src="./js/app.js?v=m68ouib" defer></script>
+    <script src="./js/pwa_helpers.js?v=ez60acn" defer></script>
+    <script src="./js/sqlite_db.js?v=ez60acn" defer></script>
+    <script src="./js/krishi_idb.js?v=ez60acn"></script>
+    <script src="./js/app.js?v=ez60acn" defer></script>
 
 
     <!--
@@ -3760,7 +3760,7 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=m68ouib" defer></script>
+    <script src="./js/voice_assistant.js?v=ez60acn" defer></script>
 </body>
 </html>
 

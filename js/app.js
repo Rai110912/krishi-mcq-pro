@@ -12315,20 +12315,20 @@ document.querySelectorAll('button').forEach(btn => {
 
             if (historyList.length === 0) {
                 let newHtml = `
-                    <div class="col-span-full py-6 text-center text-slate-400 dark:text-slate-600 italic text-[10px] font-mono select-none">
+                    <div class="col-span-full py-6 text-center text-slate-500 dark:text-slate-400 italic text-[10px] font-mono select-none">
                         No recent practice runs yet. Start your first session!
                     </div>
                 `;
             if (historyContainer.innerHTML !== newHtml) historyContainer.innerHTML = newHtml;
             } else {
                 let newHtml2 = historyList.slice(0, 5).map(item => `
-                    <div class="p-3 rounded-lg border flex justify-between items-center text-[10px] transition-all" style="background:var(--card);border-color:var(--border);">
+                    <div class="practice-history-row p-3 rounded-lg border flex justify-between items-center text-[10px] transition-all" style="background:var(--card);border-color:var(--border);">
                         <div class="space-y-0.5">
                             <p class="font-extrabold text-slate-800 dark:text-slate-200">${item.mode}</p>
-                            <p class="text-slate-400 dark:text-slate-500 text-[8px] font-mono">${item.date} • ${item.correct}/${item.total} answered</p>
+                            <p class="text-slate-500 dark:text-slate-400 text-[9.5px] font-mono">${item.date} • ${item.correct}/${item.total} answered</p>
                         </div>
                         <div class="text-right">
-                            <span class="font-black px-2 py-0.5 rounded-full ${item.accuracy >= 80 ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'}">
+                            <span class="font-black px-2 py-0.5 rounded-full ${item.accuracy >= 80 ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300'}">
                                 ${item.accuracy}% Acc
                             </span>
                         </div>
@@ -15497,46 +15497,46 @@ function updatePracticePage() {
     if (engineContainer) {
         let engineHtml = `
             <div class="space-y-3">
-                <h3 class="font-bold text-xs text-slate-400 uppercase tracking-wider mb-2">🔥 Priority Training Modes</h3>
+                <h3 class="section-eyebrow font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">🔥 Priority Training Modes</h3>
                 
-                <button onclick="startSmartPracticeMode('quick'); playSound('click');" class="w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-emerald-500/10 to-teal-500/10" style="border-color:var(--border); background:var(--card);">
+                <button onclick="startSmartPracticeMode('quick'); playSound('click');" class="engine-tile engine-tile--quick w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-emerald-500/10 to-teal-500/10" style="border-color:var(--border); background:var(--card);">
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center text-xl shadow-lg">⚡️</div>
                         <div>
                             <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">Quick MCQ Drill</h4>
-                            <p class="text-[10px] text-slate-400">१० वटा मिक्स्ड प्रश्नहरूको द्रुत अभ्यास</p>
+                            <p class="text-[10px] text-slate-500 dark:text-slate-400">१० वटा मिक्स्ड प्रश्नहरूको द्रुत अभ्यास</p>
                         </div>
                     </div>
-                    <span class="text-[10px] font-bold px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-xl">START</span>
+                    <span class="text-[10px] font-bold px-3 py-1.5 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 rounded-xl">START</span>
                 </button>
 
                 <div class="grid grid-cols-2 gap-3">
-                    <button onclick="startSmartPracticeMode('spaced'); playSound('click');" class="p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${dueCount > 0 ? 'pulse-spaced-accent' : ''}" style="border-color:var(--border); background:var(--card);">
+                    <button onclick="startSmartPracticeMode('spaced'); playSound('click');" class="engine-tile engine-tile--spaced p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${dueCount > 0 ? 'pulse-spaced-accent' : ''}" style="border-color:var(--border); background:var(--card);">
                         <div class="flex justify-between items-center">
                             <span class="text-2xl">🧠</span>
-                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${dueCount > 0 ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'}">${dueCount} DUE</span>
+                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${dueCount > 0 ? 'bg-amber-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}">${dueCount} DUE</span>
                         </div>
                         <h4 class="font-bold text-xs text-slate-800 dark:text-slate-100">Spaced Review</h4>
                     </button>
 
-                    <button onclick="startSmartPracticeMode('wrong'); playSound('click');" class="p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${wrongCount > 0 ? 'pulse-wrong-accent' : ''}" style="border-color:var(--border); background:var(--card);">
+                    <button onclick="startSmartPracticeMode('wrong'); playSound('click');" class="engine-tile engine-tile--wrong p-4 rounded-2xl border text-left space-y-3 hover-card-trigger ${wrongCount > 0 ? 'pulse-wrong-accent' : ''}" style="border-color:var(--border); background:var(--card);">
                         <div class="flex justify-between items-center">
                             <span class="text-2xl">💔</span>
-                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${wrongCount > 0 ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-400'}">${wrongCount} ERRORS</span>
+                            <span class="text-[9px] font-black px-2 py-1 rounded-full ${wrongCount > 0 ? 'bg-rose-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}">${wrongCount} ERRORS</span>
                         </div>
                         <h4 class="font-bold text-xs text-slate-800 dark:text-slate-100">Review Mistakes</h4>
                     </button>
                 </div>
 
-                <button onclick="navigate('page-mock-config'); playSound('click');" class="w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-indigo-500/10 to-blue-500/10" style="border-color:var(--border); background:var(--card);">
+                <button onclick="navigate('page-mock-config'); playSound('click');" class="engine-tile engine-tile--mock w-full p-4 rounded-2xl border text-left flex justify-between items-center hover-card-trigger bg-gradient-to-r from-indigo-500/10 to-blue-500/10" style="border-color:var(--border); background:var(--card);">
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-xl shadow-lg">🎯</div>
                         <div>
                             <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">Mock Exam Simulator</h4>
-                            <p class="text-[10px] text-slate-500">कठिनस्तर छानेर वास्तविक परीक्षाको झल्को</p>
+                            <p class="text-[10px] text-slate-500 dark:text-slate-400">कठिनस्तर छानेर वास्तविक परीक्षाको झल्को</p>
                         </div>
                     </div>
-                    <span class="text-[10px] font-bold px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-xl">OPEN</span>
+                    <span class="text-[10px] font-bold px-3 py-1.5 bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-300 rounded-xl">OPEN</span>
                 </button>
             </div>
         `;
@@ -15569,17 +15569,17 @@ function updatePracticePage() {
         let count = all.filter(q => (q.sub || "").trim().toLowerCase() === (sub || "").trim().toLowerCase()).length;
         let stats = subStats[sub] || { solved: 0, correct: 0 };
         let accuracyText = stats.solved > 0 ? `${Math.round((stats.correct / stats.solved) * 100)}% accuracy` : 'Not practiced';
-        let accuracyColor = stats.solved > 0 ? (stats.correct / stats.solved >= 0.8 ? 'text-emerald-500' : stats.correct / stats.solved >= 0.5 ? 'text-amber-500' : 'text-rose-500') : 'text-slate-400 dark:text-slate-500';
+        let accuracyColor = stats.solved > 0 ? (stats.correct / stats.solved >= 0.8 ? 'text-emerald-800 dark:text-emerald-400' : stats.correct / stats.solved >= 0.5 ? 'text-amber-700 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400') : 'text-slate-500 dark:text-slate-400';
 
         htmlStr += `
-            <button onclick="openPracticeSetupPage('${sub}', 'all')" class="p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all  group flex flex-col justify-between" style="border-color:var(--border);">
+            <button onclick="openPracticeSetupPage('${sub}', 'all')" class="practice-subject-card p-3.5 rounded-xl border text-left bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all  group flex flex-col justify-between" style="border-color:var(--border);">
                 <div>
                     <p class="font-extrabold text-xs text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">${sub}</p>
-                    <span class="text-[9px] text-slate-400 mt-1 block">${count} Questions</span>
+                    <span class="text-[9.5px] text-slate-500 dark:text-slate-400 mt-1 block">${count} Questions</span>
                 </div>
                 <div class="mt-3 flex items-center justify-between w-full">
-                    <span class="text-[8px] font-black uppercase tracking-wider ${accuracyColor}">${accuracyText}</span>
-                    <span class="text-[9px] font-black text-emerald-500 group-hover:translate-x-0.5 transition-transform">Configure ➔</span>
+                    <span class="text-[9px] font-black uppercase tracking-wider ${accuracyColor}">${accuracyText}</span>
+                    <span class="text-[9.5px] font-black text-emerald-500 group-hover:translate-x-0.5 transition-transform">Configure ➔</span>
                 </div>
             </button>
         `;
@@ -16675,7 +16675,7 @@ function savePracticeProgress() {
                                 let dot = indicator.querySelector('span');
                                 let txt = indicator.querySelector('.indicator-text');
                                 if (dot && txt) {
-                                    dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
+                                    dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-500 dark:bg-slate-400 transition-colors duration-300';
                                     txt.textContent = 'Local Only';
                                     txt.style.color = '';
                                 }
@@ -16690,7 +16690,7 @@ function savePracticeProgress() {
                         let dot = indicator.querySelector('span');
                         let txt = indicator.querySelector('.indicator-text');
                         if (dot && txt) {
-                            dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-350 dark:bg-slate-600 transition-colors duration-300';
+                            dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-500 dark:bg-slate-400 transition-colors duration-300';
                             txt.textContent = uid ? 'Offline' : 'Local Only';
                             txt.style.color = '';
                         }

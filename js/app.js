@@ -486,7 +486,7 @@ async function loadStaticQuestions() {
                                 showToast('⏳ Completing secure Google Sign-in...');
                                 const auth = getSafeFirebaseApp().auth();
                                 const credential = firebase.auth.GoogleAuthProvider.credential(token);
-                                await auth.signInWithCredential(credential);
+                                await krishiLinkIfAnonymousOrSignIn(auth, { credential: credential });
                                 showToast('✅ Logged in successfully with Google!');
                                 if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
                                 
@@ -2239,12 +2239,39 @@ function loadData(){
             }
             
             firebaseAuth.onAuthStateChanged(async (user) => {
+                // ── Account-switch guard ─────────────────────────────────────
+                // A silent switch between two REAL accounts would merge the
+                // previous account's local data into the new account's cloud
+                // document. Anonymous→Google upgrades are exempt: either the
+                // uid is preserved by linking, or no real account existed before.
+                const prevRealUid = KrishiStorage.getItem('krishi_prev_real_uid');
+                if (user && !user.isAnonymous && prevRealUid && prevRealUid !== user.uid) {
+                    const proceed = confirm('यो device मा फरक Google account detect भयो।\n\nSwitch गर्दा अघिल्लो account को local data clear हुनेछ (cloud मा safe छ)। जारी राख्नुहुन्छ?');
+                    if (!proceed) {
+                        try { await firebaseAuth.signOut(); } catch (e) {}
+                        showToast('❌ Account switch cancelled.');
+                        return;
+                    }
+                    try {
+                        await krishiWipeLocalStudyData({ signOut: false });
+                        KrishiStorage.setItem('krishi_prev_real_uid', user.uid);
+                        showToast('🔄 Account switched! Reloading fresh…');
+                        setTimeout(() => { window.location.reload(true); }, 800);
+                        return;
+                    } catch (e) {
+                        console.error('[Auth] Switch wipe failed:', e);
+                    }
+                }
+
                 currentAuthUser = user;
                 window.currentAuthUser = user;
                 
                 if (user) {
                     syncCredentialsAuthorized = true;
                     KrishiStorage.setItem('krishi_sync_credentials_authorized', 'true');
+                }
+                if (user && !user.isAnonymous) {
+                    KrishiStorage.setItem('krishi_prev_real_uid', user.uid);
                 }
                 updateAuthUI();
                 
@@ -2356,8 +2383,11 @@ function loadData(){
         const user = auth.currentUser;
         if (user && user.isAnonymous) {
             try {
-                if (credential) return await user.linkWithCredential(credential);
-                return await user.linkWithPopup(provider);
+                let linked;
+                if (credential) linked = await user.linkWithCredential(credential);
+                else linked = await user.linkWithPopup(provider);
+                try { showToast('✅ Login successful — your existing progress was preserved!'); } catch(e) {}
+                return linked;
             } catch (linkErr) {
                 // This Google identity already owns another Firebase account.
                 // Fall back to a normal sign-in; local data rides along and the
@@ -2561,87 +2591,96 @@ function loadData(){
         }
     }
 
+    // Shared local-study-data wipe used by explicit logout AND the account-switch
+    // guard. One canonical key list — duplicating it would silently drift apart.
+    async function krishiWipeLocalStudyData({ signOut = true } = {}) {
+        KrishiStorage.removeItem('krishi_sync_credentials_authorized');
+
+        const keysToWipe = [
+            'krishi_bookmarked',
+            'krishi_bookmarkedLog',
+            'krishi_wrong',
+            'krishi_wrongLog',
+            'krishi_stats',
+            'krishi_streak',
+            'krishi_achievements',
+            'krishi_timingLog',
+            'krishi_sm2',
+            'krishi_sm2_v2',
+            'krishi_sm2_heatmap',
+            'krishi_mockScores',
+            'krishi_practice_recent',
+            'krishi_exam_profiles',
+            'krishi_home_settings',
+            'krishi_planner_settings',
+            'krishi_syllabus_custom',
+            'krishi_custom_subjects',
+            'krishi_last_sync_time',
+            'krishi_appearance_settings',
+            'krishi_custom_appearance_settings',
+            'krishi_sound_enabled',
+            'krishi_sound_muted',
+            'krishi_sound_volume',
+            'krishi_dark',
+            'krishi_battery_saver',
+            'krishi_elite_animations',
+            'krishi_haptic_enabled',
+            'krishi_username',
+            'krishi_profile_photo',
+            'krishi_profile_updated_at',
+            'krishi_linked_uid',
+            'krishi_custom_device_name',
+            'krishi_layout_backups',
+            'krishi_stats_baseline',
+            'krishi_last_updated_at',
+            'krishi_goal_settings',
+            'krishi_last_practice_config',
+            'krishi_saved_practice',
+            'krishi_intensity_mode',
+            'krishi_difficulty_bias',
+            'krishi_retry_delay',
+            'krishi_active_plan_mode',
+            'krishi_sync_pending',
+            'krishi_sync_pending_count',
+            'krishi_sync_status',
+            'krishi_gemini_key',
+            'krishi_gemini_model',
+            'krishi_gemini_temp',
+            'krishi_prev_real_uid'
+        ];
+
+        // Tear the sync engine down BEFORE wiping anything. While the users/{uid}
+        // listener is still attached and the uid still valid, an inbound snapshot
+        // would merge the half-emptied local state and push it back to the cloud.
+        try { disableCloudSyncSilently(); } catch(e) { console.warn('[Wipe] sync teardown failed:', e); }
+        if (typeof syncDebounceTimer !== 'undefined' && syncDebounceTimer) {
+            clearTimeout(syncDebounceTimer);
+            syncDebounceTimer = null;
+        }
+
+        keysToWipe.forEach(k => KrishiStorage.removeItem(k));
+
+        // Clear IndexedDB Custom Questions (the one deliberate empty wipe)
+        if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
+            try { await KrishiDB.saveAll([], { allowEmpty: true }); } catch(e) { console.warn('Failed to wipe custom questions IDB on wipe'); }
+        }
+        customQuestionsHydrated = false;
+        localData.customQuestions = [];
+
+        if (signOut && firebaseAuth) {
+            await firebaseAuth.signOut();
+        }
+    }
+
     async function handleFirebaseLogout() {
         try {
             if (!confirm('Logging out will clear your local offline study data from this device to protect your privacy. Are you sure you want to log out?')) return;
             
             showToast('⏳ Logging out & clearing local data...');
             KrishiStorage.removeItem('krishi_sync_credentials_authorized');
-            
-            // Wipe user-specific study data to prevent Data Bleed for the next user (V2 Complete Wipe)
-            const keysToWipe = [
-                'krishi_bookmarked',
-                'krishi_bookmarkedLog',
-                'krishi_wrong',
-                'krishi_wrongLog',
-                'krishi_stats',
-                'krishi_streak',
-                'krishi_achievements',
-                'krishi_timingLog',
-                'krishi_sm2',
-                'krishi_sm2_v2',
-                'krishi_sm2_heatmap',
-                'krishi_mockScores',
-                'krishi_practice_recent',
-                'krishi_exam_profiles',
-                'krishi_home_settings',
-                'krishi_planner_settings',
-                'krishi_syllabus_custom',
-                'krishi_custom_subjects',
-                'krishi_last_sync_time',
-                'krishi_appearance_settings',
-                'krishi_custom_appearance_settings',
-                'krishi_sound_enabled',
-                'krishi_sound_muted',
-                'krishi_sound_volume',
-                'krishi_dark',
-                'krishi_battery_saver',
-                'krishi_elite_animations',
-                'krishi_haptic_enabled',
-                'krishi_username',
-                'krishi_profile_photo',
-                'krishi_profile_updated_at',
-                'krishi_linked_uid',
-                'krishi_custom_device_name',
-                'krishi_layout_backups',
-                'krishi_stats_baseline',
-                'krishi_last_updated_at',
-                'krishi_goal_settings',
-                'krishi_last_practice_config',
-                'krishi_saved_practice',
-                'krishi_intensity_mode',
-                'krishi_difficulty_bias',
-                'krishi_retry_delay',
-                'krishi_active_plan_mode',
-                'krishi_sync_pending',
-                'krishi_sync_pending_count',
-                'krishi_sync_status',
-                'krishi_gemini_key',
-                'krishi_gemini_model',
-                'krishi_gemini_temp'
-            ];
-            // Tear the sync engine down BEFORE wiping anything. While the users/{uid}
-            // listener is still attached and the uid still valid, an inbound snapshot
-            // would merge the half-emptied local state and push it back to the cloud.
-            try { disableCloudSyncSilently(); } catch(e) { console.warn('[Logout] sync teardown failed:', e); }
-            if (typeof syncDebounceTimer !== 'undefined' && syncDebounceTimer) {
-                clearTimeout(syncDebounceTimer);
-                syncDebounceTimer = null;
-            }
 
-            keysToWipe.forEach(k => KrishiStorage.removeItem(k));
+            await krishiWipeLocalStudyData({ signOut: true });
 
-            // Clear IndexedDB Custom Questions (the one deliberate empty wipe)
-            if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
-                try { await KrishiDB.saveAll([], { allowEmpty: true }); } catch(e) { console.warn('Failed to wipe custom questions IDB on logout'); }
-            }
-            customQuestionsHydrated = false;
-            localData.customQuestions = [];
-            
-            if (firebaseAuth) {
-                await firebaseAuth.signOut();
-            }
-            
             showToast('✅ Logged out successfully. Reloading...');
             
             // Wait slightly for IDB flushes, then force reload to wipe RAM state

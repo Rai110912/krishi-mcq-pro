@@ -1,37 +1,7 @@
 {
   "version": "1.0",
   "timestamp": 1786028800000,
-  "count": 2,
-  "added_questions": [
-    {
-      "id": "delta_agri_2026_01",
-      "sub": "Agronomy",
-      "q": "नेपालमा प्रथम राष्ट्रिय धान दिवस कहिलेदेखि मनाउन थालिएको हो?",
-      "opts": [
-        "वि.सं. २०६१ असार १५",
-        "वि.सं. २०६० असार १५",
-        "वि.सं. २०६२ असार १५",
-        "वि.सं. २०६५ असार १५"
-      ],
-      "ans": 0,
-      "difficulty": "Medium",
-      "exp": "नेपाल सरकारको वि.सं. २०६१ मन्त्रिस्तरीय निर्णय अनुसार असार १५ लाई राष्ट्रिय धान दिवस मनाउन थालिएको हो।",
-      "tags": ["धान दिवस", "Agronomy", "लोकसेवा"]
-    },
-    {
-      "id": "delta_agri_2026_02",
-      "sub": "Soil Science",
-      "q": "माटोको pH मान ७ भन्दा कम भएमा कुन प्रकृतिको माटो मानिन्छ?",
-      "opts": [
-        "अम्लीय (Acidic)",
-        "क्षारीय (Alkaline)",
-        "तटस्थ (Neutral)",
-        "लवणीय (Saline)"
-      ],
-      "ans": 0,
-      "difficulty": "Easy",
-      "exp": "माटोको pH ७ भन्दा कम भए अम्लीय (Acidic) र ७ भन्दा बढी भए क्षारीय (Alkaline) हुन्छ।",
-      "tags": ["pH", "Soil Science"]
-    }
-  ]
+  "count": 0,
+  "added_questions": [],
+  "_note": "Delta payload emptied on 2026-08-23: previous entries contained unrecoverable encoding corruption (mojibake) and duplicate answer options. Re-add future question batches here with proper UTF-8 encoding."
 }

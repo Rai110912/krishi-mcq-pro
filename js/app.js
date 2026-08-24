@@ -5268,20 +5268,39 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
 
         if (mode === 'quick') {
             pool = shuffle(allQ).slice(0, 10);
-            config.count = 10;
         } 
         else if (mode === 'weak') {
             let weakInfo = getWeakestSubject();
             if (weakInfo.hasData && weakInfo.subject && weakInfo.subject !== 'all') {
-                pool = allQ.filter(q => (q.sub || "").trim().toLowerCase() === (weakInfo.subject || "").trim().toLowerCase());
+                let subjectPool = allQ.filter(q => (q.sub || "").trim().toLowerCase() === (weakInfo.subject || "").trim().toLowerCase());
                 config.subject = weakInfo.subject;
-                showToast(`Weak Topic Focus: targeting ${weakInfo.subject}!`);
+
+                // Prioritize genuinely memory-weak questions via FSRS records
+                // (due status first, then most lapses, then lowest stability),
+                // instead of a purely random slice that could serve
+                // already-mastered questions.
+                let prioritized = [];
+                const recs = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : null;
+                if (recs) {
+                    const weaknessOf = r => ((r.status === 'due') ? 0 : 1000000) +
+                        (r.lapses || 0) * 1000 +
+                        (r.stability == null ? 999 : Math.min(r.stability, 999));
+                    prioritized = subjectPool
+                        .filter(q => recs[String(q.id || q.q)])
+                        .sort((a, b) => weaknessOf(recs[String(a.id || a.q)]) - weaknessOf(recs[String(b.id || b.q)]));
+                }
+
+                if (prioritized.length >= 5) {
+                    pool = prioritized.slice(0, 15);
+                    showToast(`Weak Focus: ${weakInfo.subject} — ${pool.length} memory-weakest questions!`);
+                } else {
+                    pool = shuffle(subjectPool).slice(0, 15);
+                    showToast(`Weak Topic Focus: targeting ${weakInfo.subject}!`);
+                }
             } else {
                 pool = allQ;
                 showToast("Not enough stats found yet. Practices launched!");
             }
-            pool = shuffle(pool).slice(0, 15);
-            config.count = 15;
         } 
         else if (mode === 'wrong') {
             let wrongs = new Set(localData.wrong);
@@ -5291,7 +5310,6 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
                 return;
             }
             pool = shuffle(pool).slice(0, 15);
-            config.count = pool.length;
         } 
         else if (mode === 'bookmark') {
             let bookmarks = new Set(localData.bookmarked);
@@ -5301,39 +5319,38 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
                 return;
             }
             pool = shuffle(pool).slice(0, 15);
-            config.count = pool.length;
         } 
         else if (mode === 'speed') {
             pool = shuffle(allQ).slice(0, 20);
-            config.count = 20;
             config.perQTimer = 'on';
             config.perQSec = 30; // 30s quick sprint
             showToast("Speed Sprint! 30 seconds per question limit.");
         }
         else if (mode === 'sm2') {
-            if (window.KrishiSM2Engine) {
-                pool = window.KrishiSM2Engine.getDueQuestions(allQ);
+            if (!window.KrishiSM2Engine || typeof window.KrishiSM2Engine.getDueQuestions !== 'function') {
+                // A missing engine previously fell through to the "all caught up"
+                // celebration message, hiding the real problem from the user.
+                showToast('⚠️ Spaced review engine unavailable — please reload the app.');
+                return;
             }
+            pool = window.KrishiSM2Engine.getDueQuestions(allQ);
             if (pool.length === 0) {
                 showToast("🎉 सबै प्रश्नहरू कण्ठ छन्! आजका लागि सम्झनुपर्ने प्रश्न छैन।");
                 return;
             }
             pool = shuffle(pool).slice(0, 15);
-            config.count = pool.length;
             config.isSpacedReview = true;
-            showToast(`🧠 SM-2 Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
+            showToast(`🧠 FSRS Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
         }
         else if (mode === 'daily') {
             let solvedToday = getSolvedTodayCount();
             let target = getDailyTarget();
             let needed = Math.max(5, target - solvedToday);
             pool = shuffle(allQ).slice(0, needed);
-            config.count = needed;
-            showToast(`Practice ${needed} more correct MCQs to smash today's goal!`);
+            showToast(`Practice ${needed} more MCQs to smash today's goal!`);
         } 
         else if (mode === 'simulation') {
             pool = shuffle(allQ).slice(0, 50); // Loksewa simulations usually have 50 questions
-            config.count = 50;
             config.timer = 'on';
             config.timerMin = 45; // 45 minute Loksewa standard exam timer
             config.negativeMarking = 'on'; // 20% negative score marker
@@ -11752,7 +11769,7 @@ document.querySelectorAll('button').forEach(btn => {
                         <div class="flex items-start gap-2 bg-white/50 dark:bg-white/5 p-2 rounded-lg border border-indigo-100/40 dark:border-indigo-900/40">
                             <span class="p-1 px-1.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-[9px] font-extrabold text-indigo-700 dark:text-indigo-300">2</span>
                             <div>
-                                <h4 class="font-bold text-slate-850 dark:text-white text-[10px]">SM-2 QUEUES & ERRORS</h4>
+                                <h4 class="font-bold text-slate-850 dark:text-white text-[10px]">FSRS QUEUES & ERRORS</h4>
                                 <p class="text-[9px] text-slate-500">Run 10 card spaced revision cycles and clear ${Math.min(incorrects, 5)} pending errors.</p>
                             </div>
                         </div>
@@ -12293,6 +12310,28 @@ document.querySelectorAll('button').forEach(btn => {
         `;
     }
 
+    // Single source of truth for the Smart Engine mode-tile labels — previously
+    // duplicated in updateHomePage() and updatePracticePage(), which is exactly
+    // the drift pattern that silently killed the offline-queue badge.
+    function updateSmartModeLabels(wrongCount, bookmarkedCount, spacedDue) {
+        let elWrongCount = document.getElementById('smart-wrong-count-lbl');
+        if (elWrongCount) elWrongCount.textContent = `${wrongCount} pending wrongs`;
+
+        let elBkCount = document.getElementById('smart-bookmark-count-lbl');
+        if (elBkCount) elBkCount.textContent = `${bookmarkedCount} saved items`;
+
+        let elSpacedCount = document.getElementById('smart-spaced-count-lbl');
+        if (elSpacedCount) elSpacedCount.textContent = `${spacedDue} revision due`;
+
+        let elDailyCount = document.getElementById('smart-daily-count-lbl');
+        if (elDailyCount) {
+            let todayStr = getLocalDateString();
+            let solved = (localData.streak[todayStr] || {}).solved || 0;
+            let dailyT = getDailyTarget() || 50;
+            elDailyCount.textContent = `${solved} / ${dailyT} solved today`;
+        }
+    }
+
     function updateHomePage(){
         let all = getAllQuestions();
         try {
@@ -12492,22 +12531,7 @@ document.querySelectorAll('button').forEach(btn => {
         let elQuickCount = document.getElementById('practice-quick-count-badge');
         if (elQuickCount) elQuickCount.textContent = `${totalCount} MCQs`;
 
-        let elWrongCount = document.getElementById('smart-wrong-count-lbl');
-        if (elWrongCount) elWrongCount.textContent = `${wrongCount} pending wrongs`;
-
-        let elBkCount = document.getElementById('smart-bookmark-count-lbl');
-        if (elBkCount) elBkCount.textContent = `${bookmarkedCount} saved items`;
-
-        let elSpacedCount = document.getElementById('smart-spaced-count-lbl');
-        if (elSpacedCount) elSpacedCount.textContent = `${getPromoDueCount()} revision dued`;
-
-        let elDailyCount = document.getElementById('smart-daily-count-lbl');
-        if (elDailyCount) {
-            let todayStr = getLocalDateString();
-            let solved = (localData.streak[todayStr]||{}).solved||0;
-            let dailyT = getDailyTarget() || 50;
-            elDailyCount.textContent = `${solved} / ${dailyT} solved today`;
-        }
+        updateSmartModeLabels(wrongCount, bookmarkedCount, getPromoDueCount());
 
         let elStreakFire = document.getElementById('recommended-streak-fire');
         if (elStreakFire) {
@@ -13556,7 +13580,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                     <div class="space-y-0.5">
                         <span class="text-[9px] font-black text-emerald-500 uppercase tracking-wider block">🌌 Evening: Interactive Study Drills</span>
                         <p class="text-[11px] font-black text-slate-800 dark:text-slate-200">Attempt <b>${mcqTarget} MCQs</b> of weakest topics</p>
-                        <p class="text-[8px] text-slate-400 leading-normal">Includes <b>${reviewCount}</b> Spaced SM-2 reviews and corrected <b>${wrongCount}</b> errors in memory.</p>
+                        <p class="text-[8px] text-slate-400 leading-normal">Includes <b>${reviewCount}</b> Spaced FSRS reviews and corrected <b>${wrongCount}</b> errors in memory.</p>
                     </div>
                 </div>
             `;
@@ -15848,22 +15872,7 @@ function updatePracticePage() {
         }
     }
 
-    let elWrongCount = document.getElementById('smart-wrong-count-lbl');
-    if (elWrongCount) elWrongCount.textContent = `${wrongCount} pending wrongs`;
-
-    let elBkCount = document.getElementById('smart-bookmark-count-lbl');
-    if (elBkCount) elBkCount.textContent = `${bookmarkedCount} saved items`;
-
-    let elSpacedCount = document.getElementById('smart-spaced-count-lbl');
-    if (elSpacedCount) elSpacedCount.textContent = `${dueCount} revision dued`;
-
-    let elDailyCount = document.getElementById('smart-daily-count-lbl');
-    if (elDailyCount) {
-        let todayStr = getLocalDateString();
-        let solved = (localData.streak[todayStr]||{}).solved||0;
-        let dailyT = getDailyTarget() || 50;
-        elDailyCount.textContent = `${solved} / ${dailyT} solved today`;
-    }
+    updateSmartModeLabels(wrongCount, bookmarkedCount, dueCount);
 
     let subStats = (localData && localData.stats && localData.stats.subjectStats) ? localData.stats.subjectStats : {};
 

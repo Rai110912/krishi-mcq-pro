@@ -72,7 +72,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo.
 
-echo [6/8] Obfuscating & Minifying Core JS...
+echo [6/8] Obfuscating ^& Minifying Core JS...
 call npx.cmd -y terser www\js\app.js -o www\js\app.js -c -m
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Minification failed for app.js! Deploy aborted.

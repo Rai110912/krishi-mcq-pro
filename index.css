@@ -3573,4 +3573,158 @@ body.ui-density-spacious    { --quiz-col: 46rem; }
     color: var(--text-secondary);
 }
 
+/* ==========================================================================
+   PROFILE (#page-profile) & SETTINGS (#page-settings)
+   VISUAL POLISH LAYER (presentation only)
+   --------------------------------------------------------------------------
+   Same contract as the Home / Practice / Quiz layers above:
+
+     * nothing here changes behaviour, markup, state or logic - only how the
+       two pages are painted;
+     * every value is read from a surface token that the Appearance &
+       Language tab already writes (--r-card, --r-control, --elev-1,
+       --card-pad, --stack-gap, --card, --border, --text, --text-secondary),
+       so Corner / Depth / Density / Theme / Card Opacity / Text Colour all
+       reach these pages exactly as they reach Home;
+     * the multipliers are chosen so the DEFAULT setting reproduces today's
+       pixel values (--stack-gap 0.875rem * 0.857 = 0.75rem = space-y-3,
+       * 1.143 = 1rem = space-y-4), i.e. this layer is a no-op until the user
+       actually moves a control.
+
+   The five defects it fixes, measured on the live page:
+     1. three different card radii on one screen (16 / 12 / 12px) that ignored
+        the Corner control;
+     2. Depth and Density were complete no-ops on both pages;
+     3. 18 hardcoded bg-white + 12 dark:bg-slate-800 that ignored the theme
+        palette and the Card Opacity slider;
+     4. 59 captions painted at the literal #94a3b8 => 2.51:1 on white (AA
+        fail), because .custom-text-active is only added for a non-default
+        Text Colour;
+     5. four list rows with no border-color, so they fell back to the
+        preflight #e5e7eb instead of var(--border).
+
+   Specificity notes that must be preserved when touching this block:
+     * "#page-settings [id^=...] > div" = (1,1,1): beats .bg-white (0,1,0),
+       .dark .bg-slate-800 (0,2,0) AND .rounded-xl - which is what lets the
+       top-level cards take --r-card while the inner .rounded-xl controls
+       still take --r-control;
+     * the caption rule is (2,1,0) and the h3[class] title rule is (2,1,1),
+       so titles always out-rank captions;
+     * the tab :hover rule is (1,2,1), so it out-ranks the caption rule;
+     * #settings-group-sound is deliberately LEFT OUT of the caption rule -
+       the Ambient Player card paints its own #0f172a background and needs
+       its own light-on-dark caption colour.
+   ========================================================================== */
+
+/* --- 1. Card shell: radius, elevation and surface come from the tokens ---- */
+#page-profile > .profile-card-enter,
+#page-settings [id^="settings-group-"] > div {
+    border-radius: var(--r-card);
+    box-shadow: var(--elev-1);
+    background: var(--card);
+}
+#page-settings [id^="settings-group-"] > button {
+    border-radius: var(--r-control);
+    box-shadow: var(--elev-1);
+    background: var(--card);
+    border-color: var(--border);
+}
+/* Accordion trigger: a hair off the card so the header still reads as a
+   header. First declaration is the fallback for engines without color-mix. */
+#page-settings [id^="settings-group-"] > div > button {
+    background: var(--bg);
+    background: color-mix(in srgb, var(--text) 4%, var(--card));
+}
+
+/* --- 2. Density: padding ------------------------------------------------- */
+#page-profile > .profile-card-enter,
+#page-settings [id^="settings-group-"] > div > button,
+#page-settings div[id^="accordion-body-"],
+#page-settings #settings-group-visuals > div,
+#page-settings #settings-group-general-bottom > div {
+    padding: var(--card-pad);
+}
+#page-settings [id^="settings-group-"] > button {
+    padding: calc(var(--card-pad) * 0.75);
+}
+
+/* --- 3. Density: vertical rhythm ----------------------------------------- */
+/* space-y-3 on the page wrapper, space-y-3.5 inside the groups and space-y-4
+   in the two visual groups, re-expressed through --stack-gap. The ID lifts
+   these above Tailwind's own .space-y-* (0,3,0) rules. */
+#page-profile > :not([hidden]) ~ :not([hidden]),
+#page-settings > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 0.857);
+}
+#page-settings #settings-group-general > :not([hidden]) ~ :not([hidden]),
+#page-settings div[id^="accordion-body-"] > :not([hidden]) ~ :not([hidden]) {
+    margin-top: var(--stack-gap);
+}
+#page-settings #settings-group-sound > :not([hidden]) ~ :not([hidden]),
+#page-settings #settings-group-visuals > :not([hidden]) ~ :not([hidden]),
+#page-settings #settings-group-general-bottom > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--stack-gap) * 1.143);
+}
+
+/* --- 4. Corner: inner surfaces follow the same ladder -------------------- */
+/* min() keeps a nested surface from ever out-curving the card that holds it. */
+#page-profile .rounded-2xl,
+#page-settings .rounded-2xl {
+    border-radius: min(16px, var(--r-card));
+}
+#page-profile .rounded-xl,
+#page-settings .rounded-xl {
+    border-radius: var(--r-control);
+}
+
+/* --- 5. Caption / title contrast ----------------------------------------- */
+/* The captions were painted by Tailwind's literal .text-slate-400 (#94a3b8),
+   which is 2.51:1 on white - an AA failure - and which also ignored the Text
+   Colour setting, because js/app.js only adds .custom-text-active when that
+   setting is NOT 'default'. Pulling --text-secondary partway towards --text
+   fixes the contrast while keeping the secondary tone, and because both ends
+   are tokens the result follows the theme, dark mode and the Text Colour
+   setting on its own.
+
+   --cap-mix is how much of the secondary colour survives the mix. A custom
+   Text Colour palette pairs a saturated secondary with its own --text, and
+   those are much lighter than slate (emerald's #34d399 is 1.92:1 on white),
+   so for those palettes the mix leans further towards --text. Doing this with
+   a variable - instead of a second, heavier selector - keeps the specificity
+   ladder in this block intact. */
+#page-profile,
+#page-settings {
+    --cap-mix: 55%;
+}
+body.custom-text-active #page-profile,
+body.custom-text-active #page-settings {
+    --cap-mix: 35%;
+}
+/* First declaration is the pre-color-mix fallback (4.76:1, still an
+   improvement); the second is the real value. */
+#page-profile :is(.text-slate-400, .text-slate-500),
+#page-settings > div > .text-slate-500,
+#page-settings :is(#settings-group-general, #settings-group-visuals, #settings-group-general-bottom) :is(.text-slate-400, .text-slate-500, .text-gray-400) {
+    color: var(--text-secondary) !important;
+    color: color-mix(in srgb, var(--text-secondary) var(--cap-mix, 55%), var(--text)) !important;
+}
+/* Settings tab strip: the inactive tabs are .text-slate-500 too, so the
+   caption rule above would flatten their hover state. (1,2,1) restores it. */
+#page-settings > div > .text-slate-500:hover {
+    color: var(--text) !important;
+}
+/* Three group titles were shipped at caption colour (.text-slate-400). They
+   are headings, so they take the full --text. (2,1,1) - above the captions. */
+#page-profile h3[class],
+#page-settings :is(#settings-group-general, #settings-group-visuals, #settings-group-general-bottom) h3[class] {
+    color: var(--text) !important;
+}
+
+/* --- 6. Destructive row reads as destructive ----------------------------- */
+/* Hard Reset sits in a stack of identical neutral rows; its text was already
+   red, the outline now matches instead of falling back to var(--border). */
+#page-settings #settings-group-general-bottom > button[onclick^="resetAllData"] {
+    border-color: rgba(244, 63, 94, 0.45);
+}
+
 

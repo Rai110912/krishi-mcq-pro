@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=dro9bzw" rel="stylesheet">
+    <link href="./index.css?v=3m2ta15" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2620,7 +2620,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v176-dro9bzw (202608240524)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v177-3m2ta15 (202608240645)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3779,8 +3779,8 @@
              own linear order, its timer keeps running while this is open, and a
              session whose feedback is held back to the end (Exam Simulation)
              reports "answered" here instead of correct/wrong. -->
-        <div id="quiz-map-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
-            <div class="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border); max-height: 82vh;">
+        <div id="quiz-map-modal" role="dialog" aria-modal="true" aria-labelledby="quiz-map-title" aria-describedby="quiz-map-subtitle" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div id="quiz-map-sheet" tabindex="-1" class="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border); max-height: 82vh;">
                 <div class="w-12 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto my-2.5 lg:hidden"></div>
 
                 <!-- Header -->
@@ -3845,14 +3845,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=dro9bzw" defer></script>
-    <script src="./js/elite_3d_engine.js?v=dro9bzw" defer></script>
-    <script src="./js/canvas_charts.js?v=dro9bzw" defer></script>
+    <script src="./js/elite_animations_controller.js?v=3m2ta15" defer></script>
+    <script src="./js/elite_3d_engine.js?v=3m2ta15" defer></script>
+    <script src="./js/canvas_charts.js?v=3m2ta15" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=dro9bzw" defer></script>
-    <script src="./js/sqlite_db.js?v=dro9bzw" defer></script>
-    <script src="./js/krishi_idb.js?v=dro9bzw"></script>
-    <script src="./js/app.js?v=dro9bzw" defer></script>
+    <script src="./js/pwa_helpers.js?v=3m2ta15" defer></script>
+    <script src="./js/sqlite_db.js?v=3m2ta15" defer></script>
+    <script src="./js/krishi_idb.js?v=3m2ta15"></script>
+    <script src="./js/app.js?v=3m2ta15" defer></script>
 
 
     <!--
@@ -3880,8 +3880,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=dro9bzw" defer></script>
-    <script src="./js/voice_assistant.js?v=dro9bzw" defer></script>
+<script src="./js/data_safety.js?v=3m2ta15" defer></script>
+    <script src="./js/voice_assistant.js?v=3m2ta15" defer></script>
 </body>
 </html>
 

@@ -5403,6 +5403,16 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             state.perQuestionTimerInterval = null;
         }
 
+        // A plain practice run sets no activeConfig of its own, so without this it
+        // inherits the last one. After an Exam Simulation that means feedback:'end'
+        // and negativeMarking:'on' silently governing a practice session — answers
+        // and explanations stay hidden for no reason the user can see. Only a config
+        // that belongs to a mock is dropped, and only when this session is not one,
+        // so simulations, configured practice and Spaced Review keep theirs.
+        if (!isMock && state.activeConfig && state.activeConfig.isMock) {
+            state.activeConfig = null;
+        }
+
         state.questions = questions;
         state.currentIndex = 0;
         state.score = 0;
@@ -17451,6 +17461,24 @@ window.initNepalGlobe = function() {
                 }
 
                 // 2. Check if any modal is open — close it
+                // The Question Map is closed through its own handler so that the
+                // keyboard shortcuts and the reread view reset with it; a bare
+                // classList.add('hidden') would leave the module thinking it is
+                // still open. It is listed first because it is the only overlay that
+                // opens on top of live gameplay, where falling through to step 3
+                // would put an "exit the exam?" prompt in front of the user.
+                const quizMap = document.getElementById('quiz-map-modal');
+                if (quizMap && !quizMap.classList.contains('hidden')) {
+                    if (typeof window.krishiQuestionMapBack === 'function') {
+                        window.krishiQuestionMapBack();
+                    } else if (typeof window.krishiCloseQuestionMap === 'function') {
+                        window.krishiCloseQuestionMap();
+                    } else {
+                        quizMap.classList.add('hidden');
+                    }
+                    return;
+                }
+
                 const openModal = document.querySelector('.modal-overlay:not(.hidden), #home-customizer-modal:not(.hidden), #db-config-modal:not(.hidden)');
                 if (openModal) {
                     openModal.classList.add('hidden');
@@ -18195,6 +18223,9 @@ window.initNepalGlobe = function() {
     let fiftyUsedIndex = -1;   // the state.currentIndex that already spent its 50:50
     let mapOpen = false;
     let reviewIndex = -1;
+    let lastFocus = null;      // what had focus before the map opened, to give it back
+    let keyLockUntil = 0;      // covers the engine's 50 ms auto-submit window
+    let watchTimer = 0;        // runs only while the map is open
 
     function S() { return (typeof state === 'object' && state) ? state : null; }
 
@@ -18231,6 +18262,13 @@ window.initNepalGlobe = function() {
         let page = document.getElementById('page-mcq');
         if (!page || page.classList.contains('hidden')) return false;
         return page.offsetParent !== null;
+    }
+
+    // The summary screen. Reached by finishing, by the timer running out or by
+    // quitting, and never on screen during a live question.
+    function resultsVisible() {
+        let p = document.getElementById('practice-result-panel');
+        return !!p && !p.classList.contains('hidden');
     }
 
     function liveSession() {
@@ -18329,6 +18367,12 @@ window.initNepalGlobe = function() {
         for (let k = 0; k < removeCount; k++) {
             wrong[k].classList.add('option-eliminated');
             wrong[k].setAttribute('aria-disabled', 'true');
+            // `pointer-events:none` stops the mouse only: the button would still be
+            // in the Tab order and Enter/Space on it would run the engine's onclick,
+            // which has no elimination guard. Disabling it closes every path — mouse,
+            // keyboard, screen reader and programmatic .click() alike.
+            wrong[k].disabled = true;
+            wrong[k].tabIndex = -1;
         }
 
         fiftyUsedIndex = st.currentIndex;
@@ -18362,6 +18406,47 @@ window.initNepalGlobe = function() {
         return false;
     }
 
+    /* Enter belongs to whatever the user has focused. Two exceptions, because for
+       them the shortcut and the focused control want the same thing anyway:
+       Next/Finish itself, and an option button (its onclick is a no-op once the
+       question is answered, and focus stays on the option a mouse user clicked). */
+    function focusOwnsEnter() {
+        let ae = document.activeElement;
+        if (!ae || ae === document.body || typeof ae.matches !== 'function') return false;
+        if (ae.id === 'next-btn' || ae.id === 'finish-btn') return false;
+        if (ae.classList && ae.classList.contains('option-btn')) return false;
+        try {
+            return ae.matches('button, [href], input, select, textarea, summary, [role="button"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])');
+        } catch(e) { return false; }
+    }
+
+    // Tab order inside the open map, so focus cannot wander onto the quiz behind it.
+    function mapFocusables() {
+        let modal = document.getElementById('quiz-map-modal');
+        if (!modal) return [];
+        let list = modal.querySelectorAll('button:not([disabled]):not([hidden]), [href], [tabindex]:not([tabindex="-1"])');
+        return Array.prototype.slice.call(list).filter(function(n) {
+            return n.offsetParent !== null || n.getClientRects().length > 0;
+        });
+    }
+
+    function trapTab(e) {
+        let modal = document.getElementById('quiz-map-modal');
+        let list = mapFocusables();
+        if (!modal || !list.length) return;
+        let first = list[0];
+        let last = list[list.length - 1];
+        let pos = list.indexOf(document.activeElement);
+        // pos === -1 covers both the panel itself, which is where focus starts and
+        // carries tabindex="-1", and anything behind the dialog — so focus is pulled
+        // in from either side instead of leaking onto the quiz.
+        if (e.shiftKey) {
+            if (pos <= 0) { e.preventDefault(); last.focus(); }
+        } else if (pos === -1 || pos === list.length - 1) {
+            e.preventDefault(); first.focus();
+        }
+    }
+
     /* ── Keyboard: A–D (or 1–4) answers, Enter advances ─────────────────────
        The letter a key stands for is the letter renderMCQ printed on that button
        (`String.fromCharCode(65+i)`), because both count DOM order — so shuffled
@@ -18379,7 +18464,10 @@ window.initNepalGlobe = function() {
 
         let key = e.key || '';
         if (mapOpen) {
-            if (key === 'Escape') { e.preventDefault(); closeMap(); }
+            // Escape steps back the way the on-screen buttons do: out of a question
+            // being reread first, and only then out of the map.
+            if (key === 'Escape') { e.preventDefault(); mapBackStep(); }
+            else if (key === 'Tab') { trapTab(e); }
             return;                      // never answer through the open overlay
         }
         if (!quizVisible()) return;
@@ -18390,6 +18478,7 @@ window.initNepalGlobe = function() {
         if (!st || st.isFinishing || st.isTransitioning) return;
 
         if (key === 'Enter') {
+            if (focusOwnsEnter()) return;
             let next = document.getElementById('next-btn');
             let finish = document.getElementById('finish-btn');
             let target = (next && !next.classList.contains('hidden')) ? next
@@ -18407,14 +18496,20 @@ window.initNepalGlobe = function() {
             else if (key >= '1' && key <= '4') idx = parseInt(key, 10) - 1;
         }
         if (idx < 0 || st.answered) return;
+        // The engine submits 50 ms after an option is picked, and st.answered is
+        // still false inside that window — so a second letter typed fast would
+        // overwrite the first one and be the answer that gets recorded. First key
+        // typed wins; the rest of the window is ignored.
+        if (Date.now() < keyLockUntil) return;
 
         let btns = optionButtons();
         if (idx >= btns.length) return;
         let btn = btns[idx];
-        if (!btn || btn.classList.contains('disabled') || btn.classList.contains('option-eliminated')) return;
+        if (!btn || btn.disabled || btn.classList.contains('disabled') || btn.classList.contains('option-eliminated')) return;
         if (overlayBlocking()) return;
 
         e.preventDefault();
+        keyLockUntil = Date.now() + 400;
         btn.classList.add('option-keyed');
         setTimeout(function() { btn.classList.remove('option-keyed'); }, 240);
         btn.click();                     // same handler a tap runs
@@ -18545,10 +18640,13 @@ window.initNepalGlobe = function() {
         }
         host.appendChild(list);
 
-        if (r && r.skipped) {
+        if (r && (r.skipped || r.timeout)) {
             let note = document.createElement('p');
             note.className = 'quiz-review-note';
-            note.textContent = r.later ? 'You marked this one for review later.' : 'You skipped this question.';
+            // A timed-out result carries `timeout` and no `skipped` flag, so it has to
+            // be tested first or the question reads as a plain skip.
+            note.textContent = r.timeout ? '⏱️ Time ran out on this question.'
+                             : (r.later ? 'You marked this one for review later.' : 'You skipped this question.');
             host.appendChild(note);
         }
         if (reveal && q.expl) {
@@ -18564,7 +18662,12 @@ window.initNepalGlobe = function() {
         } else if (!reveal) {
             let note = document.createElement('p');
             note.className = 'quiz-review-note';
-            note.textContent = 'Exam Simulation: answers and explanations stay hidden until you finish.';
+            // Only a mock may be called Exam Simulation. Any other run that holds
+            // feedback back is described by what it does, not by a name it has not
+            // got — the engine hides explanations from the same flag.
+            note.textContent = st.isMock
+                ? 'Exam Simulation: answers and explanations stay hidden until you finish.'
+                : 'This session keeps answers and explanations hidden until you finish.';
             host.appendChild(note);
         }
 
@@ -18575,7 +18678,10 @@ window.initNepalGlobe = function() {
         let title = document.getElementById('quiz-map-title');
         if (title) title.textContent = 'Question ' + (i + 1);
         let sub = document.getElementById('quiz-map-subtitle');
-        if (sub) sub.textContent = 'Reading only — ' + (STATUS_TEXT[status] || status) + '. Your quiz has not moved.';
+        // A timed-out question is filed under "skipped" for its colour, but the
+        // subtitle can afford to say what actually happened.
+        let word = (r && r.timeout) ? 'timed out' : (STATUS_TEXT[status] || status);
+        if (sub) sub.textContent = 'Reading only — ' + word + '. Your quiz has not moved.';
         host.scrollTop = 0;
     }
 
@@ -18592,6 +18698,30 @@ window.initNepalGlobe = function() {
         let sub = document.getElementById('quiz-map-subtitle');
         if (sub) sub.textContent = 'Session progress at a glance.';
         renderGrid();
+        // The ← Map button has just been hidden, so if it held focus, focus would be
+        // lost to the page behind the dialog. Park it back on the panel.
+        if (mapOpen) {
+            let sheet = document.getElementById('quiz-map-sheet');
+            if (sheet && typeof sheet.focus === 'function') { try { sheet.focus(); } catch(e) {} }
+        }
+    }
+
+    /* The map is an overlay on a screen that can go away underneath it: the global
+       timer can expire, a per-question timer can walk the session to its end, and
+       quitting works from the hardware Back button. If that happens while the map is
+       open it would sit on top of the summary, and mapOpen would stay true — which
+       silently kills every keyboard shortcut. Watched only while the map is open. */
+    function startWatch() {
+        if (watchTimer) return;
+        watchTimer = setInterval(function() {
+            if (!mapOpen) { stopWatch(); return; }
+            let st = S();
+            if (!quizVisible() || resultsVisible() || !liveSession() || (st && st.isFinishing)) closeMap();
+        }, 300);
+    }
+
+    function stopWatch() {
+        if (watchTimer) { clearInterval(watchTimer); watchTimer = 0; }
     }
 
     function openMap() {
@@ -18601,8 +18731,15 @@ window.initNepalGlobe = function() {
         let modal = document.getElementById('quiz-map-modal');
         if (!modal) return;
         backToGrid();                    // always open on the grid, never on a stale review
+        lastFocus = (document.activeElement && document.activeElement !== document.body)
+                  ? document.activeElement : null;
         modal.classList.remove('hidden');
         mapOpen = true;
+        // Focus moves into the dialog, but onto the panel rather than a button, so
+        // Enter cannot close the map the moment it opens.
+        let sheet = document.getElementById('quiz-map-sheet');
+        if (sheet && typeof sheet.focus === 'function') { try { sheet.focus(); } catch(e) {} }
+        startWatch();
         sound('click');
     }
 
@@ -18611,6 +18748,23 @@ window.initNepalGlobe = function() {
         if (modal) modal.classList.add('hidden');
         mapOpen = false;
         reviewIndex = -1;
+        stopWatch();
+        // Hand focus back to the control that opened the map, but only while it is
+        // still on screen — after a finished session it is not.
+        let back = lastFocus;
+        lastFocus = null;
+        if (back && document.contains(back) && typeof back.focus === 'function'
+            && (back.offsetParent !== null || back.getClientRects().length > 0)) {
+            try { back.focus(); } catch(e) {}
+        }
+    }
+
+    // One step back: out of a reread question first, then out of the map. Used by
+    // Escape and by the Android hardware Back button.
+    function mapBackStep() {
+        if (!mapOpen) return;
+        if (reviewIndex >= 0) backToGrid();
+        else closeMap();
     }
 
     /* ── Wiring ─────────────────────────────────────────────────────────────── */
@@ -18627,6 +18781,7 @@ window.initNepalGlobe = function() {
         }
         readCfg();
         setFiftyEnabled(!st || fiftyUsedIndex !== st.currentIndex);
+        keyLockUntil = 0;                // a new question takes keys again at once
         updateAssistRow();
         if (mapOpen && reviewIndex < 0) renderGrid();
     }
@@ -18670,5 +18825,6 @@ window.initNepalGlobe = function() {
     window.krishiOpenQuestionMap = openMap;
     window.krishiCloseQuestionMap = closeMap;
     window.krishiQuestionMapBackToGrid = backToGrid;
+    window.krishiQuestionMapBack = mapBackStep;
 
 })();

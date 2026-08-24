@@ -818,7 +818,16 @@ async function loadStaticQuestions() {
             if (!currentActive || currentActive.id !== 'page-practice') {
                 return;
             }
-            
+
+            // Never offer resume on top of a quiz already on screen. Launching any
+            // practice mode navigates to page-practice, which schedules this check;
+            // without this the prompt pops over the fresh question the user just
+            // started — and confirming it discards that session for the old one.
+            let mcqPageEl = document.getElementById('page-mcq');
+            if (mcqPageEl && !mcqPageEl.classList.contains('hidden')) {
+                return;
+            }
+
             window.lastPromptedSessionKey = sessionKey;
 
             let total = session.questions ? session.questions.length : 0;

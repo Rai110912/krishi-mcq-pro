@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=trbbunx" rel="stylesheet">
+    <link href="./index.css?v=irm7n0w" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1137,11 +1137,15 @@
                             <circle id="result-circle-fill" cx="56" cy="56" r="46" stroke="#10b981" stroke-width="6" fill="transparent" 
                                     stroke-dasharray="290" stroke-dashoffset="290" class="transition-all duration-1000" />
                         </svg>
-                        <div class="absolute flex flex-col items-center">
-                            <span id="res-accuracy" class="text-2xl font-black text-slate-800 dark:text-slate-100">0%</span>
-                            <span class="text-[9px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Accuracy</span>
-                        </div>
-                    </div>
+<div class="absolute flex flex-col items-center">
+<span id="res-accuracy" class="text-2xl font-black text-slate-800 dark:text-slate-100">0%</span>
+<span class="text-[9px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Accuracy</span>
+</div>
+</div>
+<div id="res-net-score-wrap" class="hidden text-center mt-2">
+<span class="text-[9px] font-black uppercase tracking-widest text-indigo-500">⚖️ Net Score · 20% penalty applied</span>
+<div class="text-2xl font-black text-indigo-700 dark:text-indigo-300" id="res-net-score">0.00</div>
+</div>
                     
                     <p class="text-[11px] text-slate-600 dark:text-slate-400" id="res-detail">Analyzing efforts...</p>
                     
@@ -1158,7 +1162,7 @@
                             <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Skipped</span>
                             <span class="text-sm font-black text-slate-600 dark:text-slate-300" id="res-skipped">0</span>
                         </div>
-                        <div class="res-tile res-tile--score p-2.5 bg-indigo-500/5 rounded-xl border border-indigo-500/20 text-center">
+                        <div class="res-tile res-tile--score p-2.5 bg-indigo-500/5 rounded-xl border border-indigo-500/20 text-center" id="res-weighted-tile">
                             <span class="text-[9px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wide">Weighted Score</span>
                             <span class="text-sm font-black text-indigo-800 dark:text-indigo-300" id="res-weighted-score">0.00</span>
                         </div>
@@ -2568,7 +2572,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v172-trbbunx (202608240256)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v173-irm7n0w (202608240311)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3745,14 +3749,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=trbbunx" defer></script>
-    <script src="./js/elite_3d_engine.js?v=trbbunx" defer></script>
-    <script src="./js/canvas_charts.js?v=trbbunx" defer></script>
+    <script src="./js/elite_animations_controller.js?v=irm7n0w" defer></script>
+    <script src="./js/elite_3d_engine.js?v=irm7n0w" defer></script>
+    <script src="./js/canvas_charts.js?v=irm7n0w" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=trbbunx" defer></script>
-    <script src="./js/sqlite_db.js?v=trbbunx" defer></script>
-    <script src="./js/krishi_idb.js?v=trbbunx"></script>
-    <script src="./js/app.js?v=trbbunx" defer></script>
+    <script src="./js/pwa_helpers.js?v=irm7n0w" defer></script>
+    <script src="./js/sqlite_db.js?v=irm7n0w" defer></script>
+    <script src="./js/krishi_idb.js?v=irm7n0w"></script>
+    <script src="./js/app.js?v=irm7n0w" defer></script>
 
 
     <!--
@@ -3780,8 +3784,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=trbbunx" defer></script>
-    <script src="./js/voice_assistant.js?v=trbbunx" defer></script>
+<script src="./js/data_safety.js?v=irm7n0w" defer></script>
+    <script src="./js/voice_assistant.js?v=irm7n0w" defer></script>
 </body>
 </html>
 

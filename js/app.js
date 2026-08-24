@@ -6393,11 +6393,27 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         document.getElementById('res-fastest-q').textContent = fastestCorrect > 0 ? `${fastestCorrect}s` : '--';
         document.getElementById('res-slowest-q').textContent = slowestCorrect > 0 ? `${slowestCorrect}s` : '--';
         document.getElementById('res-skipped').textContent = skipped;
-        document.getElementById('res-weighted-score').textContent = weightedScore;
+document.getElementById('res-weighted-score').textContent = weightedScore;
 
-        if (state.isMock) { 
-            recordMockScore(acc); 
-        }
+// Simulation: Net Score becomes the headline metric; the small weighted
+// tile hides to avoid showing the same number twice.
+let netWrap = document.getElementById('res-net-score-wrap');
+let weightedTile = document.getElementById('res-weighted-tile');
+if (isNegativeConfig && netWrap) {
+    netWrap.classList.remove('hidden');
+    let netEl = document.getElementById('res-net-score');
+    if (netEl) netEl.textContent = weightedScore;
+    if (weightedTile) weightedTile.classList.add('hidden');
+} else {
+    if (netWrap) netWrap.classList.add('hidden');
+    if (weightedTile) weightedTile.classList.remove('hidden');
+}
+
+if (state.isMock) {
+    // Simulation runs record the penalized NET score into history (clamped
+    // at 0), so mock trends reflect exam rules rather than raw accuracy.
+    recordMockScore(isNegativeConfig ? Math.max(0, parseFloat(weightedScore)) : acc);
+}
 
         // Draw accuracy circle SVG animations
         let circle = document.getElementById('result-circle-fill');

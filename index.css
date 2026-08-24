@@ -3390,4 +3390,187 @@ body.ui-density-spacious    { --quiz-col: 46rem; }
     line-height: 1.6;
 }
 
+/* ============================================================
+   QUIZ HELPERS — keyboard shortcuts, Question Map, 50:50
+   Additive styling only. Every rule below targets markup that
+   did not exist before (#quiz-assist-row, #quiz-map-modal,
+   .option-eliminated, .quiz-map-*), so no existing quiz rule
+   changes behaviour or looks.
+   ============================================================ */
+
+/* The helper row sits between the question card and the action
+   buttons. display:flex lives here (not as a Tailwind `flex`
+   class) so the [hidden] rule underneath can out-rank it with
+   plain specificity, and so the row is driven by the `hidden`
+   ATTRIBUTE: `#page-mcq > :not([hidden]) ~ :not([hidden])`
+   above — and Tailwind's own space-y — both skip [hidden]
+   siblings, while a .hidden CLASS would still be billed a gap.
+   That phantom gap is the exact defect fixed in this screen
+   earlier, so it must not come back through a new row. */
+#page-mcq #quiz-assist-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+/* The row is driven by [hidden]; .hidden is listed too so that a future
+   caller using Tailwind's class still gets a hidden row instead of being
+   silently out-ranked by the two-id display:flex above. */
+#page-mcq #quiz-assist-row[hidden],
+#page-mcq #quiz-assist-row.hidden,
+#page-mcq #quiz-assist-row [hidden],
+#page-mcq #quiz-assist-row .hidden,
+#quiz-map-modal [hidden] {
+    display: none !important;
+}
+/* Helpers follow the Corner ladder like every other control. */
+#page-mcq #quiz-assist-row button {
+    border-radius: var(--r-control, 12px);
+}
+/* A spent 50:50 stays visible but is clearly out of charges. */
+.quiz-helper-spent {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* 50:50 removes nothing from the DOM — it dims two wrong options
+   and takes their clicks away. !important beats the .option-entrance
+   keyframes, which otherwise win over a plain opacity declaration. */
+.option-eliminated {
+    opacity: 0.28 !important;
+    filter: grayscale(1);
+    text-decoration: line-through;
+    pointer-events: none;
+    transition: opacity 0.25s ease, filter 0.25s ease;
+}
+
+/* A keyed answer gets the same "I registered that" nudge a tap gets. */
+.option-keyed {
+    animation: quizKeyFlash 0.24s ease;
+}
+@keyframes quizKeyFlash {
+    0%   { transform: scale(1); }
+    45%  { transform: scale(0.976); }
+    100% { transform: scale(1); }
+}
+
+/* Question Map chips. Colours mirror the legend inside the modal.
+   The column count is fluid rather than a fixed grid-cols-*, so a 10-question
+   practice and a 100-question mock both stay one comfortable screen wide:
+   ~9 columns inside the modal on a desktop, ~7 on a phone, chips ~40px either
+   way — still a real tap target. */
+#quiz-map-grid {
+    grid-template-columns: repeat(auto-fill, minmax(2.25rem, 1fr));
+}
+.quiz-map-chip {
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm, 10px);
+    font-size: 11px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.quiz-map-chip:disabled {
+    cursor: default;
+}
+.quiz-map-chip:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: var(--elev-1, 0 1px 3px rgba(0, 0, 0, 0.12));
+}
+.quiz-map-chip:not(:disabled):active {
+    transform: translateY(0) scale(0.96);
+}
+
+.quiz-map-correct  { background: rgba(16, 185, 129, 0.18); border-color: rgba(16, 185, 129, 0.55); color: #047857; }
+.quiz-map-wrong    { background: rgba(244, 63, 94, 0.18);  border-color: rgba(244, 63, 94, 0.55);  color: #9f1239; }
+.quiz-map-skipped  { background: rgba(245, 158, 11, 0.18); border-color: rgba(245, 158, 11, 0.55); color: #92400e; }
+.quiz-map-answered { background: rgba(99, 102, 241, 0.18); border-color: rgba(99, 102, 241, 0.55); color: #3730a3; }
+.quiz-map-upcoming { background: #f1f5f9; border-color: #cbd5e1; color: #64748b; }
+.quiz-map-current  { background: #ffffff; border-color: var(--primary, #10b981); color: var(--text, #0f172a); }
+
+.dark .quiz-map-correct  { color: #6ee7b7; }
+.dark .quiz-map-wrong    { color: #fda4af; }
+.dark .quiz-map-skipped  { color: #fcd34d; }
+.dark .quiz-map-answered { color: #a5b4fc; }
+.dark .quiz-map-upcoming { background: #334155; border-color: #475569; color: #cbd5e1; }
+.dark .quiz-map-current  { background: #0f172a; }
+
+/* Where the user actually is right now. */
+.quiz-map-chip.quiz-map-now {
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 16, 185, 129), 0.55);
+    border-color: var(--primary, #10b981);
+}
+/* Read-only review of one finished question. Built by JS with these
+   classes only — no Tailwind `dark:` utilities are mixed in, so the
+   panel follows the app theme (var(--text)) instead of the OS. */
+.quiz-review-q {
+    padding: 0.875rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-card, var(--radius, 16px));
+    background: var(--card);
+    color: var(--text);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    line-height: 1.55;
+}
+.quiz-review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+.quiz-review-opt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-control, 12px);
+    background: var(--bg);
+    color: var(--text);
+}
+.quiz-review-opt-text {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.45;
+}
+.quiz-review-tag {
+    flex: none;
+    font-size: 9px;
+    font-weight: 800;
+    white-space: nowrap;
+    opacity: 0.9;
+}
+.quiz-review-right      { background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.5); }
+.quiz-review-mine-wrong { background: rgba(244, 63, 94, 0.12);  border-color: rgba(244, 63, 94, 0.5); }
+.quiz-review-mine       { background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.5); }
+.quiz-review-note {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.quiz-review-expl {
+    padding: 0.75rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--r-control, 12px);
+    color: var(--text);
+    font-size: 0.75rem;
+    line-height: 1.55;
+}
+.quiz-review-expl strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
 

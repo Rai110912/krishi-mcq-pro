@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ne">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Krishi Buddy — Character Demo (Scratch)</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI',sans-serif; }
+  body { min-height:100vh; background:linear-gradient(135deg,#0f172a,#1e293b); display:flex; gap:24px; align-items:center; justify-content:center; padding:24px; flex-wrap:wrap; }
+
+  /* ── Phone frame mockup ── */
+  .phone { width:360px; height:720px; background:#f8fafc; border-radius:36px; border:10px solid #0f172a; overflow:hidden; position:relative; box-shadow:0 25px 60px rgba(0,0,0,.5); }
+  .p-header { background:linear-gradient(135deg,#059669,#0d9488); color:#fff; padding:14px 16px; font-weight:800; font-size:14px; display:flex; justify-content:space-between; align-items:center; }
+  .p-header small { font-weight:600; opacity:.85; font-size:10px; }
+  .p-body { padding:16px; }
+  .q-card { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; box-shadow:0 4px 12px rgba(0,0,0,.06); }
+  .q-tag { font-size:9px; font-weight:800; letter-spacing:1px; color:#64748b; text-transform:uppercase; }
+  .q-text { font-size:13px; font-weight:700; color:#1e293b; margin:6px 0 12px; line-height:1.5; }
+  .opt { display:block; width:100%; text-align:left; background:#f1f5f9; border:2px solid transparent; border-radius:12px; padding:10px 12px; font-size:12px; font-weight:600; color:#334155; margin-bottom:8px; cursor:pointer; transition:all .15s; }
+  .opt:hover { background:#e2e8f0; }
+  .opt.correct { background:#dcfce7; border-color:#10b981; color:#065f46; }
+  .opt.wrong { background:#fee2e2; border-color:#ef4444; color:#991b1b; }
+
+  /* ── Buddy corner ── */
+  .buddy-dock { position:absolute; right:10px; bottom:78px; display:flex; flex-direction:column; align-items:center; z-index:5; }
+  .bubble { background:#1e293b; color:#fff; font-size:10.5px; font-weight:600; padding:8px 12px; border-radius:14px 14px 4px 14px; max-width:190px; margin-bottom:8px; opacity:0; transform:translateY(6px) scale(.9); transition:all .25s; box-shadow:0 6px 16px rgba(0,0,0,.25); }
+  .bubble.show { opacity:1; transform:translateY(0) scale(1); }
+  .avatar-wrap { width:96px; height:96px; border-radius:50%; overflow:hidden; border:4px solid #10b981; box-shadow:0 8px 24px rgba(16,185,129,.4); background:#9ca3af; position:relative; }
+  .avatar-wrap img { width:100%; height:100%; object-fit:cover; object-position:top; display:block; }
+
+  .st-idle img { animation: float 3.2s ease-in-out infinite; }
+  .st-happy img { animation: jump .55s ease-in-out 2; }
+  .st-happy .avatar-wrap { border-color:#fbbf24; box-shadow:0 8px 24px rgba(251,191,36,.55); }
+  .st-sad img { animation: tilt 1.6s ease-in-out infinite; filter:saturate(.55) brightness(.92); }
+  .st-sad .avatar-wrap { border-color:#94a3b8; }
+  .st-think img { animation: sway 2.4s ease-in-out infinite; }
+  .st-think .avatar-wrap { border-color:#60a5fa; box-shadow:0 8px 24px rgba(96,165,250,.45); }
+  .st-sleep .avatar-wrap { border-color:#6366f1; }
+  .st-sleep img { animation: breathe 3.5s ease-in-out infinite; filter:brightness(.75); }
+
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+  @keyframes jump { 0%,100%{transform:translateY(0) scale(1)} 40%{transform:translateY(-16px) scale(1.06)} }
+  @keyframes tilt { 0%,100%{transform:rotate(0)} 25%{transform:rotate(-7deg)} 75%{transform:rotate(5deg)} }
+  @keyframes sway { 0%,100%{transform:rotate(-3deg)} 50%{transform:rotate(3deg)} }
+  @keyframes breathe { 0%,100%{transform:scale(1)} 50%{transform:scale(.96)} }
+
+  .zzz { position:absolute; top:2px; right:-2px; font-size:14px; font-weight:900; color:#6366f1; opacity:0; }
+  .st-sleep .zzz { animation: zfloat 2.2s ease-in-out infinite; opacity:1; }
+  @keyframes zfloat { 0%{transform:translateY(0);opacity:0} 30%{opacity:1} 100%{transform:translateY(-14px);opacity:0} }
+
+  /* ── Control panel ── */
+  .panel { width:280px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:20px; padding:20px; backdrop-filter:blur(8px); }
+  .panel h2 { color:#fff; font-size:15px; margin-bottom:4px; }
+  .panel p { color:#94a3b8; font-size:10.5px; margin-bottom:14px; line-height:1.5; }
+  .btn { display:block; width:100%; padding:10px; margin-bottom:8px; border:none; border-radius:12px; font-weight:800; font-size:12px; cursor:pointer; transition:transform .1s, filter .15s; }
+  .btn:hover { filter:brightness(1.12); }
+  .btn:active { transform:scale(.97); }
+  .b-green { background:#10b981; color:#fff; }
+  .b-red { background:#ef4444; color:#fff; }
+  .b-blue { background:#3b82f6; color:#fff; }
+  .b-gray { background:#475569; color:#fff; }
+  .note { color:#64748b; font-size:9.5px; margin-top:10px; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <div class="p-header">📚 Krishi MCQ Pro <small>Practice · Q 3/15</small></div>
+  <div class="p-body">
+    <div class="q-card">
+      <div class="q-tag">Agronomy · बाली उत्पादन</div>
+      <div class="q-text">धानको बाला आएपछि पानी कुन अवस्थामा काट्नुपर्छ?</div>
+      <button class="opt" onclick="pick(this,false)">A) तुरुन्तै काट्नुपर्छ</button>
+      <button class="opt" onclick="pick(this,true)">B) परिपक्व हुँदै जाँदा क्रमशः काट्नुपर्छ</button>
+      <button class="opt" onclick="pick(this,false)">C) कहिल्यै नकाट्नुपर्छ</button>
+      <button class="opt" onclick="pick(this,false)">D) मात्र बीचमा काट्नुपर्छ</button>
+    </div>
+  </div>
+
+  <div class="buddy-dock" id="buddy">
+    <div class="bubble" id="bubble"></div>
+    <div class="avatar-wrap"><img src="buddy-front.png" alt="Buddy"><span class="zzz">💤</span></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>🧪 Buddy State Demo</h2>
+  <p>तपाईंको character — app corner मा कस्तो देखिन्छ? बटन थिचेर हेर्नुहोस्। (Quiz मा answer अनुसार auto-switch हुन्छ)</p>
+  <button class="btn b-green" onclick="set('happy','शाबास! 🎉 यस्तै गर्दै जानुहोस्!')">✅ Correct Answer</button>
+  <button class="btn b-red" onclick="set('sad','कसै कुरा नै होइन 💪 फेरि प्रयास!')">❌ Wrong Answer</button>
+  <button class="btn b-blue" onclick="set('think','हम्म… सोच्दै छु 🤔')">🤔 Thinking</button>
+  <button class="btn b-gray" onclick="set('idle')">👋 Idle</button>
+  <button class="btn b-gray" onclick="set('sleep','💤 …')">😴 Sleep (8s idle auto)</button>
+  <div class="note">Demo only — scratch folder मा छ, app code मा कुनै प्रभाव छैन। Real integration: AnimationOrchestrator events (correct/wrong/levelUp) ले state switch गर्नेछ।</div>
+</div>
+
+<script>
+  const buddy = document.getElementById('buddy');
+  const bubble = document.getElementById('bubble');
+  let idleTimer = null, bubbleTimer = null;
+
+  function set(state, msg) {
+    buddy.className = 'buddy-dock st-' + state;
+    clearTimeout(idleTimer);
+    if (msg) showBubble(msg);
+    if (state !== 'sleep') armIdle();
+  }
+  function showBubble(msg) {
+    bubble.textContent = msg;
+    bubble.classList.add('show');
+    clearTimeout(bubbleTimer);
+    bubbleTimer = setTimeout(() => bubble.classList.remove('show'), 2600);
+  }
+  function armIdle() {
+    idleTimer = setTimeout(() => {
+      buddy.className = 'buddy-dock st-sleep';
+      showBubble('💤 practice गर्दै हुनुहुन्छ?');
+    }, 8000);
+  }
+
+  function pick(btn, isRight) {
+    document.querySelectorAll('.opt').forEach(o => o.classList.remove('correct','wrong'));
+    btn.classList.add(isRight ? 'correct' : 'wrong');
+    set(isRight ? 'happy' : 'sad', isRight ? 'एकदम सही! 🌾' : 'अर्को पटक हेरौंला 💪');
+  }
+
+  armIdle();
+  setTimeout(() => showBubble('नमस्ते! आज practice गरौं? 🌱'), 700);
+</script>
+</body>
+</html>

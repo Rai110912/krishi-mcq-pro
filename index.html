@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=s3suo01" rel="stylesheet">
+    <link href="./index.css?v=dro9bzw" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -968,6 +968,42 @@
                             </div>
                         </div>
 
+                        <!-- Quiz Gameplay Helpers Card -->
+                        <div class="p-4 bg-slate-50 dark:bg-slate-950/40 border border-slate-150 dark:border-slate-850 rounded-2xl space-y-3.5">
+                            <h4 class="font-extrabold text-[11px] uppercase tracking-wider text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🎮 Quiz Helpers (Practice Screen)</h4>
+
+                            <!-- Keyboard Shortcuts -->
+                            <div class="space-y-1.5">
+                                <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Keyboard Shortcuts</label>
+                                <select id="cust-quiz-keyboard" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                    <option value="on" selected>On (Answer From the Keyboard)</option>
+                                    <option value="off">Off (Touch / Mouse Only)</option>
+                                </select>
+                                <p class="text-[9.5px] text-slate-500 dark:text-slate-400 leading-snug">A, B, C, D (or 1–4) picks that option, Enter moves to the next question. Nothing changes on a touch-only device.</p>
+                            </div>
+
+                            <!-- Question Map -->
+                            <div class="space-y-1.5">
+                                <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">Question Map (Navigator Grid)</label>
+                                <select id="cust-quiz-navigator" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                    <option value="on" selected>On (Show 🧭 Map Button in Quiz)</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <p class="text-[9.5px] text-slate-500 dark:text-slate-400 leading-snug">A numbered grid of the running session — correct, wrong, skipped and remaining. Tapping a finished number reopens it for read-only review; the quiz itself keeps its own order and its timer keeps running.</p>
+                            </div>
+
+                            <!-- 50:50 Helper -->
+                            <div class="space-y-1.5">
+                                <label class="font-bold text-slate-705 dark:text-slate-200 block text-[10.5px]">50:50 Helper (Remove Two Wrong Options)</label>
+                                <select id="cust-quiz-fifty" class="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold" onchange="previewAppearanceAndLang()">
+                                    <option value="practice" selected>Practice Only (Recommended)</option>
+                                    <option value="always">Practice + Exam Simulation</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <p class="text-[9.5px] text-slate-500 dark:text-slate-400 leading-snug">One use per question, and it never touches the answer that is right. “Practice Only” keeps Exam Simulation scores comparable.</p>
+                            </div>
+                        </div>
+
                         <!-- Live Preview Card -->
                         <div class="p-4 bg-slate-50 dark:bg-slate-950/40 border border-slate-150 dark:border-slate-850 rounded-2xl space-y-3">
                             <h4 class="font-extrabold text-[11px] uppercase tracking-wider text-slate-500 flex items-center gap-1.5">👁️ Live Customization Preview</h4>
@@ -1297,6 +1333,18 @@
                     <div id="q-explanation-container" class="hidden pt-4 border-t border-dashed border-slate-200 dark:border-slate-700">
                         <div id="q-explanation" class="text-xs p-3.5 rounded-xl border leading-relaxed bg-slate-50 border-slate-150 dark:bg-slate-900 dark:border-slate-750 text-slate-750 dark:text-slate-300"></div>
                     </div>
+                </div>
+
+                <!-- Quiz helper row: 50:50, Question Map, keyboard hint.
+                     Visibility is driven by the `hidden` ATTRIBUTE, not the .hidden
+                     class, because #page-mcq is a Tailwind `space-y-4` stack and that
+                     compiles to `> :not([hidden]) ~ :not([hidden])` — a class-hidden
+                     row would still be billed a 16px gap. index.css owns the
+                     display:flex plus the [hidden] override for the same reason. -->
+                <div id="quiz-assist-row" hidden>
+                    <button id="quiz-fifty-btn" type="button" hidden onclick="krishiQuizFiftyFifty()" class="px-2.5 py-1.5 bg-amber-500/10 text-amber-800 dark:text-amber-400 hover:bg-amber-500/20 rounded-lg text-[10px] font-bold transition cursor-pointer">➗ 50:50</button>
+                    <button id="quiz-map-btn" type="button" hidden onclick="krishiOpenQuestionMap()" class="px-2.5 py-1.5 bg-indigo-500/10 text-indigo-800 dark:text-indigo-300 hover:bg-indigo-500/20 rounded-lg text-[10px] font-bold transition cursor-pointer">🧭 Question Map</button>
+                    <span id="quiz-keyboard-hint" hidden class="text-[9px] font-bold text-slate-400 dark:text-slate-500">⌨️ A–D to answer · Enter for next</span>
                 </div>
 
                 <button id="submit-btn" onclick="submitMCQAnswer()" class="hidden w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl cursor-pointer shadow-sm transition-colors text-sm" style="display: none !important;">Submit Answer</button>
@@ -2572,7 +2620,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v175-s3suo01 (202608240411)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v176-dro9bzw (202608240524)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3725,6 +3773,54 @@
                 </div>
             </div>
         </div>
+        <!-- ==================== QUESTION MAP (QUIZ NAVIGATOR) ====================
+             Read-only companion to the running session: it reports what the quiz
+             engine has already recorded and never writes to it. The quiz keeps its
+             own linear order, its timer keeps running while this is open, and a
+             session whose feedback is held back to the end (Exam Simulation)
+             reports "answered" here instead of correct/wrong. -->
+        <div id="quiz-map-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in modal-bottom-sheet">
+            <div class="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border flex flex-col scale-in" style="border-color:var(--border); max-height: 82vh;">
+                <div class="w-12 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto my-2.5 lg:hidden"></div>
+
+                <!-- Header -->
+                <div class="p-4 border-b flex justify-between items-center sticky top-0 bg-white dark:bg-slate-800 z-10" style="border-color:var(--border);">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">🧭</span>
+                        <div>
+                            <h3 id="quiz-map-title" class="font-extrabold text-sm text-slate-900 dark:text-white">Question Map</h3>
+                            <p id="quiz-map-subtitle" class="text-[9px] text-slate-400">Session progress at a glance.</p>
+                        </div>
+                    </div>
+                    <button onclick="krishiCloseQuestionMap()" class="text-xl font-bold hover:text-rose-500 dark:text-slate-400 dark:hover:text-rose-400 cursor-pointer" aria-label="Close question map">✕</button>
+                </div>
+
+                <!-- Body A: the grid -->
+                <div id="quiz-map-grid-view" class="p-4 overflow-y-auto space-y-3">
+                    <div id="quiz-map-grid" class="grid gap-2"></div>
+                    <div class="flex flex-wrap gap-x-3 gap-y-1.5 pt-1 text-[9px] font-bold text-slate-500 dark:text-slate-400">
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-500/40 border border-emerald-500/60"></span>Correct</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-rose-500/40 border border-rose-500/60"></span>Wrong</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-500/40 border border-amber-500/60"></span>Skipped</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-indigo-500/40 border border-indigo-500/60"></span>Answered</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-slate-200 dark:bg-slate-700 border border-slate-300 dark:border-slate-600"></span>Not reached</span>
+                    </div>
+                    <p class="text-[9px] text-slate-400 dark:text-slate-500 leading-snug">Tap a finished number to reread it. The quiz stays exactly where it is and the timer keeps running.</p>
+                </div>
+
+                <!-- Body B: read-only review of one finished question (filled by JS) -->
+                <div id="quiz-map-review-view" class="hidden p-4 overflow-y-auto space-y-3"></div>
+
+                <!-- Footer -->
+                <div class="p-4 border-t bg-slate-50 dark:bg-slate-900 flex items-center justify-between gap-2" style="border-color:var(--border);">
+                    <span id="quiz-map-stats" class="text-[10px] font-bold text-slate-500 dark:text-slate-400"></span>
+                    <div class="flex gap-2">
+                        <button id="quiz-map-back-btn" hidden onclick="krishiQuestionMapBackToGrid()" class="border px-3 py-2 rounded-lg font-bold text-[11px] cursor-pointer transition" style="border-color:var(--border); color:var(--text);">← Map</button>
+                        <button onclick="krishiCloseQuestionMap()" class="px-4 py-2 rounded-lg font-bold text-[11px] cursor-pointer transition bg-emerald-600 hover:bg-emerald-700 text-white">Back to Quiz</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
     </div> <!-- End of Right Workspace Column -->
     </div> <!-- End of Outer Responsive Layout Container -->
@@ -3749,14 +3845,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=s3suo01" defer></script>
-    <script src="./js/elite_3d_engine.js?v=s3suo01" defer></script>
-    <script src="./js/canvas_charts.js?v=s3suo01" defer></script>
+    <script src="./js/elite_animations_controller.js?v=dro9bzw" defer></script>
+    <script src="./js/elite_3d_engine.js?v=dro9bzw" defer></script>
+    <script src="./js/canvas_charts.js?v=dro9bzw" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=s3suo01" defer></script>
-    <script src="./js/sqlite_db.js?v=s3suo01" defer></script>
-    <script src="./js/krishi_idb.js?v=s3suo01"></script>
-    <script src="./js/app.js?v=s3suo01" defer></script>
+    <script src="./js/pwa_helpers.js?v=dro9bzw" defer></script>
+    <script src="./js/sqlite_db.js?v=dro9bzw" defer></script>
+    <script src="./js/krishi_idb.js?v=dro9bzw"></script>
+    <script src="./js/app.js?v=dro9bzw" defer></script>
 
 
     <!--
@@ -3784,8 +3880,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=s3suo01" defer></script>
-    <script src="./js/voice_assistant.js?v=s3suo01" defer></script>
+<script src="./js/data_safety.js?v=dro9bzw" defer></script>
+    <script src="./js/voice_assistant.js?v=dro9bzw" defer></script>
 </body>
 </html>
 

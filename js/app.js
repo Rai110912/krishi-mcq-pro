@@ -10109,6 +10109,13 @@ function openEditImportModal(idx) {
         accentColorCustom: '#059669',
         bgSoftness: 'default',
         languageMode: 'english',
+        /* Quiz helpers (Appearance & Language → Quiz Helpers). They live in this
+           same key on purpose: it is already in the wipe list and already in the
+           cloud-sync payload, so the three toggles inherit both with no new
+           storage key of their own. */
+        quizKeyboard: 'on',
+        quizNavigator: 'on',
+        quizFiftyFifty: 'practice',
         customLabels: {
             home: "Home",
             practice: "Practice",
@@ -10587,6 +10594,13 @@ document.querySelectorAll('button').forEach(btn => {
                 el.textContent = labels.examSimulation;
             }
         });
+
+        /* Quiz helper toggles live in this same key, so a save has to reach the
+           quiz screen too. Guarded because the module is appended at the end of
+           this file and may not have run yet on a very early call. */
+        if (window.KrishiQuizAssist && typeof window.KrishiQuizAssist.applySettings === 'function') {
+            try { window.KrishiQuizAssist.applySettings(); } catch(e) {}
+        }
     }
 
     function previewAppearanceAndLang() {
@@ -10941,6 +10955,11 @@ document.querySelectorAll('button').forEach(btn => {
 
         document.getElementById('cust-bg-softness').value = settings.bgSoftness || 'default';
         document.getElementById('cust-language-mode').value = settings.languageMode || 'english';
+
+        // Quiz helpers — setSelectSafe so an unknown stored value cannot blank them.
+        setSelectSafe('cust-quiz-keyboard', settings.quizKeyboard || 'on', 'on');
+        setSelectSafe('cust-quiz-navigator', settings.quizNavigator || 'on', 'on');
+        setSelectSafe('cust-quiz-fifty', settings.quizFiftyFifty || 'practice', 'practice');
         
         let cl = settings.customLabels || defaultCustomSettings.customLabels;
         for (let key in defaultCustomSettings.customLabels) {
@@ -10971,6 +10990,9 @@ document.querySelectorAll('button').forEach(btn => {
         let cardCorners = readCustSelect('cust-card-corners', 'balanced');
         let cardDepth = readCustSelect('cust-card-depth', 'balanced');
         let layoutDensity = readCustSelect('cust-layout-density', 'comfortable');
+        let quizKeyboard = readCustSelect('cust-quiz-keyboard', 'on');
+        let quizNavigator = readCustSelect('cust-quiz-navigator', 'on');
+        let quizFiftyFifty = readCustSelect('cust-quiz-fifty', 'practice');
 
         let customLabels = {};
         for (let key in defaultCustomSettings.customLabels) {
@@ -10992,6 +11014,9 @@ document.querySelectorAll('button').forEach(btn => {
             cardDepth,
             layoutDensity,
             languageMode,
+            quizKeyboard,
+            quizNavigator,
+            quizFiftyFifty,
             customLabels
         };
 
@@ -18131,5 +18156,519 @@ window.initNepalGlobe = function() {
             }
         }
     };
+
+})();
+
+/* ==================== QUIZ HELPERS: KEYBOARD · QUESTION MAP · 50:50 ==========
+   Three additive helpers for the practice screen, each switched on or off from
+   Home → Customize → Appearance & Language → "Quiz Helpers".
+
+   This module sits outside the quiz engine on purpose. It does not call, wrap or
+   patch renderMCQ / submitMCQAnswer / nextMCQQuestion / skipQuestion, and it
+   writes nothing to `state`, to localData or to storage. Everything it needs
+   already existed:
+
+     · `krishi-question-rendered` (dispatched at the end of renderMCQ) — a new
+       question is on screen, so reset the 50:50 and refresh the row.
+     · `krishi-answer-checked` (dispatched by submitMCQAnswer) — an answer was
+       taken, so the 50:50 is spent for this question.
+     · a keyed answer is delivered as `optionButton.click()`, i.e. the exact
+       handler a tap runs. One code path, so scoring, XP, hearts, SM-2, autosave
+       and the confidence tracker cannot drift between mouse and keyboard.
+
+   The Question Map is a reader: it renders state.questions / state.sessionResults
+   and can neither reorder the session nor reopen a question for answering. That
+   is a deliberate limit — the engine appends one result per question in index
+   order (submitMCQAnswer, skipQuestion and reviewLaterQuestion all push exactly
+   one), and out-of-order answering would corrupt that alignment.
+*/
+(function() {
+    'use strict';
+
+    const FIFTY_STEPS = ['off', 'practice', 'always'];
+    const STATUS_TEXT = {
+        correct: 'correct', wrong: 'wrong', skipped: 'skipped',
+        answered: 'answered', current: 'current question', upcoming: 'not reached yet'
+    };
+
+    let cfg = { keyboard: 'on', navigator: 'on', fifty: 'practice' };
+    let fiftyUsedIndex = -1;   // the state.currentIndex that already spent its 50:50
+    let mapOpen = false;
+    let reviewIndex = -1;
+
+    function S() { return (typeof state === 'object' && state) ? state : null; }
+
+    function toast(msg) {
+        if (typeof showToast === 'function') { try { showToast(msg); } catch(e) {} }
+    }
+
+    function sound(name) {
+        if (typeof playSound === 'function') { try { playSound(name); } catch(e) {} }
+    }
+    // The saved toggles, normalised. Read fresh on every question render and on
+    // every save, so a change in the customizer reaches a running quiz at once.
+    function readCfg() {
+        let s = {};
+        try {
+            if (typeof getCustomAppearanceAndLangSettings === 'function') {
+                s = getCustomAppearanceAndLangSettings() || {};
+            }
+        } catch(e) { s = {}; }
+        cfg.keyboard  = (s.quizKeyboard  === 'off') ? 'off' : 'on';
+        cfg.navigator = (s.quizNavigator === 'off') ? 'off' : 'on';
+        cfg.fifty = (FIFTY_STEPS.indexOf(s.quizFiftyFifty) !== -1) ? s.quizFiftyFifty : 'practice';
+        return cfg;
+    }
+
+    // Physical keyboard only: on a touch device the shortcuts and their hint stay
+    // invisible, so nothing about the mobile screen changes.
+    function hasKeyboard() {
+        try { return window.matchMedia('(hover: hover) and (pointer: fine)').matches; }
+        catch(e) { return false; }
+    }
+
+    function quizVisible() {
+        let page = document.getElementById('page-mcq');
+        if (!page || page.classList.contains('hidden')) return false;
+        return page.offsetParent !== null;
+    }
+
+    function liveSession() {
+        let st = S();
+        return !!(st && Array.isArray(st.questions) && (st.totalQuestions || st.questions.length) > 0);
+    }
+
+    // A session whose feedback is held back to the end (Exam Simulation) must not
+    // have its answers revealed early by the map — same rule submitMCQAnswer uses.
+    function revealAllowed() {
+        let st = S();
+        if (!st) return false;
+        return !(st.activeConfig && st.activeConfig.feedback === 'end');
+    }
+
+    function fiftyAllowed() {
+        let st = S();
+        if (!st || cfg.fifty === 'off') return false;
+        return cfg.fifty === 'always' ? true : !st.isMock;
+    }
+    function setFiftyEnabled(on) {
+        let b = document.getElementById('quiz-fifty-btn');
+        if (!b) return;
+        b.disabled = !on;
+        b.classList.toggle('quiz-helper-spent', !on);
+    }
+
+    /* Row visibility. Each control carries the `hidden` attribute rather than the
+       .hidden class, because #page-mcq is a `space-y-4` stack: Tailwind's
+       `> :not([hidden]) ~ :not([hidden])` would still bill a class-hidden row a
+       16px gap, which is exactly the phantom gap fixed elsewhere in this screen. */
+    function updateAssistRow() {
+        let row = document.getElementById('quiz-assist-row');
+        if (!row) return;
+        readCfg();
+        let st = S();
+        let live = liveSession();
+
+        let fiftyOn = live && fiftyAllowed();
+        let mapOn   = live && cfg.navigator === 'on';
+        // The hint teaches once per session, on the first question only.
+        let hintOn  = live && cfg.keyboard === 'on' && hasKeyboard() && st && st.currentIndex === 0;
+
+        let fBtn = document.getElementById('quiz-fifty-btn');
+        if (fBtn) fBtn.hidden = !fiftyOn;
+        let mBtn = document.getElementById('quiz-map-btn');
+        if (mBtn) mBtn.hidden = !mapOn;
+        let hint = document.getElementById('quiz-keyboard-hint');
+        if (hint) hint.hidden = !hintOn;
+
+        row.hidden = !(fiftyOn || mapOn || hintOn);
+    }
+
+    function optionButtons() {
+        return Array.prototype.slice.call(
+            document.querySelectorAll('#page-mcq #q-options .option-btn')
+        );
+    }
+
+    function currentQuestion() {
+        let st = S();
+        if (!st || !Array.isArray(st.questions)) return null;
+        return st.questions[st.currentIndex] || null;
+    }
+    /* ── 50:50 ──────────────────────────────────────────────────────────────
+       Dims and un-clicks two wrong options on the question that is on screen.
+       It only ever adds a class to buttons the engine created; the answer index
+       (q.ans) is never a candidate, nothing is removed from the DOM, and no
+       state is touched — so score, XP, hearts and SM-2 behave as if the user had
+       simply not looked at those two options. */
+    function fiftyFifty() {
+        let st = S();
+        if (!st || !quizVisible()) return;
+        readCfg();
+        if (cfg.fifty === 'off') { toast('➗ 50:50 is switched off in Appearance & Language.'); return; }
+        if (!fiftyAllowed()) { toast('➗ 50:50 is off for Exam Simulation. Change it in Appearance & Language.'); return; }
+        if (st.answered) { toast('➗ This question is already answered.'); return; }
+        if (fiftyUsedIndex === st.currentIndex) { toast('➗ 50:50 is already used on this question.'); return; }
+
+        let q = currentQuestion();
+        if (!q || typeof q.ans !== 'number') return;
+
+        let wrong = optionButtons().filter(function(b) {
+            return parseInt(b.dataset.originalIndex, 10) !== q.ans
+                && !b.classList.contains('option-eliminated')
+                && !b.classList.contains('disabled');
+        });
+        if (wrong.length < 2) { toast('➗ This question has too few options for 50:50.'); return; }
+
+        // Always leave at least one wrong option standing next to the right one.
+        let removeCount = Math.min(2, wrong.length - 1);
+        for (let i = wrong.length - 1; i > 0; i--) {
+            let j = Math.floor(Math.random() * (i + 1));
+            let t = wrong[i]; wrong[i] = wrong[j]; wrong[j] = t;
+        }
+        for (let k = 0; k < removeCount; k++) {
+            wrong[k].classList.add('option-eliminated');
+            wrong[k].setAttribute('aria-disabled', 'true');
+        }
+
+        fiftyUsedIndex = st.currentIndex;
+        setFiftyEnabled(false);
+        sound('click');
+        toast(removeCount === 2 ? '➗ Two wrong options removed.' : '➗ One wrong option removed.');
+    }
+    // Any other full-screen overlay on top of the quiz (restore prompt, pairing
+    // PIN, sync sheets …) takes the keyboard back. Checked last, after the key has
+    // already been recognised, so a normal keystroke costs nothing.
+    // A class/attribute test alone is not enough: some of this app's overlays are
+    // built as .fixed.inset-0 nodes that fade themselves out with opacity, so
+    // opacity, visibility and box size are all part of "is it really there".
+    function overlayBlocking() {
+        let nodes = document.querySelectorAll('.fixed.inset-0');
+        for (let i = 0; i < nodes.length; i++) {
+            let n = nodes[i];
+            if (n.classList.contains('hidden') || n.hidden) continue;
+            if (typeof n.checkVisibility === 'function') {
+                let vis = false;
+                try { vis = n.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }); } catch(e) { vis = true; }
+                if (!vis) continue;
+            }
+            let cs;
+            try { cs = window.getComputedStyle(n); } catch(e) { continue; }
+            if (!cs || cs.display === 'none' || cs.visibility !== 'visible') continue;
+            if (parseFloat(cs.opacity) < 0.05 || cs.pointerEvents === 'none') continue;
+            if (!n.getClientRects().length) continue;
+            return true;
+        }
+        return false;
+    }
+
+    /* ── Keyboard: A–D (or 1–4) answers, Enter advances ─────────────────────
+       The letter a key stands for is the letter renderMCQ printed on that button
+       (`String.fromCharCode(65+i)`), because both count DOM order — so shuffled
+       options still match what the user reads. Enter clicks the button that is
+       actually on screen: Next, or Finish on the last question. There is no
+       Enter-to-submit branch because selecting an option already auto-submits. */
+    function onKeyDown(e) {
+        if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+
+        let t = e.target;
+        if (t) {
+            let tag = (t.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) return;
+        }
+
+        let key = e.key || '';
+        if (mapOpen) {
+            if (key === 'Escape') { e.preventDefault(); closeMap(); }
+            return;                      // never answer through the open overlay
+        }
+        if (!quizVisible()) return;
+        readCfg();
+        if (cfg.keyboard !== 'on') return;
+
+        let st = S();
+        if (!st || st.isFinishing || st.isTransitioning) return;
+
+        if (key === 'Enter') {
+            let next = document.getElementById('next-btn');
+            let finish = document.getElementById('finish-btn');
+            let target = (next && !next.classList.contains('hidden')) ? next
+                       : ((finish && !finish.classList.contains('hidden')) ? finish : null);
+            if (!target || overlayBlocking()) return;
+            e.preventDefault();
+            target.click();
+            return;
+        }
+
+        let idx = -1;
+        if (key.length === 1) {
+            let up = key.toUpperCase();
+            if (up >= 'A' && up <= 'D') idx = up.charCodeAt(0) - 65;
+            else if (key >= '1' && key <= '4') idx = parseInt(key, 10) - 1;
+        }
+        if (idx < 0 || st.answered) return;
+
+        let btns = optionButtons();
+        if (idx >= btns.length) return;
+        let btn = btns[idx];
+        if (!btn || btn.classList.contains('disabled') || btn.classList.contains('option-eliminated')) return;
+        if (overlayBlocking()) return;
+
+        e.preventDefault();
+        btn.classList.add('option-keyed');
+        setTimeout(function() { btn.classList.remove('option-keyed'); }, 240);
+        btn.click();                     // same handler a tap runs
+    }
+    /* ── Question Map: status model ─────────────────────────────────────────
+       sessionResults is index-aligned with questions (each of submitMCQAnswer,
+       skipQuestion and reviewLaterQuestion pushes exactly one entry, in order).
+       The id is still compared, and a mismatch falls back to an id lookup, so a
+       future engine change degrades into "no badge" instead of a wrong badge. */
+    function resultFor(i) {
+        let st = S();
+        if (!st || !Array.isArray(st.sessionResults)) return null;
+        let q = (Array.isArray(st.questions) ? st.questions[i] : null);
+        let r = st.sessionResults[i];
+        if (r && (!q || r.id === undefined || q.id === undefined || r.id === q.id)) return r;
+        if (q && q.id !== undefined) {
+            for (let k = 0; k < st.sessionResults.length; k++) {
+                if (st.sessionResults[k] && st.sessionResults[k].id === q.id) return st.sessionResults[k];
+            }
+        }
+        return null;
+    }
+
+    function statusOf(i) {
+        let st = S();
+        if (!st) return 'upcoming';
+        let r = resultFor(i);
+        if (r) {
+            if (r.skipped || r.timeout) return 'skipped';
+            if (!revealAllowed()) return 'answered';
+            return r.correct ? 'correct' : 'wrong';
+        }
+        if (i === st.currentIndex) return 'current';
+        return 'upcoming';
+    }
+
+    function renderGrid() {
+        let grid = document.getElementById('quiz-map-grid');
+        let st = S();
+        if (!grid || !st || !Array.isArray(st.questions)) return;
+
+        let total = st.totalQuestions || st.questions.length;
+        let done = 0, correct = 0;
+        grid.textContent = '';
+
+        for (let i = 0; i < total; i++) {
+            let status = statusOf(i);
+            let finished = (status !== 'upcoming' && status !== 'current');
+            if (finished) done++;
+            if (status === 'correct') correct++;
+
+            let chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'quiz-map-chip quiz-map-' + status + (i === st.currentIndex ? ' quiz-map-now' : '');
+            chip.textContent = String(i + 1);
+            chip.setAttribute('aria-label', 'Question ' + (i + 1) + ': ' + (STATUS_TEXT[status] || status));
+            if (finished) {
+                chip.dataset.qIndex = String(i);
+                chip.onclick = function() { renderReview(parseInt(this.dataset.qIndex, 10)); };
+            } else {
+                chip.disabled = true;
+            }
+            grid.appendChild(chip);
+        }
+
+        let stats = document.getElementById('quiz-map-stats');
+        if (stats) {
+            let parts = [done + ' of ' + total + ' done'];
+            if (revealAllowed()) parts.push(correct + ' correct');
+            parts.push(Math.max(0, total - done) + ' left');
+            stats.textContent = parts.join(' · ');
+        }
+    }
+    /* ── Question Map: read-only review of one finished question ────────────
+       Built with createElement/textContent only — question and option text is
+       never passed through innerHTML. Answers are marked in words, not letters,
+       because renderMCQ shuffles the display order and that order is not stored,
+       so a letter from this list would not match what the user saw. */
+    function renderReview(i) {
+        let st = S();
+        if (!st || !Array.isArray(st.questions)) return;
+        let q = st.questions[i];
+        if (!q) return;
+        let r = resultFor(i);
+        let host = document.getElementById('quiz-map-review-view');
+        let gridView = document.getElementById('quiz-map-grid-view');
+        if (!host || !gridView) return;
+
+        let reveal = revealAllowed();
+        let status = statusOf(i);
+        reviewIndex = i;
+        host.textContent = '';
+
+        let qCard = document.createElement('div');
+        qCard.className = 'quiz-review-q';
+        qCard.textContent = q.q || '';
+        host.appendChild(qCard);
+
+        let list = document.createElement('div');
+        list.className = 'quiz-review-list';
+        let opts = Array.isArray(q.opts) ? q.opts : [];
+        let userAns = r ? r.userAns : -1;
+
+        for (let k = 0; k < opts.length; k++) {
+            let isRight = (k === q.ans);
+            let isMine  = (k === userAns);
+            let row = document.createElement('div');
+            row.className = 'quiz-review-opt'
+                + ((reveal && isRight) ? ' quiz-review-right' : '')
+                + (isMine ? (reveal ? (isRight ? ' quiz-review-right' : ' quiz-review-mine-wrong') : ' quiz-review-mine') : '');
+
+            let text = document.createElement('span');
+            text.className = 'quiz-review-opt-text';
+            text.textContent = opts[k];
+            row.appendChild(text);
+
+            let tag = '';
+            if (reveal && isRight && isMine) tag = '✅ Correct · your answer';
+            else if (reveal && isRight) tag = '✅ Correct answer';
+            else if (isMine) tag = reveal ? '❌ Your answer' : '🔵 Your answer';
+            if (tag) {
+                let badge = document.createElement('span');
+                badge.className = 'quiz-review-tag';
+                badge.textContent = tag;
+                row.appendChild(badge);
+            }
+            list.appendChild(row);
+        }
+        host.appendChild(list);
+
+        if (r && r.skipped) {
+            let note = document.createElement('p');
+            note.className = 'quiz-review-note';
+            note.textContent = r.later ? 'You marked this one for review later.' : 'You skipped this question.';
+            host.appendChild(note);
+        }
+        if (reveal && q.expl) {
+            let ex = document.createElement('div');
+            ex.className = 'quiz-review-expl';
+            let h = document.createElement('strong');
+            h.textContent = '💡 Explanation';
+            ex.appendChild(h);
+            let p = document.createElement('p');
+            p.textContent = q.expl;
+            ex.appendChild(p);
+            host.appendChild(ex);
+        } else if (!reveal) {
+            let note = document.createElement('p');
+            note.className = 'quiz-review-note';
+            note.textContent = 'Exam Simulation: answers and explanations stay hidden until you finish.';
+            host.appendChild(note);
+        }
+
+        gridView.classList.add('hidden');
+        host.classList.remove('hidden');
+        let back = document.getElementById('quiz-map-back-btn');
+        if (back) back.hidden = false;
+        let title = document.getElementById('quiz-map-title');
+        if (title) title.textContent = 'Question ' + (i + 1);
+        let sub = document.getElementById('quiz-map-subtitle');
+        if (sub) sub.textContent = 'Reading only — ' + (STATUS_TEXT[status] || status) + '. Your quiz has not moved.';
+        host.scrollTop = 0;
+    }
+
+    function backToGrid() {
+        reviewIndex = -1;
+        let host = document.getElementById('quiz-map-review-view');
+        let gridView = document.getElementById('quiz-map-grid-view');
+        if (host) host.classList.add('hidden');
+        if (gridView) gridView.classList.remove('hidden');
+        let back = document.getElementById('quiz-map-back-btn');
+        if (back) back.hidden = true;
+        let title = document.getElementById('quiz-map-title');
+        if (title) title.textContent = 'Question Map';
+        let sub = document.getElementById('quiz-map-subtitle');
+        if (sub) sub.textContent = 'Session progress at a glance.';
+        renderGrid();
+    }
+
+    function openMap() {
+        readCfg();
+        if (cfg.navigator === 'off') { toast('🧭 The Question Map is switched off in Appearance & Language.'); return; }
+        if (!liveSession()) { toast('🧭 The map opens during a quiz.'); return; }
+        let modal = document.getElementById('quiz-map-modal');
+        if (!modal) return;
+        backToGrid();                    // always open on the grid, never on a stale review
+        modal.classList.remove('hidden');
+        mapOpen = true;
+        sound('click');
+    }
+
+    function closeMap() {
+        let modal = document.getElementById('quiz-map-modal');
+        if (modal) modal.classList.add('hidden');
+        mapOpen = false;
+        reviewIndex = -1;
+    }
+
+    /* ── Wiring ─────────────────────────────────────────────────────────────── */
+
+    // A fresh question: the 50:50 is available again and the row may need to change
+    // (the keyboard hint only shows on question 1).
+    function onQuestionRendered() {
+        let st = S();
+        // A re-render of the same index wipes the dimmed options, so give the
+        // 50:50 back rather than leaving the user with a spent button and no effect.
+        if (st && fiftyUsedIndex === st.currentIndex
+            && !document.querySelector('#page-mcq #q-options .option-eliminated')) {
+            fiftyUsedIndex = -1;
+        }
+        readCfg();
+        setFiftyEnabled(!st || fiftyUsedIndex !== st.currentIndex);
+        updateAssistRow();
+        if (mapOpen && reviewIndex < 0) renderGrid();
+    }
+
+    function onAnswerChecked() {
+        setFiftyEnabled(false);          // the question is settled
+        if (mapOpen && reviewIndex < 0) renderGrid();
+    }
+
+    window.addEventListener('krishi-question-rendered', onQuestionRendered);
+    window.addEventListener('krishi-answer-checked', onAnswerChecked);
+    document.addEventListener('keydown', onKeyDown);
+
+    function bindOnce() {
+        let modal = document.getElementById('quiz-map-modal');
+        if (modal && !modal.dataset.qaBound) {
+            modal.dataset.qaBound = '1';
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) closeMap();   // backdrop only
+            });
+        }
+        updateAssistRow();
+    }
+    // app.js may load before or after DOMContentLoaded, so cover both.
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bindOnce);
+    } else {
+        bindOnce();
+    }
+
+    // Called by applyCustomAppearanceAndLanguageSettings() so a save in the
+    // customizer reaches a quiz that is already on screen.
+    function applySettings() {
+        readCfg();
+        if (cfg.navigator === 'off' && mapOpen) closeMap();
+        updateAssistRow();
+    }
+
+    window.KrishiQuizAssist = { applySettings: applySettings, refresh: updateAssistRow };
+    window.krishiQuizFiftyFifty = fiftyFifty;
+    window.krishiOpenQuestionMap = openMap;
+    window.krishiCloseQuestionMap = closeMap;
+    window.krishiQuestionMapBackToGrid = backToGrid;
 
 })();

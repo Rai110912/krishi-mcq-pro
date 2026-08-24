@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=nyf6vnz" rel="stylesheet">
+    <link href="./index.css?v=493b15m" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2048,6 +2048,20 @@
     <button type="button" onclick="document.getElementById('krishi-import-input').click()" class="flex-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">⬆️ Restore</button>
     <input type="file" id="krishi-import-input" accept=".json,application/json" class="hidden" onchange="if(window.krishiImportBackup) krishiImportBackup(this)" />
 </div>
+<div id="krishi-ds-status" class="text-[9px] text-center text-slate-400 dark:text-slate-500"></div>
+<div class="flex gap-2">
+    <button type="button" id="krishi-snapshot-manual" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">🛟 Create Restore Point</button>
+    <button type="button" id="krishi-restore-open" class="flex-1 bg-indigo-500 hover:bg-indigo-600 text-white py-2 rounded-xl font-bold text-[10px] cursor-pointer transition active:scale-95">🕐 Time Machine</button>
+</div>
+<div id="krishi-restore-modal" class="hidden fixed inset-0 z-[20000] flex items-center justify-center bg-black/60 p-4">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl border shadow-2xl w-full max-w-sm p-4 space-y-3" style="border-color:var(--border)">
+        <div class="flex items-center justify-between">
+            <h3 class="text-xs font-black uppercase text-slate-500">🕐 Time Machine — Restore Points</h3>
+            <button type="button" id="krishi-restore-close" class="text-slate-400 hover:text-rose-500 font-bold cursor-pointer text-lg leading-none">✕</button>
+        </div>
+        <div id="krishi-restore-list" class="max-h-80 overflow-y-auto"></div>
+    </div>
+</div>
                     </div>
                     <div id="profile-sync-inactive-hint" class="hidden p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100/40 text-[9px] font-bold text-amber-700 dark:text-amber-400 text-center">
                         Auto-Sync अझै सक्रिय छैन — Settings ▸ Cloud Sync बाट पेयर गर्नुहोस्।
@@ -2554,7 +2568,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v164-nyf6vnz (202608231843)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v165-493b15m (202608240153)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3731,14 +3745,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=nyf6vnz" defer></script>
-    <script src="./js/elite_3d_engine.js?v=nyf6vnz" defer></script>
-    <script src="./js/canvas_charts.js?v=nyf6vnz" defer></script>
+    <script src="./js/elite_animations_controller.js?v=493b15m" defer></script>
+    <script src="./js/elite_3d_engine.js?v=493b15m" defer></script>
+    <script src="./js/canvas_charts.js?v=493b15m" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=nyf6vnz" defer></script>
-    <script src="./js/sqlite_db.js?v=nyf6vnz" defer></script>
-    <script src="./js/krishi_idb.js?v=nyf6vnz"></script>
-    <script src="./js/app.js?v=nyf6vnz" defer></script>
+    <script src="./js/pwa_helpers.js?v=493b15m" defer></script>
+    <script src="./js/sqlite_db.js?v=493b15m" defer></script>
+    <script src="./js/krishi_idb.js?v=493b15m"></script>
+    <script src="./js/app.js?v=493b15m" defer></script>
 
 
     <!--
@@ -3766,7 +3780,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-    <script src="./js/voice_assistant.js?v=nyf6vnz" defer></script>
+<script src="./js/data_safety.js?v=493b15m" defer></script>
+    <script src="./js/voice_assistant.js?v=493b15m" defer></script>
 </body>
 </html>
 

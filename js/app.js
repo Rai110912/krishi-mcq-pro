@@ -1520,6 +1520,21 @@ function loadData(){
     window.addEventListener('online', updateOfflineQueueBadge);
     window.addEventListener('offline', updateOfflineQueueBadge);
 
+    // Data Safety Pack bridge — lets js/data_safety.js reuse core functions
+    // without widening the closure beyond these three explicit doors.
+    if (typeof scheduleCloudSync === 'function' && typeof applyAllAppData === 'function') {
+        window.__krishiDataSafetyHooks = {
+            collect: () => collectAllAppData(),
+            apply: (d) => applyAllAppData(d),
+            pushPending: () => {
+                try {
+                    KrishiStorage.setItem('krishi_sync_pending', 'true');
+                    scheduleCloudSync('Snapshot restored');
+                } catch (e) {}
+            }
+        };
+    }
+
     function toggleSelectiveSyncSetting(type) {
         if (type === 'bookmarks') {
             syncSelectiveBookmarks = !syncSelectiveBookmarks;
@@ -3487,11 +3502,12 @@ function loadData(){
                             KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
                         }
 
-                        KrishiStorage.removeItem('krishi_sync_pending');
-                        KrishiStorage.setItem('krishi_sync_pending_count', '0');
-                        setSyncStatus('Synced');
-                        updateOfflineQueueBadge();
-                        scheduleMidnightCloudVault();
+KrishiStorage.removeItem('krishi_sync_pending');
+KrishiStorage.setItem('krishi_sync_pending_count', '0');
+setSyncStatus('Synced');
+updateOfflineQueueBadge();
+try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
+scheduleMidnightCloudVault();
                         if (typeof updateSyncUI === 'function') updateSyncUI();
 
                         // Single batched RAF render — replaces the previous multi-render storm.
@@ -3887,19 +3903,21 @@ function loadData(){
                                 // payload happens to omit (a disabled sync toggle, a newer
                                 // schema key) gets deleted.
                                 await docRef.set(localDataPayload, { merge: true });
-                                KrishiStorage.setItem('krishi_last_updated_at', now);
-                                KrishiStorage.removeItem('krishi_sync_pending');
-                                KrishiStorage.setItem('krishi_sync_pending_count', '0');
-                                setSyncStatus('Synced');
-                                updateOfflineQueueBadge();
+KrishiStorage.setItem('krishi_last_updated_at', now);
+KrishiStorage.removeItem('krishi_sync_pending');
+KrishiStorage.setItem('krishi_sync_pending_count', '0');
+setSyncStatus('Synced');
+updateOfflineQueueBadge();
+try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
                                 if (!silent) showToast('✅ Cloud overwritten with Local version!');
                             } else if (strategy === 'cloud') {
                                 applyAllAppData(cloudData);
-                                KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
-                                KrishiStorage.removeItem('krishi_sync_pending');
-                                KrishiStorage.setItem('krishi_sync_pending_count', '0');
-                                setSyncStatus('Synced');
-                                updateOfflineQueueBadge();
+KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
+KrishiStorage.removeItem('krishi_sync_pending');
+KrishiStorage.setItem('krishi_sync_pending_count', '0');
+setSyncStatus('Synced');
+updateOfflineQueueBadge();
+try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
                                 if (!silent) showToast('✅ Local overwritten with Cloud version!');
                             }
                         } catch(err) {
@@ -15594,11 +15612,12 @@ ${text}`;
                     logSyncActivity('Cloud sync verified: Local data is already up to date.');
                 }
 
-                KrishiStorage.removeItem('krishi_sync_pending');
-                KrishiStorage.setItem('krishi_sync_pending_count', '0');
-                setSyncStatus('Synced');
-                updateOfflineQueueBadge();
-                if (typeof updateSyncUI === 'function') updateSyncUI();
+KrishiStorage.removeItem('krishi_sync_pending');
+KrishiStorage.setItem('krishi_sync_pending_count', '0');
+setSyncStatus('Synced');
+updateOfflineQueueBadge();
+try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
+if (typeof updateSyncUI === 'function') updateSyncUI();
 
                 // Delegate all page refreshes to the dirty-flag + RAF dispatcher.
                 // applyAllAppData() above has already set all _krishiDirty flags.
@@ -15645,11 +15664,12 @@ ${text}`;
                 // this write must not be silently discarded.
                 await docRef.set(localDataPayload, { merge: true });
                 cachedCloudUid = uid;
-                logSyncActivity('Initial Full Sync completed. All local data backed up to cloud.');
-                KrishiStorage.removeItem('krishi_sync_pending');
-                KrishiStorage.setItem('krishi_sync_pending_count', '0');
-                setSyncStatus('Synced');
-                updateOfflineQueueBadge();
+logSyncActivity('Initial Full Sync completed. All local data backed up to cloud.');
+KrishiStorage.removeItem('krishi_sync_pending');
+KrishiStorage.setItem('krishi_sync_pending_count', '0');
+setSyncStatus('Synced');
+updateOfflineQueueBadge();
+try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
             }
         } catch (err) {
             console.error('[Cloud Sync] Sync execution error:', err);

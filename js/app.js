@@ -1949,13 +1949,18 @@ function loadData(){
         const timeTxt = document.getElementById('sync-time-txt');
 
         // Backup size meter: makes the invisible 900 KB ceiling visible before
-        // it ever blocks a sync. Cheap enough — runs only on sync UI events.
+        // it ever blocks a sync. Throttled to once per 30s — updateSyncUI can
+        // fire in bursts (QR retry loop), and collect+stringify is not cheap.
         try {
-            const meterEl = document.getElementById('krishi-backup-meter');
-            if (meterEl) {
-                const probeKB = Math.round(JSON.stringify(collectAllAppData()).length / 1024);
-                meterEl.textContent = '💾 Backup size: ~' + probeKB + ' KB / 900 KB limit';
-                meterEl.style.color = probeKB > 750 ? '#ef4444' : (probeKB > 550 ? '#d97706' : '');
+            const nowMs = Date.now();
+            if (!window.__krishiMeterAt || nowMs - window.__krishiMeterAt > 30000) {
+                window.__krishiMeterAt = nowMs;
+                const meterEl = document.getElementById('krishi-backup-meter');
+                if (meterEl) {
+                    const probeKB = Math.round(JSON.stringify(collectAllAppData()).length / 1024);
+                    meterEl.textContent = '💾 Backup size: ~' + probeKB + ' KB / 900 KB limit';
+                    meterEl.style.color = probeKB > 750 ? '#ef4444' : (probeKB > 550 ? '#d97706' : '');
+                }
             }
         } catch (e) {}
 
@@ -1975,12 +1980,19 @@ function loadData(){
                 if (credCard) credCard.classList.add('hidden');
             }
 
-            // Guard: If QRCode library is not loaded yet, retry in 300ms
+            // Guard: If QRCode library is not loaded yet, retry — but capped,
+            // otherwise a permanently missing lib means a 300ms self-repaint loop.
             if (typeof QRCode === 'undefined') {
-                console.warn('[QR Generator] QRCode library not loaded yet. Retrying...');
-                setTimeout(updateSyncUI, 300);
+                window.__krishiQrRetries = (window.__krishiQrRetries || 0) + 1;
+                if (window.__krishiQrRetries <= 5) {
+                    console.warn('[QR Generator] QRCode library not loaded yet. Retrying...');
+                    setTimeout(updateSyncUI, 300);
+                } else {
+                    console.warn('[QR Generator] Giving up after 5 retries; QR disabled this session.');
+                }
                 return;
             }
+            window.__krishiQrRetries = 0;
 
             // Generate and update QR code dynamically client-side (offline safe) - deferred to let layout pass complete
             setTimeout(() => {

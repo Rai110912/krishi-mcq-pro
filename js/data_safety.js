@@ -37,18 +37,22 @@
 
     function signatureOf(p) {
         // Cheap change detector so identical states never double-snapshot.
+        // NOTE: updatedAt is deliberately excluded — collectAllAppData() stamps
+        // it with a fresh Date.now() on every call, which would defeat matching.
         try {
-            return [p.updatedAt,
-                (p.bookmarked || []).length,
+            return [(p.bookmarked || []).length,
                 (p.wrong || []).length,
                 Array.isArray(p.customQuestions) ? p.customQuestions.length : 0,
                 JSON.stringify(p.streak || {}).length,
-                JSON.stringify(p.sm2 || {}).length].join('|');
+                JSON.stringify(p.sm2 || {}).length,
+                JSON.stringify(p.stats || {}).length].join('|');
         } catch (e) { return String(Date.now()); }
     }
 
     async function pruneSnapshots(colRef) {
-        const snap = await colRef.limit(KEEP_SNAPSHOTS + 30).get();
+        // Newest-first ordering is REQUIRED: default doc-ID order is ascending,
+        // which would keep the OLDEST snapshots and delete the freshest ones.
+        const snap = await colRef.orderBy('createdAt', 'desc').limit(KEEP_SNAPSHOTS + 30).get();
         const docs = [];
         snap.forEach(d => docs.push(d));
         if (docs.length <= KEEP_SNAPSHOTS) return;

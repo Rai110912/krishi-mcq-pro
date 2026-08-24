@@ -3212,4 +3212,182 @@ body.ui-density-spacious    { --card-pad: 1.25rem; --stack-gap: 1.125rem; }
     z-index: 11;
 }
 
+/* ==================================================================
+   QUIZ GAMEPLAY (#page-mcq) — LAYOUT ADVANCE (presentation only)
+   ------------------------------------------------------------------
+   Five measured layout defects, all fixed without touching a single
+   line of behaviour: no id is renamed, no element is removed, no JS
+   handler is rebound, and every existing animation still runs.
+   Measured at 320 / 375 / 1003 / 1280 px, hybrid mode ON (the
+   default), against ui-corner-round / ui-depth-subtle /
+   ui-density-spacious.
+   ================================================================== */
+
+/* ── 1. Reading column ───────────────────────────────────────────────
+   `.page` already caps itself at 960px, but #page-mcq inherited the
+   whole of it: measured at 1280px the question card was 896px wide and
+   an answer button 844px, so a four-word option sat in a half-empty
+   box and the question ran past 100 characters a line. Every other
+   long-form page in the app already opts into a narrower column
+   (#page-analytics uses max-w-4xl), so this follows that convention
+   rather than inventing a new one.
+
+   The width is a step on the EXISTING Density ladder instead of a new
+   hard-coded number, so Home -> Customize -> Appearance & Language ->
+   Density keeps control of it, exactly like --card-pad and
+   --stack-gap. No new control, no new storage key. */
+body                        { --quiz-col: 42rem; }
+body.ui-density-compact     { --quiz-col: 38rem; }
+body.ui-density-comfortable { --quiz-col: 42rem; }
+body.ui-density-spacious    { --quiz-col: 46rem; }
+
+@media (min-width: 768px) {
+    /* margin-top is deliberately untouched — #page-practice's own
+       space-y-4 owns it, and only the inline axis is centred here. */
+    #page-practice > #page-mcq {
+        max-width: var(--quiz-col);
+        margin-left: auto;
+        margin-right: auto;
+    }
+}
+
+/* ── 2. One progress bar, not two ────────────────────────────────────
+   #page-mcq stacks eight children, and in hybrid mode three of them
+   are invisible but still charge a full space-y gap, because Tailwind's
+   `> :not([hidden]) ~ :not([hidden])` matches on the ATTRIBUTE, so
+   display:none siblings are still billed:
+
+     #float-feedback-container   height 0  (absolute children only)
+     the classic progress row    height 0  (all children premium-hybrid-hide)
+     .irrigation-wave-container  height 8  (see below)
+
+   Measured at 375px: the HUD ended at y272 and the question card began
+   at y342 — 70px of gap holding one 8px empty bar.
+
+   That bar is the classic-layout progress track. Its wrapper is marked
+   `premium-hybrid-hide` in the markup, so it is meant to disappear in
+   hybrid mode, but setupPlantAndIrrigationUI() reassigns
+   `parent.className = 'irrigation-wave-container'` (js/app.js:15983),
+   which overwrites the class string and takes premium-hybrid-hide with
+   it — that is why a second, permanently-empty bar reappeared under the
+   HUD. Restoring the author's intent in CSS keeps js/app.js untouched,
+   and the rule is scoped to .premium-hybrid-active so CLASSIC mode
+   still shows the bar and its water-wave canvas exactly as today. The
+   canvas keeps drawing; only hybrid mode stops displaying it.
+
+   Specificity notes: the two margin rules need 2-3 ids to out-rank our
+   own `#page-mcq > :not([hidden]) ~ :not([hidden])` (1 id + 2 attrs);
+   the display rule ties with it at 1 id + 2 classes and wins on order. */
+#page-mcq > #float-feedback-container + #hybrid-duo-header {
+    margin-top: 0;
+}
+.premium-hybrid-active #page-mcq > #hybrid-duo-header + div {
+    margin-top: 0;
+}
+.premium-hybrid-active #page-mcq > .irrigation-wave-container {
+    display: none;
+    margin-top: 0;
+}
+
+/* ── 3. The sync pill stops being clipped ────────────────────────────
+   The HUD row is `flex justify-between gap-3`: the ✕, a flex-1 bar, and
+   the streak / hearts / autosave group. Nothing pinned the group, so it
+   shared the shrink pressure with the bar. Measured at 1003px with the
+   longest label js/app.js can write ("Local Only", 16679 / 16694 — the
+   others are Ready / Saving... / Autosaved / Connected / Offline) the
+   text ended at x971 against a container edge of x971: zero slack, and
+   one pixel of pressure away from losing a character.
+
+   Pinning the group and letting the bar absorb the shrink instead fixes
+   it for every label at every width, without hiding the text and
+   without touching the six strings js/app.js writes. */
+#page-mcq #hybrid-duo-header > div:last-child {
+    flex-shrink: 0;
+}
+#page-mcq #hybrid-duo-header > div:nth-child(2) {
+    min-width: 2rem;
+}
+#page-mcq #game-autosave-indicator {
+    white-space: nowrap;
+}
+/* The HUD is a white strip (`bg-white dark:bg-slate-900 py-1.5`) with
+   horizontal padding of zero, so even un-clipped the last glyph of
+   "Local Only" ended on the exact pixel the white surface ended —
+   measured slack: 0px. A little inline padding is what makes it read as
+   deliberate instead of cut off. */
+#page-mcq #hybrid-duo-header {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+}
+
+/* ── 4. The growth decoration stops colliding ────────────────────────
+   The earlier z-index fix above made ⚠️ Report tappable again, but the
+   two were still drawn on top of each other. Measured overlap with the
+   original `top:10px; right:50px; 55x55`:
+     1280px — plant x1110-1165 y304-359 vs Report x1106-1167 y304-321:
+              the decoration covered the button end to end.
+      375px — plant x237-292 y373-428 vs the EASY difficulty badge
+              x228-267 y367-385: covered its right third.
+
+   Fix is two-part and purely geometric. The decoration shrinks to 34px
+   and moves to the true corner (right:8px), and the control row reserves
+   a 46px lane so the ☆ / Report / Hint cluster can never slide back
+   underneath it.
+
+   The lane is NOT breakpoint-gated, and that is a measured decision. It
+   was first written as `@media (min-width: 768px)` on the assumption that
+   the row always wraps below that. It does not: at 480px the row fits on
+   one line, `justify-between` pins the cluster to the right edge, and the
+   34px decoration then sat completely on top of ☆ — measured overlap
+   bookmark-btn x427-442 vs plant x425-459, 15x34px, i.e. the whole
+   button. Applying the lane at every width costs the badges 46px of the
+   row: at 375px they need 209px and still get 253px, so nothing is
+   squashed and the wrap point does not move.
+
+   Nothing interactive moves, nothing is hidden, and the plant keeps the
+   hover/active wiggle it already has (.plant-growth-widget:hover
+   { transform: scale(1.18) rotate(6deg) } at line 1068) — which is why
+   `pointer-events: none` is still not used. The inline
+   `transform: scale(...)` that updatePlantAndIrrigationState() writes on
+   the inner <svg> for each growth stage is untouched: only the svg's
+   CSS box shrinks with it, so all four stages still scale normally. */
+#page-mcq #plant-growth-indicator {
+    top: 10px;
+    right: 8px;
+    width: 34px;
+    height: 34px;
+}
+#page-mcq #plant-growth-indicator .plant-growth-svg {
+    width: 26px;
+    height: 26px;
+}
+#page-mcq #mcq-card-container > div:first-child {
+    padding-right: 46px;
+}
+
+/* ── 5. Answer options and question read as a hierarchy ──────────────
+   Narrowing the column (1) already did the heavy lifting: an option
+   goes from 844px to roughly 590px, so the text no longer floats in a
+   half-empty box. Two small additions finish it.
+
+   A hover tint tells you which option is under the cursor. It has to
+   carry !important only because `.premium-hybrid-active .option-btn`
+   pins border-color and background-color with !important; the extra ids
+   and :not() guards keep it well clear of .selected, .disabled,
+   .glow-correct and .shake-wrong, so no answer-state colour and no
+   press animation (`.selected { transform: translateY(1px) }`) is
+   affected. Non-hover behaviour is byte-identical.
+
+   The question gains one step of size over the options so the eye lands
+   on it first; it inherits its colour from the inline
+   `style="color:var(--text)"` exactly as before. */
+#page-mcq #q-options .option-btn:hover:not(.disabled):not(.selected):not(.glow-correct):not(.shake-wrong) {
+    border-color: rgba(var(--primary-rgb), 0.5) !important;
+    background-color: rgba(var(--primary-rgb), 0.04) !important;
+}
+#page-mcq #q-text {
+    font-size: 1.0625rem;
+    line-height: 1.6;
+}
+
 

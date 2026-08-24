@@ -1531,6 +1531,25 @@ function loadData(){
                     KrishiStorage.setItem('krishi_sync_pending', 'true');
                     scheduleCloudSync('Snapshot restored');
                 } catch (e) {}
+            },
+            // Rollback semantics: plain pending-delta merge would let newer
+            // cloud timestamps win under CRDT LWW, silently undoing the
+            // restore. This is the same full-payload overwrite the conflict
+            // modal's "keep local" strategy uses.
+            fullPush: async () => {
+                const uid = getCloudUID();
+                if (!uid || !firebaseApp) throw new Error('Not logged in.');
+                const fs = firebase.firestore(firebaseApp);
+                const ref = fs.collection('users').doc(uid);
+                const payload = collectAllAppData();
+                const stamp = Date.now();
+                payload.updatedAt = stamp;
+                assertPayloadFits(payload, 'Restore push');
+                await ref.set(payload, { merge: true });
+                KrishiStorage.setItem('krishi_last_updated_at', String(stamp));
+                KrishiStorage.removeItem('krishi_sync_pending');
+                KrishiStorage.setItem('krishi_sync_pending_count', '0');
+                setSyncStatus('Synced');
             }
         };
     }

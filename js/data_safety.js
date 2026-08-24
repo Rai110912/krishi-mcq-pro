@@ -172,11 +172,14 @@
                 label = id;
                 payload = JSON.parse(LZString.decompressFromUTF16(raw) || '{}');
             }
-            if (!confirm('Restore ' + kind + ' backup from ' + label + '?\n\nCurrent progress will be MERGED with it, then synced.')) return;
+            if (!confirm('Restore ' + kind + ' backup from ' + label + '?\n\nLocal AND cloud progress will be rolled back to this snapshot\'s state.')) return;
             H.apply(payload);
-            H.pushPending();
+            // Full overwrite (conflict-modal "keep local" pattern): a plain
+            // pending merge would lose to newer cloud timestamps under LWW.
+            if (!H.fullPush) throw new Error('Restore bridge unavailable.');
+            await H.fullPush();
             closeModal();
-            showToast('✅ Restored ' + label + ' & syncing!');
+            showToast('✅ Restored ' + label + ' — local & cloud rolled back!');
         } catch (e) {
             showToast('❌ Restore failed: ' + e.message, 7000);
             window.krishiLogSilent && krishiLogSilent('restore.' + kind, e);

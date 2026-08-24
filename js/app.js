@@ -3593,16 +3593,33 @@ scheduleMidnightCloudVault();
             await loadFirebaseSDKs();
             const firestore = firebase.firestore(firebaseApp);
             
-            const pin = String(Math.floor(100000 + Math.random() * 900000));
             const now = Date.now();
             const expiresAt = now + (15 * 60 * 1000);
-            
-            await firestore.collection('sync_pins').doc(pin).set({
-                syncKey: key,
-                createdAt: now,
-                expiresAt: expiresAt,
-                ownerUid: (currentAuthUser ? currentAuthUser.uid : null)
-            });
+            let pin = '';
+            // Rare collisions (a pin id already owned by someone else) are
+            // rejected by Firestore rules — regenerate instead of erroring out.
+            let lastErr = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    pin = String(Math.floor(100000 + Math.random() * 900000));
+                    await firestore.collection('sync_pins').doc(pin).set({
+                        syncKey: key,
+                        createdAt: now,
+                        expiresAt: expiresAt,
+                        ownerUid: (currentAuthUser ? currentAuthUser.uid : null)
+                    });
+                    lastErr = null;
+                    break;
+                } catch (pinErr) {
+                    lastErr = pinErr;
+                    console.warn('[Pairing PIN] Attempt ' + attempt + ' failed:', pinErr.code || pinErr.message);
+                    await new Promise(r => setTimeout(r, 120));
+                }
+            }
+            if (!pin || lastErr) {
+                showToast('❌ PIN generation failed. Please try again.');
+                return;
+            }
             
             const pinModal = document.getElementById('modal-pairing-pin');
             const pinDisplay = document.getElementById('cloud-pairing-pin-display');
@@ -3711,6 +3728,11 @@ scheduleMidnightCloudVault();
     }
 
     function renderHandoffBanner(data) {
+        // Peer-controlled fields (custom device name, subject) are user input —
+        // never interpolate them raw into the banner's innerHTML.
+        const esc = s => String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         let banner = document.getElementById('krishi-handoff-banner');
         if (!banner) {
             banner = document.createElement('div');
@@ -3719,7 +3741,7 @@ scheduleMidnightCloudVault();
         }
         banner.className = 'fixed top-3 left-1/2 -translate-x-1/2 z-[99999] bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2.5 rounded-2xl shadow-xl border border-indigo-400/30 flex items-center gap-3 animate-bounce text-xs cursor-pointer';
         banner.innerHTML = `
-            <span>📱 Active Session on <strong>${data.deviceName || 'Peer'}</strong> (${data.subject || 'Quiz'} - Q #${(data.questionIdx || 0) + 1})</span>
+            <span>📱 Active Session on <strong>${esc(data.deviceName || 'Peer')}</strong> (${esc(data.subject || 'Quiz')} - Q #${parseInt(data.questionIdx || 0, 10) + 1})</span>
             <button onclick="if(typeof window.navigateTab==='function') window.navigateTab('page-practice'); window.dismissHandoffBanner();" class="bg-white text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl text-[10px] shadow hover:bg-indigo-50 cursor-pointer">Resume Here 🚀</button>
             <button onclick="window.dismissHandoffBanner()" class="text-white/80 hover:text-white text-xs cursor-pointer">✕</button>
         `;

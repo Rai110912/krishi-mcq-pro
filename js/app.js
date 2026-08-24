@@ -3447,6 +3447,11 @@ function loadData(){
                 }
             }
 
+            // Data Safety Pack: provide context immediately after listener setup so
+            // snapshots/restore work right away, not only after the first successful
+            // sync of this page-load.
+            try { window.KrishiDataSafety && KrishiDataSafety.setContext({ firestore: firestore, uid: uid }); } catch(e){}
+
             // Listen for cross-device quiz handoff events
             listenForRemoteHandoff(uid, firestore);
 

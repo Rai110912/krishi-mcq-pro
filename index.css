@@ -135,8 +135,13 @@
         .custom-accent-active .bg-indigo-50 {
             background-color: var(--primary-light) !important;
         }
-        .custom-accent-active .dark .bg-emerald-950\/20, 
-        .custom-accent-active .dark .bg-indigo-950\/20 {
+        /* `dark` lives on <html> and `custom-accent-active` on <body>, so the
+           dark class is an ANCESTOR here, never a descendant. Written the old
+           way (.custom-accent-active .dark ...) this rule could never match,
+           which left the .bg-emerald-50 mapping above painting these panels
+           near-white (#d1fae5) in dark mode. */
+        .dark .custom-accent-active .bg-emerald-950\/20,
+        .dark .custom-accent-active .bg-indigo-950\/20 {
             background-color: rgba(var(--primary-rgb), 0.15) !important;
         }
         .custom-accent-active .peer-checked\:bg-emerald-500:checked ~ div {
@@ -683,7 +688,13 @@
             --card: rgba(255, 255, 255, var(--app-card-opacity, 1));
             --border: rgba(228, 228, 231, var(--app-card-opacity, 1));
         }
-        .dark.theme-minimal {
+        /* The theme classes sit on <body> and `dark` on <html>, so the dark
+           variants have to be written as descendants (the same shape the
+           depth presets already use: `.dark body.ui-depth-subtle`). Written as
+           `.dark.theme-minimal` they asked for both classes on ONE element and
+           never matched, so the light `!important` background above stayed on
+           in dark mode - a near-white page. */
+        .dark body.theme-minimal {
             background-color: #09090b !important;
             --bg: #09090b;
             --card: rgba(24, 24, 27, var(--app-card-opacity, 1));
@@ -699,7 +710,7 @@
             background: linear-gradient(135deg, #e0f2fe 0%, #f0fdf4 100%) !important;
             --bg: #f0fdf4;
         }
-        .dark.theme-pro {
+        .dark body.theme-pro {
             background: linear-gradient(135deg, #0f172a 0%, #022c22 100%) !important;
             --bg: #0f172a;
         }
@@ -710,7 +721,7 @@
             border-color: rgba(16, 185, 129, calc(var(--app-card-opacity, 0.82) * 0.18)) !important;
             box-shadow: 0 4px 20px -2px rgba(5, 150, 105, 0.05) !important;
         }
-        .dark.theme-pro .hover-card-trigger {
+        .dark body.theme-pro .hover-card-trigger {
             backdrop-filter: blur(12px) !important;
             -webkit-backdrop-filter: blur(12px) !important;
             background: rgba(30, 41, 59, var(--app-card-opacity, 0.75)) !important;
@@ -725,7 +736,7 @@
             --card: rgba(245, 245, 244, var(--app-card-opacity, 1));
             --border: rgba(231, 229, 228, var(--app-card-opacity, 1));
         }
-        .dark.theme-focus {
+        .dark body.theme-focus {
             background-color: #0c0a09 !important;
             --bg: #0c0a09;
             --card: rgba(28, 25, 23, var(--app-card-opacity, 1));
@@ -3725,6 +3736,67 @@ body.custom-text-active #page-settings {
    red, the outline now matches instead of falling back to var(--border). */
 #page-settings #settings-group-general-bottom > button[onclick^="resetAllData"] {
     border-color: rgba(244, 63, 94, 0.45);
+}
+
+/* ==========================================================================
+   DARK-MODE ACCENT + HOME CUSTOMIZER CONTRAST (presentation only)
+   --------------------------------------------------------------------------
+   Same contract as the layers above: no markup, state or logic changes.
+
+   The accent layer near the top of this file maps Tailwind's emerald/indigo
+   utilities onto the accent the user picked, with !important. That !important
+   also beats the markup's own `dark:` variant, so in dark mode:
+
+     * `text-emerald-600 dark:text-emerald-400` painted the RAW accent
+       (#059669 by default) instead of emerald-400 - measured 3.9:1 on the
+       dark card, an AA failure;
+     * `bg-emerald-50 dark:bg-emerald-950/20` painted --primary-light
+       (#d1fae5), i.e. a near-WHITE panel in dark mode, because the rule that
+       was meant to catch this was written `.custom-accent-active .dark ...`
+       and `dark` lives on <html>, an ancestor of <body>, so it never matched.
+
+   Both are corrected here rather than by re-tinting the shared accent layer,
+   which would move every accent surface in the app. The nudge is the same
+   idiom the Practice layer already uses: the SAME hue the user picked, pushed
+   toward white for a dark surface. The plain var(--primary) line above each
+   mix is the fallback for engines without color-mix.
+   ========================================================================== */
+
+/* --- 1. Accent text on a dark surface ------------------------------------ */
+.dark .custom-accent-active .text-emerald-600,
+.dark .custom-accent-active .text-emerald-500,
+.dark .custom-accent-active .text-emerald-700,
+.dark .custom-accent-active .text-indigo-600,
+.dark .custom-accent-active .text-indigo-700 {
+    color: var(--primary) !important;
+    color: color-mix(in srgb, var(--primary) 62%, #ffffff) !important;
+}
+
+/* --- 2. Accent tint panels on a dark surface ----------------------------- */
+/* Mirrors the .bg-emerald-950/20 mapping, for the panels whose markup has no
+   dark: counterpart at all. */
+.dark .custom-accent-active .bg-emerald-50,
+.dark .custom-accent-active .bg-indigo-50 {
+    background-color: rgba(var(--primary-rgb), 0.15) !important;
+}
+
+/* --- 3. Home customizer captions ----------------------------------------- */
+/* 38 labels/captions at .text-slate-400 and 23 at .text-slate-500 inside the
+   customizer, with no dark: variant, so they were the literal #94a3b8 =
+   2.51:1 on the white sheet. Same token mix (and the same --cap-mix escape
+   hatch for custom Text Colour palettes) as the Profile/Settings layer.
+   Buttons are included on purpose: the tab strip and the widget category
+   chips mark their active state with a background, a heavier weight and a
+   different text class, so lifting the INACTIVE ones cannot flatten it. */
+#home-customizer-modal {
+    --cap-mix: 55%;
+}
+body.custom-text-active #home-customizer-modal {
+    --cap-mix: 35%;
+}
+#home-customizer-modal :is(.text-slate-400, .text-slate-500) {
+    color: var(--text-secondary) !important;
+    color: color-mix(in srgb, var(--text-secondary) var(--cap-mix, 55%), var(--text)) !important;
 }
 
 

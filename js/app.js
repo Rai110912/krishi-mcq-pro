@@ -774,6 +774,25 @@ async function loadStaticQuestions() {
         const uid = (typeof getCloudUID === 'function') ? getCloudUID() : null;
         const key = uid; // alias for condition check below
 
+        // Declared at function scope on purpose. It used to be a function
+        // declaration inside the `if (key && navigator.onLine && firebase...)`
+        // block below, while the offline/signed-out fallback at the very bottom
+        // of this function calls it from outside that block. Whenever the block
+        // did not run — signed out, offline, or Firebase not initialised — the
+        // binding was still undefined and the fallback threw
+        // "TypeError: safeParseSession is not a function", so the resume prompt
+        // never appeared for exactly the users who need the local copy.
+        function safeParseSession(str) {
+            if (!str) return null;
+            try {
+                return JSON.parse(str);
+            } catch(e) {
+                console.warn('[Resumption] Corrupted active session backup found and removed:', e);
+                try { KrishiStorage.removeItem('krishi_active_session_backup'); } catch(err){}
+                return null;
+            }
+        }
+
         function triggerPrompt(session, isCloud = false) {
             if (!session) return;
             // A finished session must never be advertised. It used to reach here, and
@@ -875,16 +894,6 @@ async function loadStaticQuestions() {
         if (key && navigator.onLine && window.firebase && firebase.apps && firebase.apps.length) {
             let existingApp = firebase.apps.find(app => app.name === "KrishiApp");
             let firebaseApp = existingApp || firebase.app("KrishiApp");
-            function safeParseSession(str) {
-                if (!str) return null;
-                try {
-                    return JSON.parse(str);
-                } catch(e) {
-                    console.warn('[Resumption] Corrupted active session backup found and removed:', e);
-                    try { KrishiStorage.removeItem('krishi_active_session_backup'); } catch(err){}
-                    return null;
-                }
-            }
 
             if (firebaseApp) {
                 const firestore = firebase.firestore(firebaseApp);
@@ -5012,10 +5021,17 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
 
     // ==================== PRACTICE / EXAMS SETUP ====================
+    // Double-tap guard for startPractice. It used to read a bare
+    // `isTransitioning` that was never declared anywhere, so every call threw
+    // ReferenceError before reaching setupMCQSession. It is deliberately NOT
+    // state.isTransitioning: setupMCQSession mutates `state` in place and never
+    // clears that flag, so sharing it would make nextMCQQuestion()/skipQuestion()
+    // silently no-op for the first second of a new session.
+    let startPracticeLocked = false;
     function startPractice(sub, cnt){
-        if (isTransitioning) return;
-        isTransitioning = true;
-        setTimeout(() => isTransitioning = false, 1000);
+        if (startPracticeLocked) return;
+        startPracticeLocked = true;
+        setTimeout(() => startPracticeLocked = false, 1000);
         
         stopTimer();
         let pool = getAllQuestions();

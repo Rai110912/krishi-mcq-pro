@@ -5286,7 +5286,11 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
                         (r.lapses || 0) * 1000 +
                         (r.stability == null ? 999 : Math.min(r.stability, 999));
                     prioritized = subjectPool
-                        .filter(q => recs[String(q.id || q.q)])
+                        .filter(q => {
+                            const r = recs[String(q.id || q.q)];
+                            // Mastered questions are, by definition, not memory-weak.
+                            return r && r.status !== 'mastered';
+                        })
                         .sort((a, b) => weaknessOf(recs[String(a.id || a.q)]) - weaknessOf(recs[String(b.id || b.q)]));
                 }
 

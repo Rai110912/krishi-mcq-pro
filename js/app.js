@@ -695,7 +695,16 @@ async function loadStaticQuestions() {
         initPerfSettingsUI();
         if (typeof initEliteAnimationsUI === 'function') initEliteAnimationsUI();
         restoreUIStateIfCached();
-    window.showConfirmDialog = function(message, onConfirm, onCancel) {
+    window.showConfirmDialog = function(message, onConfirm, onCancel, opts) {
+        // opts is optional; defaults reproduce the original "resume saved progress"
+        // dialog so existing callers keep working unchanged.
+        opts = opts || {};
+        let dlgTitle = opts.title || 'अधुरो अभ्यास (Saved Progress)';
+        let dlgIcon = opts.icon || '🎯';
+        let dlgIconClass = opts.iconClass || 'study-target-glow';
+        let dlgConfirmLabel = opts.confirmLabel || 'सुरु गर्नुहोस्';
+        let dlgCancelLabel = opts.cancelLabel || 'तुरुन्त रद्द';
+
         let existing = document.getElementById('custom-confirm-modal-overlay');
         if (existing) existing.remove();
 
@@ -707,14 +716,14 @@ async function loadStaticQuestions() {
 
         overlay.innerHTML = `
             <div class="confirm-glass-card rounded-3xl p-6 max-w-[320px] w-full text-center space-y-5 transform scale-[0.88] translateY(25px) transition-all duration-300" style="transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);">
-                <div class="w-12 h-12 rounded-2xl study-target-glow flex items-center justify-center text-xl mx-auto">🎯</div>
+                <div class="w-12 h-12 rounded-2xl ${dlgIconClass} flex items-center justify-center text-xl mx-auto">${dlgIcon}</div>
                 <div class="space-y-1.5">
-                    <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">अधुरो अभ्यास (Saved Progress)</h4>
+                    <h4 class="font-black text-sm text-slate-800 dark:text-slate-100">${dlgTitle}</h4>
                     <div class="text-[11.5px] leading-relaxed text-slate-500 dark:text-slate-400 font-medium">${message}</div>
                 </div>
                 <div class="flex gap-2.5">
-                    <button id="custom-confirm-cancel-btn" class="flex-1 py-2.5 rounded-xl font-bold text-[10.5px] cursor-pointer">तुरुन्त रद्द</button>
-                    <button id="custom-confirm-ok-btn" class="flex-1 py-2.5 rounded-xl font-black text-[10.5px] cursor-pointer">सुरु गर्नुहोस्</button>
+                    <button id="custom-confirm-cancel-btn" class="flex-1 py-2.5 rounded-xl font-bold text-[10.5px] cursor-pointer">${dlgCancelLabel}</button>
+                    <button id="custom-confirm-ok-btn" class="flex-1 py-2.5 rounded-xl font-black text-[10.5px] cursor-pointer">${dlgConfirmLabel}</button>
                 </div>
             </div>
         `;
@@ -4931,13 +4940,42 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
 
     window.confirmExitExam = function() {
-        if (confirm("के तपाईं यो अभ्यास सत्रबाट बाहिरिन चाहनुहुन्छ?")) {
+        // Actually leave the gameplay view. navigate('page-practice') alone does
+        // NOT hide #page-mcq (its hide-logic is gated behind pageId !== 'page-practice'),
+        // so we explicitly close the MCQ panel and restore the practice selectors.
+        const doExit = function() {
+            if (typeof savePracticeProgress === 'function') savePracticeProgress();
             if (typeof stopTimer === 'function') stopTimer();
             if (state.perQuestionTimerInterval) {
                 clearInterval(state.perQuestionTimerInterval);
                 state.perQuestionTimerInterval = null;
             }
+            let mcqPage = document.getElementById('page-mcq');
+            if (mcqPage) mcqPage.classList.add('hidden');
+            let resPanel = document.getElementById('practice-result-panel');
+            if (resPanel) resPanel.classList.add('hidden');
+            let activePanels = document.getElementById('practice-active-state-panels');
+            if (activePanels) activePanels.classList.remove('hidden');
+            if (typeof updatePracticePage === 'function') updatePracticePage();
             navigate('page-practice');
+        };
+        // Native confirm() is suppressed in the Android WebView (returns false),
+        // which is why the old back button silently did nothing. Use the in-app dialog.
+        if (typeof window.showConfirmDialog === 'function') {
+            window.showConfirmDialog(
+                'तपाईंको प्रगति सुरक्षित हुनेछ। के अभ्यास बन्द गरेर बाहिर निस्कने?',
+                doExit,
+                null,
+                {
+                    title: 'अभ्यास बन्द गर्ने? (Exit practice?)',
+                    icon: '🚪',
+                    iconClass: 'bg-rose-500/15 dark:bg-rose-500/20',
+                    confirmLabel: 'बाहिर निस्कने',
+                    cancelLabel: 'जारी राख्ने'
+                }
+            );
+        } else {
+            doExit();
         }
     };
 

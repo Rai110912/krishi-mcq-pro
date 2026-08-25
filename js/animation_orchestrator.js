@@ -170,35 +170,30 @@
     // --- CORRECT ---
     function renderCorrect(payload, level) {
         var el = payload && payload.targetEl;
-        if (level === 'off') {
-            // Static: just add class
-            if (el) el.classList.add('glow-correct');
+        // Answer-state colour is persistent feedback, not decoration — always
+        // paint the chosen option so it reflects correctness even when the
+        // celebratory Lottie plays successfully (the CSS fallback would
+        // otherwise be skipped, leaving the button its green .selected tint).
+        if (el) el.classList.add('glow-correct');
+        if (level === 'off' || level === 'reduced') {
             return Promise.resolve();
         }
-        if (level === 'reduced') {
-            if (el) el.classList.add('glow-correct');
-            return Promise.resolve();
-        }
-        // Full
-        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.CORRECT], function () {
-            if (el) el.classList.add('glow-correct');
-        });
+        // Full: layer the celebratory Lottie on top of the state colour.
+        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.CORRECT], null);
     }
 
     // --- WRONG ---
     function renderWrong(payload, level) {
         var el = payload && payload.targetEl;
-        if (level === 'off') {
-            if (el) el.classList.add('shake-wrong');
+        // Always paint the wrong pick red — this is state feedback, not a
+        // decorative fallback. Gating it on Lottie failure meant a successful
+        // Lottie left the chosen option showing its green .selected tint.
+        if (el) el.classList.add('shake-wrong');
+        if (level === 'off' || level === 'reduced') {
             return Promise.resolve();
         }
-        if (level === 'reduced') {
-            if (el) el.classList.add('shake-wrong');
-            return Promise.resolve();
-        }
-        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.WRONG], function () {
-            if (el) el.classList.add('shake-wrong');
-        });
+        // Full: layer the celebratory Lottie on top of the state colour.
+        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.WRONG], null);
     }
 
     // --- XP MICRO ---

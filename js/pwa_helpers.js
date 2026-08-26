@@ -738,11 +738,17 @@ class KrishiSM2Engine {
         todayEnd.setHours(23, 59, 59, 999);
         const now = todayEnd.getTime();
 
+        const mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
         return allQuestions.filter(q => {
             const qId = q.id || q.q;
             const rec = data[qId];
             if (!rec) return false;
-            return rec.status === 'due' || (rec.nextReview && rec.nextReview <= now && rec.status !== 'mastered');
+            if (rec.status === 'mastered' || rec.status === 'suspended') return false;
+            // Unresolved mistakes surface in Review Mistakes only, never Spaced Review.
+            if (mistakeSet && mistakeSet.has(String(qId))) return false;
+            // Due strictly by schedule — a just-failed question (nextReview = tomorrow)
+            // is no longer force-shown today via a sticky status==='due' flag.
+            return rec.nextReview && rec.nextReview <= now;
         });
     }
 
@@ -754,10 +760,15 @@ class KrishiSM2Engine {
         let dueCount = 0;
         let masteredCount = 0;
         let totalTracked = Object.keys(data).length;
+        const mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
 
-        Object.values(data).forEach(rec => {
-            if (rec.status === 'mastered') masteredCount++;
-            else if (rec.status === 'due' || (rec.nextReview && rec.nextReview <= now)) dueCount++;
+        Object.entries(data).forEach(([id, rec]) => {
+            if (rec.status === 'mastered') { masteredCount++; return; }
+            if (rec.status === 'suspended') return;
+            // Keep the due count in lockstep with getDueQuestions: exclude
+            // unresolved mistakes and count strictly by schedule (nextReview).
+            if (mistakeSet && mistakeSet.has(String(id))) return;
+            if (rec.nextReview && rec.nextReview <= now) dueCount++;
         });
 
         return { dueCount, masteredCount, totalTracked };

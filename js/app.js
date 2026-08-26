@@ -990,6 +990,210 @@ async function loadStaticQuestions() {
         }
     };
 
+    // ==================== UNFINISHED-SESSION HISTORY ====================
+    // Multiple abandoned practice sessions are kept as a list (newest first) so every
+    // exit shows its own resume card. This is LOCAL-only and independent of the legacy
+    // single-slot cloud sync (krishi_saved_practice), which is left intact for
+    // cross-device continuity. Entries are keyed by sessionId and capped.
+    var UNFINISHED_KEY = 'krishi_unfinished_sessions';
+    var UNFINISHED_CAP = 8;
+
+    window.getUnfinishedSessions = function() {
+        var list = [];
+        try {
+            var raw = KrishiStorage.getItem(UNFINISHED_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) list = parsed;
+        } catch (e) { list = []; }
+        // Only keep genuinely resumable sessions.
+        return list.filter(function(s){
+            return s && (typeof window.isResumableSession !== 'function' || window.isResumableSession(s));
+        });
+    };
+
+    function writeUnfinishedSessions(list) {
+        try {
+            KrishiStorage.setItem(UNFINISHED_KEY, JSON.stringify(list.slice(0, UNFINISHED_CAP)));
+        } catch (e) {
+            console.warn('[Unfinished] write failed:', e);
+        }
+    }
+
+    // Insert or update one session by sessionId, newest first. A non-resumable
+    // (finished) snapshot removes any existing entry instead of adding one.
+    window.upsertUnfinishedSession = function(sessionObj) {
+        if (!sessionObj) return;
+        var list = window.getUnfinishedSessions();
+        var id = sessionObj.sessionId;
+        list = list.filter(function(s){ return s.sessionId !== id; });
+        if (typeof window.isResumableSession !== 'function' || window.isResumableSession(sessionObj)) {
+            list.unshift(sessionObj);
+        }
+        writeUnfinishedSessions(list);
+    };
+
+    window.removeUnfinishedSession = function(sessionId) {
+        var list = window.getUnfinishedSessions().filter(function(s){ return s.sessionId !== sessionId; });
+        writeUnfinishedSessions(list);
+    };
+
+    // Builds the resume-progress snapshot for the current in-memory session, correcting
+    // for mid-feedback exits. When the current question is already answered, its result
+    // is committed to score/sessionResults, so we advance the resume index by one — this
+    // is what "Next" does — preventing the answered question from being re-served (and
+    // double-counted) on resume. Returns null when there is nothing worth resuming.
+    window.buildCurrentSessionSnapshot = function() {
+        if (!state || !state.questions || state.questions.length === 0) return null;
+        var total = state.questions.length;
+        var resumeIndex = state.answered ? (state.currentIndex + 1) : state.currentIndex;
+        // Nothing meaningful attempted yet → don't create a ghost card.
+        var attempted = Array.isArray(state.sessionResults) ? state.sessionResults.length : 0;
+        if (resumeIndex <= 0 && attempted === 0) return null;
+        // Ran off the end → session is effectively complete, not resumable.
+        if (resumeIndex >= total) return null;
+
+        var currentQ = state.questions[resumeIndex] || state.questions[0];
+        return {
+            sessionId: state.sessionId || Date.now(),
+            questions: state.questions,
+            currentIndex: resumeIndex,
+            score: state.score,
+            sessionResults: state.sessionResults,
+            isMock: state.isMock,
+            timerSec: state.timerSec,
+            timeSpentArray: state.timeSpentArray,
+            totalTimeSpent: state.totalTimeSpent,
+            activeConfig: state.activeConfig || null,
+            subject: (currentQ && currentQ.sub) ? currentQ.sub : 'कृषि',
+            updatedAt: Date.now(),
+            device: (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : 'Web Browser') : 'Web Browser'
+        };
+    };
+
+    // Persist the current session into the history list (used on exit, incl. mid-feedback).
+    window.commitCurrentSessionToHistory = function() {
+        if (state && state.isFinishing) return;
+        var snap = window.buildCurrentSessionSnapshot();
+        if (snap) window.upsertUnfinishedSession(snap);
+    };
+
+    // Renders one resume card per unfinished session into #resume-session-cards.
+    // The resume popup never auto-appears — a card tap is the sole entry point.
+    window.renderUnfinishedSessions = function() {
+        var wrap = document.getElementById('resume-session-list');
+        var host = document.getElementById('resume-session-cards');
+        if (!wrap || !host) return;
+
+        var sessions = window.getUnfinishedSessions();
+        if (!sessions.length) {
+            wrap.classList.add('hidden');
+            host.innerHTML = '';
+            return;
+        }
+
+        host.innerHTML = sessions.map(function(s){
+            var total = (s.questions && s.questions.length) ? s.questions.length : 0;
+            var current = s.currentIndex || 0;
+            var remaining = Math.max(0, total - current);
+            var pct = total > 0 ? Math.round((current / total) * 100) : 0;
+            var results = Array.isArray(s.sessionResults) ? s.sessionResults : [];
+            var attempted = results.length;
+            var correct = results.filter(function(r){ return r && r.correct; }).length;
+            var accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 100;
+            var subject = s.subject || 'कृषि';
+            var id = s.sessionId;
+            return '' +
+            '<div class="resume-session-item cursor-pointer rounded-2xl p-3.5 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-300/60 dark:border-amber-800/50 shadow-sm hover:border-amber-400 dark:hover:border-amber-600 transition active:scale-[0.98] space-y-2.5" onclick="resumeUnfinishedSession(' + id + ')">' +
+                '<div class="flex items-center gap-3">' +
+                    '<div class="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center text-lg flex-none">🎯</div>' +
+                    '<div class="flex-1 min-w-0">' +
+                        '<p class="font-black text-[13px] text-slate-800 dark:text-slate-100 truncate">' + subject + '</p>' +
+                        '<p class="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate">' + remaining + ' प्रश्न बाँकी · ' + accuracy + '% accuracy · ' + pct + '% done</p>' +
+                    '</div>' +
+                    '<button onclick="event.stopPropagation(); discardUnfinishedSession(' + id + ')" aria-label="Discard" title="Discard" class="flex-none w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 active:scale-90 transition cursor-pointer text-xs font-black">✕</button>' +
+                    '<span class="flex-none inline-flex items-center gap-1 bg-amber-600 text-white font-black text-[10px] px-2.5 py-1.5 rounded-lg shadow-sm">▶ जारी</span>' +
+                '</div>' +
+                '<div class="h-1.5 rounded-full bg-amber-500/15 overflow-hidden">' +
+                    '<div class="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-500" style="width:' + pct + '%"></div>' +
+                '</div>' +
+            '</div>';
+        }).join('');
+
+        wrap.classList.remove('hidden');
+    };
+
+    // Backward-compatible alias: existing call sites refresh the whole list now.
+    window.refreshResumeSessionCard = function() {
+        // One-time migration: fold a legacy single-slot session into the list.
+        try {
+            var legacyRaw = KrishiStorage.getItem('krishi_saved_practice');
+            if (legacyRaw) {
+                var legacy = JSON.parse(legacyRaw);
+                if (legacy && (typeof window.isResumableSession !== 'function' || window.isResumableSession(legacy))) {
+                    if (!legacy.sessionId) legacy.sessionId = legacy.updatedAt || Date.now();
+                    var existing = window.getUnfinishedSessions();
+                    if (!existing.some(function(s){ return s.sessionId === legacy.sessionId; })) {
+                        if (!legacy.subject) {
+                            var cq = legacy.questions ? (legacy.questions[legacy.currentIndex || 0] || legacy.questions[0]) : null;
+                            legacy.subject = (cq && cq.sub) ? cq.sub : 'कृषि';
+                        }
+                        window.upsertUnfinishedSession(legacy);
+                    }
+                }
+            }
+        } catch (e) {}
+        window.renderUnfinishedSessions();
+    };
+
+    // Resume a specific unfinished session by id: load it into state and jump to its
+    // question. sessionId is preserved so subsequent autosaves update the same entry.
+    window.resumeUnfinishedSession = function(sessionId) {
+        var s = window.getUnfinishedSessions().filter(function(x){ return x.sessionId === sessionId; })[0];
+        if (!s) { window.renderUnfinishedSessions(); return; }
+        if (typeof playSound === 'function') { try { playSound('click'); } catch(e){} }
+        setupMCQSession(s.questions, s.isMock, s.timerSec);
+        state.sessionId = s.sessionId;
+        state.currentIndex = s.currentIndex;
+        state.score = s.score || 0;
+        state.sessionResults = Array.isArray(s.sessionResults) ? s.sessionResults : [];
+        if (s.timeSpentArray) state.timeSpentArray = s.timeSpentArray;
+        if (typeof s.totalTimeSpent === 'number') state.totalTimeSpent = s.totalTimeSpent;
+        if (s.activeConfig) state.activeConfig = s.activeConfig;
+        renderMCQ();
+    };
+
+    window.discardUnfinishedSession = function(sessionId) {
+        if (typeof playSound === 'function') { try { playSound('click'); } catch(e){} }
+        window.removeUnfinishedSession(sessionId);
+        // If this is also the legacy single-slot / cloud session, clear that too.
+        try {
+            var legacyRaw = KrishiStorage.getItem('krishi_saved_practice');
+            if (legacyRaw) {
+                var legacy = JSON.parse(legacyRaw);
+                var legacyId = legacy ? (legacy.sessionId || legacy.updatedAt) : null;
+                if (legacyId === sessionId && typeof clearPracticeProgress === 'function') {
+                    clearPracticeProgress();
+                    return; // clearPracticeProgress re-renders the list
+                }
+            }
+        } catch (e) {}
+        window.renderUnfinishedSessions();
+    };
+
+    window.clearAllUnfinishedSessions = function() {
+        writeUnfinishedSessions([]);
+        try {
+            if (typeof clearPracticeProgress === 'function') clearPracticeProgress();
+        } catch (e) {}
+        window.renderUnfinishedSessions();
+    };
+
+    // Legacy alias kept for any external callers; a deliberate tap now resumes directly
+    // via the per-card handler, so this simply re-renders the list.
+    window.showResumeSessionPrompt = function() {
+        window.renderUnfinishedSessions();
+    };
+
     // Resume session logic - only trigger on startup if we are actively on the practice page
     setTimeout(() => {
         // Check updates on load
@@ -1019,7 +1223,7 @@ async function loadStaticQuestions() {
 
         let activePage = document.querySelector('.page.active');
         if (activePage && activePage.id === 'page-practice') {
-            window.checkAndPromptResumeSession();
+            window.refreshResumeSessionCard();
         }
     }, 1000);
 
@@ -4086,6 +4290,17 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         return window.KrishiSM2Engine ? window.KrishiSM2Engine.getStats().dueCount : 0;
     }
 
+    // Option 2 separation: an unresolved mistake belongs to "Review Mistakes" only,
+    // so Spaced Review / FSRS due lists exclude any id still in localData.wrong.
+    // The SM2 engine lives in a separate script and cannot see localData directly,
+    // so it reads this hook. Once a mistake is answered correctly it leaves
+    // localData.wrong and re-enters the spaced schedule automatically.
+    window.getMistakeIdSet = function() {
+        try {
+            return new Set((localData && Array.isArray(localData.wrong)) ? localData.wrong.map(String) : []);
+        } catch (e) { return new Set(); }
+    };
+
     function getLocalDateString(date = new Date()) {
         let year = date.getFullYear();
         let month = String(date.getMonth() + 1).padStart(2, '0');
@@ -4945,6 +5160,10 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // so we explicitly close the MCQ panel and restore the practice selectors.
         const doExit = function() {
             if (typeof savePracticeProgress === 'function') savePracticeProgress();
+            // savePracticeProgress() no-ops while a question is answered (state.answered),
+            // so a mid-feedback exit would otherwise never be recorded. Commit an
+            // index-corrected snapshot directly so Q1-after-answer exits still get a card.
+            if (typeof window.commitCurrentSessionToHistory === 'function') window.commitCurrentSessionToHistory();
             if (typeof stopTimer === 'function') stopTimer();
             if (state.perQuestionTimerInterval) {
                 clearInterval(state.perQuestionTimerInterval);
@@ -4956,6 +5175,7 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             if (resPanel) resPanel.classList.add('hidden');
             let activePanels = document.getElementById('practice-active-state-panels');
             if (activePanels) activePanels.classList.remove('hidden');
+            if (typeof window.refreshResumeSessionCard === 'function') window.refreshResumeSessionCard();
             if (typeof updatePracticePage === 'function') updatePracticePage();
             navigate('page-practice');
         };
@@ -5939,11 +6159,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
                 showFeedbackSpeechTag("🎯 Correct answer!");
                 if (window.AnimationOrchestrator) {
                     window.AnimationOrchestrator.dispatch('animation.correct', { targetEl: selectedBtnNode });
-                } else if (window.LottieAdapter) {
-                    window.LottieAdapter.play('lottie.feedback.correct').then(success => {
-                        if (!success && selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
-                    });
                 } else {
+                    // No full-screen celebratory Lottie — the per-option green is the feedback
                     if (selectedBtnNode) selectedBtnNode.classList.add('glow-correct');
                 }
             }
@@ -5967,11 +6184,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
                 if (correctBtnNode) correctBtnNode.classList.add('glow-correct'); // Always show the correct answer natively
                 if (window.AnimationOrchestrator) {
                     window.AnimationOrchestrator.dispatch('animation.wrong', { targetEl: selectedBtnNode });
-                } else if (window.LottieAdapter) {
-                    window.LottieAdapter.play('lottie.feedback.wrong').then(success => {
-                        if (!success && selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
-                    });
                 } else {
+                    // No full-screen celebratory Lottie — the per-option red is the feedback
                     if (selectedBtnNode) selectedBtnNode.classList.add('shake-wrong');
                 }
             }
@@ -14007,15 +14221,16 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             let startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
             let endOfToday = startOfToday + (24 * 3600 * 1000) - 1;
 
+            let mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : new Set();
             for (let id in sm2EngineData) {
                 let node = sm2EngineData[id];
                 if (node.status === 'mastered') {
                     masteredCountVal++;
                 } else if (node.status !== 'suspended') {
-                    if (node.status === 'due') {
-                        // Immediately due because of fail
-                        dueCountVal++;
-                    } else if (node.nextReview) {
+                    // Unresolved mistakes are counted under Review Mistakes only,
+                    // so they are excluded from the spaced-review buckets here.
+                    if (mistakeSet.has(String(id))) continue;
+                    if (node.nextReview) {
                         if (node.nextReview < startOfToday) overdueCountVal++;
                         else if (node.nextReview <= endOfToday) dueCountVal++;
                         else upcomingCountVal++;
@@ -16482,8 +16697,8 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         }
         if (pageId === 'page-practice') {
             setTimeout(() => {
-                if (typeof window.checkAndPromptResumeSession === 'function') {
-                    window.checkAndPromptResumeSession();
+                if (typeof window.refreshResumeSessionCard === 'function') {
+                    window.refreshResumeSessionCard();
                 }
             }, 100);
         }
@@ -17053,6 +17268,7 @@ function savePracticeProgress() {
             }
 
             const progressData = {
+                sessionId: state.sessionId || Date.now(),
                 questions: state.questions,
                 currentIndex: state.currentIndex,
                 score: state.score,
@@ -17061,10 +17277,14 @@ function savePracticeProgress() {
                 timerSec: state.timerSec,
                 timeSpentArray: state.timeSpentArray,
                 totalTimeSpent: state.totalTimeSpent,
+                activeConfig: state.activeConfig || null,
+                subject: (function(){ var cq = state.questions ? (state.questions[state.currentIndex] || state.questions[0]) : null; return (cq && cq.sub) ? cq.sub : 'कृषि'; })(),
                 updatedAt: Date.now(),
                 device: (window.Capacitor && window.Capacitor.getPlatform) ? (window.Capacitor.getPlatform() === 'android' ? 'Android App' : 'Web Browser') : 'Web Browser'
             };
             KrishiStorage.setItem('krishi_saved_practice', JSON.stringify(progressData));
+            // Mirror into the multi-session history so every abandoned run gets its own card.
+            if (typeof window.upsertUnfinishedSession === 'function') window.upsertUnfinishedSession(progressData);
 
             // Update UI Autosave indicator HUD
             let indicator = document.getElementById('game-autosave-indicator');
@@ -17172,6 +17392,16 @@ function clearPracticeProgress() {
     } catch (e) {
         console.warn("[State Safety] clearPracticeProgress failed safely:", e);
     }
+    // Drop the current session from the multi-session history too, otherwise a run that
+    // just finished (or was discarded) lingers as a resumable card from its last autosave.
+    try {
+        if (typeof window.removeUnfinishedSession === 'function' && state && state.sessionId) {
+            window.removeUnfinishedSession(state.sessionId);
+        }
+    } catch (e) {}
+    // The abandoned-session card must vanish the instant its backing session is cleared
+    // (popup "discard", or a session running to completion).
+    if (typeof window.refreshResumeSessionCard === 'function') window.refreshResumeSessionCard();
 }
 // ==================== GLOBAL TOUCH/CLICK RIPPLE INJECTOR ====================
 // यसले उत्तर छनौट गर्दा औंलाले छोएको ठाउँबाट पानीको लहर फैलाउँछ

@@ -175,11 +175,11 @@
         // celebratory Lottie plays successfully (the CSS fallback would
         // otherwise be skipped, leaving the button its green .selected tint).
         if (el) el.classList.add('glow-correct');
-        if (level === 'off' || level === 'reduced') {
-            return Promise.resolve();
-        }
-        // Full: layer the celebratory Lottie on top of the state colour.
-        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.CORRECT], null);
+        // The per-option green is the answer feedback. The full-screen
+        // celebratory Lottie was removed here — it flashed a faint green wash
+        // across the whole screen (including the edges) for ~0.75s on every
+        // correct answer, which read as a distracting bug.
+        return Promise.resolve();
     }
 
     // --- WRONG ---
@@ -189,11 +189,11 @@
         // decorative fallback. Gating it on Lottie failure meant a successful
         // Lottie left the chosen option showing its green .selected tint.
         if (el) el.classList.add('shake-wrong');
-        if (level === 'off' || level === 'reduced') {
-            return Promise.resolve();
-        }
-        // Full: layer the celebratory Lottie on top of the state colour.
-        return playLottieOrFallback(LOTTIE_ASSET_MAP[EVENT_TYPES.WRONG], null);
+        // The per-option red is the answer feedback. The full-screen
+        // celebratory Lottie was removed here — it flashed a faint red wash
+        // across the whole screen (including the edges) for ~0.6s on every
+        // wrong answer, which read as a distracting bug.
+        return Promise.resolve();
     }
 
     // --- XP MICRO ---

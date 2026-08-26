@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=akheuke" rel="stylesheet">
+    <link href="./index.css?v=2hz93dd" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1576,11 +1576,24 @@
                     <p class="text-[11px] text-slate-500 dark:text-slate-400">Unlock insights, forecast success, and power up your preparation.</p>
                 </div>
                 <!-- Time Range Filter -->
-                <div class="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start md:self-center">
-                    <button id="btn-filter-7" onclick="setAnalyticsFilter(7)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">7 Days</button>
-                    <button id="btn-filter-14" onclick="setAnalyticsFilter(14)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">14 Days</button>
-                    <button id="btn-filter-30" onclick="setAnalyticsFilter(30)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">30 Days</button>
-                    <button id="btn-filter-all" onclick="setAnalyticsFilter('all')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">All Time</button>
+                <div class="flex flex-col gap-2 self-start md:self-center md:items-end">
+                    <div class="flex items-center gap-2">
+                        <canvas id="analytics-filter-sparkline" width="120" height="28" class="w-[120px] h-7 hidden sm:block" title="Daily accuracy trend for the selected range"></canvas>
+                        <div class="flex items-center flex-wrap gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                            <button id="btn-filter-7" onclick="setAnalyticsFilter(7)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">7D</button>
+                            <button id="btn-filter-14" onclick="setAnalyticsFilter(14)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">14D</button>
+                            <button id="btn-filter-30" onclick="setAnalyticsFilter(30)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">30D</button>
+                            <button id="btn-filter-week" onclick="setAnalyticsFilter('week')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">Week</button>
+                            <button id="btn-filter-month" onclick="setAnalyticsFilter('month')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">Month</button>
+                            <button id="btn-filter-all" onclick="setAnalyticsFilter('all')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">All</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <input type="date" id="analytics-custom-from" class="text-[10px] px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
+                        <span class="text-[10px] text-slate-400">→</span>
+                        <input type="date" id="analytics-custom-to" class="text-[10px] px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
+                        <button id="btn-filter-custom" onclick="applyAnalyticsCustomRange()" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 bg-indigo-600 text-white hover:bg-indigo-500 cursor-pointer">Apply</button>
+                    </div>
                 </div>
             </div>
 
@@ -2629,7 +2642,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v185-akheuke (202608260642)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v186-2hz93dd (202608260746)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3854,14 +3867,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=akheuke" defer></script>
-    <script src="./js/elite_3d_engine.js?v=akheuke" defer></script>
-    <script src="./js/canvas_charts.js?v=akheuke" defer></script>
+    <script src="./js/elite_animations_controller.js?v=2hz93dd" defer></script>
+    <script src="./js/elite_3d_engine.js?v=2hz93dd" defer></script>
+    <script src="./js/canvas_charts.js?v=2hz93dd" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=akheuke" defer></script>
-    <script src="./js/sqlite_db.js?v=akheuke" defer></script>
-    <script src="./js/krishi_idb.js?v=akheuke"></script>
-    <script src="./js/app.js?v=akheuke" defer></script>
+    <script src="./js/pwa_helpers.js?v=2hz93dd" defer></script>
+    <script src="./js/sqlite_db.js?v=2hz93dd" defer></script>
+    <script src="./js/krishi_idb.js?v=2hz93dd"></script>
+    <script src="./js/app.js?v=2hz93dd" defer></script>
 
 
     <!--
@@ -3889,8 +3902,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=akheuke" defer></script>
-    <script src="./js/voice_assistant.js?v=akheuke" defer></script>
+<script src="./js/data_safety.js?v=2hz93dd" defer></script>
+    <script src="./js/voice_assistant.js?v=2hz93dd" defer></script>
 </body>
 </html>
 

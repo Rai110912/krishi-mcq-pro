@@ -26,7 +26,21 @@ function drawGrowthChart(){
         if (analyticsUseDemoMode) {
             data = [65, 72, 68, 80, 78, 84, 88];
         } else {
-            data = mockTestScores.length > 0 ? mockTestScores : [0, 0, 0];
+            // mockTestScores may hold legacy bare numbers or {acc, ts} objects.
+            // Filter by the active analytics range using each score's ts; entries
+            // with a null ts (legacy, undated) are always shown so old data still plots.
+            let scores = mockTestScores || [];
+            let range = (typeof getAnalyticsRange === 'function') ? getAnalyticsRange() : null;
+            let fromTs = range ? range.fromTs : null;
+            let toTs = range ? range.toTs : null;
+            data = scores.filter(s => {
+                let ts = (s && typeof s === 'object') ? s.ts : null;
+                if (ts == null) return true;
+                if (fromTs != null && ts < fromTs) return false;
+                if (toTs != null && ts > toTs) return false;
+                return true;
+            }).map(s => (typeof s === 'number') ? s : ((s && s.acc) || 0));
+            if (data.length === 0) data = [0, 0, 0];
             if (data.length === 1) data = [0, data[0]];
         }
         
@@ -117,6 +131,16 @@ function drawRadarChart(){
             subjects = ['Agronomy', 'Soil Science', 'Horticulture', 'Plant Pathology'];
         }
         
+        // When a date range is active, recompute per-subject accuracy from the
+        // date-stamped timingLog instead of the cumulative all-time subjectStats.
+        let rangedSubjectStats = null;
+        if (!analyticsUseDemoMode && typeof analyticsFilterRange !== 'undefined' && analyticsFilterRange !== 'all'
+            && typeof computeSubjectStatsInRange === 'function' && typeof getAnalyticsRange === 'function') {
+            let r = getAnalyticsRange();
+            let m = computeSubjectStatsInRange(r.fromDate, r.toDate);
+            if (Object.keys(m).length > 0) rangedSubjectStats = m;
+        }
+
         let profs = subjects.map(sub => {
             if (analyticsUseDemoMode) {
                 if (sub === 'Agronomy') return 92;
@@ -125,7 +149,8 @@ function drawRadarChart(){
                 if (sub === 'Plant Pathology') return 42;
                 return 60;
             } else {
-                let stats = localData.stats.subjectStats[sub] || {solved:0, correct:0};
+                let src = rangedSubjectStats || localData.stats.subjectStats;
+                let stats = src[sub] || {solved:0, correct:0};
                 return stats.solved > 0 ? Math.round((stats.correct/stats.solved)*100) : 0;
             }
         });
@@ -216,10 +241,17 @@ function drawHeatmapCalendar(){
         if (!container) return;
         container.innerHTML = '';
         const frag = document.createDocumentFragment();
+        // Size the calendar window to the active analytics range (ending at the
+        // range's end date); 'all' keeps the default 105-day view.
+        let range = (typeof getAnalyticsRange === 'function') ? getAnalyticsRange() : null;
+        let windowDays = 105;
+        if (range && range.days != null) {
+            windowDays = Math.max(7, Math.min(range.days, 366));
+        }
+        let endDate = (range && range.toDate) ? new Date(range.toDate + 'T00:00:00') : new Date();
         let dateList = [];
-        let now = new Date();
-        for (let i = 104; i >= 0; i--) {
-            let d = new Date(now.getTime() - i * 24 * 3600 * 1000);
+        for (let i = windowDays - 1; i >= 0; i--) {
+            let d = new Date(endDate.getTime() - i * 24 * 3600 * 1000);
             dateList.push(getLocalDateString(d));
         }
         
@@ -257,7 +289,8 @@ function drawHeatmapCalendar(){
         
         let avgLabel = document.getElementById('avg-heatmap-solve');
         if (avgLabel) {
-            let avg = Math.round((totalActivitySolved / 105) * 10) / 10;
+            let divisor = dateList.length || 1;
+            let avg = Math.round((totalActivitySolved / divisor) * 10) / 10;
             avgLabel.textContent = `${avg} daily avg`;
         }
     }

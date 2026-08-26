@@ -680,6 +680,7 @@ async function loadStaticQuestions() {
             console.error('[IndexedDB] Failed to load custom questions:', e);
         }
         loadTimingData();
+        loadAnalyticsFilter();
         applyAppearanceSettings();
         if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
             applyCustomAppearanceAndLanguageSettings();
@@ -4569,7 +4570,7 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         }
         if(pageId==='page-practice') updatePracticePage();
         if(pageId==='page-profile') refreshProfilePage();
-        if(pageId==='page-analytics') updateEnhancedAnalyticsPage();
+        if(pageId==='page-analytics') { restoreAnalyticsFilterUI(); setAnalyticsFilter(analyticsFilterRange); } // restore custom inputs, highlight active range, then render
         if(pageId==='page-wrong-questions') renderWrongPage();
         if(pageId==='page-settings') loadApiKeyInput();
         if(pageId==='page-file-scan') { toggleAIButtonVisibility(); loadApiKeyInput(); }
@@ -8781,7 +8782,7 @@ function openEditImportModal(idx) {
                     timingLog = stagedTimingLog;
                 }
                 if (stagedMockScores !== null) {
-                    mockTestScores = stagedMockScores;
+                    mockTestScores = normalizeMockScores(stagedMockScores);
                 }
                 
                 saveTimingData(); // थपिएको: timingLog र mockTestScores स्थानीय स्टोरमा सेभ गर्ने
@@ -14469,23 +14470,24 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 checkQuotaAndSave();
             },
             recordMockScore: function(acc) {
-                _mockTestScores.push(acc); 
+                // Store as {acc, ts} so the Growth Chart can be filtered by date range.
+                _mockTestScores.push({acc: acc, ts: Date.now()});
                 if(_mockTestScores.length > 10) _mockTestScores.shift();
                 checkQuotaAndSave();
             },
             loadTimingData: function() {
                 try {
-                    let log = KrishiStorage.getItem('krishi_timingLog'); 
+                    let log = KrishiStorage.getItem('krishi_timingLog');
                     if(log) _timingLog = JSON.parse(log);
-                    let scr = KrishiStorage.getItem('krishi_mockScores'); 
-                    if(scr) _mockTestScores = JSON.parse(scr);
+                    let scr = KrishiStorage.getItem('krishi_mockScores');
+                    if(scr) _mockTestScores = normalizeMockScores(JSON.parse(scr));
                 } catch(e){
                     console.error("[StorageManager] Error loading data:", e);
                 }
             },
             calculatePredictiveScore: function() {
                 if(_mockTestScores.length === 0) return null;
-                let sum = _mockTestScores.reduce((s, x) => s + x, 0);
+                let sum = _mockTestScores.reduce((s, x) => s + ((typeof x === 'number') ? x : ((x && x.acc) || 0)), 0);
                 return Math.round(sum / _mockTestScores.length);
             }
         };
@@ -14496,6 +14498,18 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
     let mockTestScores = KrishiStorageManager.mockTestScores;
     let analyticsUseDemoMode = null;
     let analyticsFilterRange = 'all';
+    let analyticsCustomRange = {from: null, to: null};
+
+    // Coerce a mock-scores array into the {acc, ts} shape. Legacy bare numbers
+    // become {acc:n, ts:null} (ts null = undated = always shown in any range).
+    function normalizeMockScores(arr) {
+        if (!Array.isArray(arr)) return [];
+        return arr.map(x => {
+            if (typeof x === 'number') return {acc: x, ts: null};
+            if (x && typeof x === 'object') return {acc: Number(x.acc) || 0, ts: (x.ts != null ? x.ts : null)};
+            return {acc: 0, ts: null};
+        });
+    }
 
     function saveTimingData() {
         KrishiStorageManager.timingLog = timingLog;
@@ -14528,30 +14542,205 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         showToast(isDemo ? 'Using interactive demo data' : 'Using real statistics');
     }
 
+    const ANALYTICS_BTN_ACTIVE = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-slate-100 cursor-pointer';
+    const ANALYTICS_BTN_INACTIVE = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer';
+
     function setAnalyticsFilter(filter) {
-        analyticsFilterRange = filter;
-        
-        let ranges = ['7', '14', '30', 'all'];
-        ranges.forEach(k => {
+        analyticsFilterRange = String(filter);
+
+        // Preset buttons only; the custom "Apply" button keeps its own styling.
+        let presets = ['7', '14', '30', 'week', 'month', 'all'];
+        presets.forEach(k => {
             let btn = document.getElementById('btn-filter-' + k);
             if(btn) {
-                if(k === String(filter)) {
-                    btn.className = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-slate-100 cursor-pointer';
-                } else {
-                    btn.className = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer';
-                }
+                btn.className = (k === String(filter)) ? ANALYTICS_BTN_ACTIVE : ANALYTICS_BTN_INACTIVE;
             }
         });
 
+        persistAnalyticsFilter();
         updateEnhancedAnalyticsPage();
     }
 
-    function isWithinDays(dateStr, limitDays) {
-        if (!limitDays) return true;
-        let limitMs = limitDays * 24 * 3600 * 1000;
-        let dateMs = new Date(dateStr).getTime();
-        let nowMs = Date.now();
-        return (nowMs - dateMs) <= limitMs;
+    function applyAnalyticsCustomRange() {
+        let fromEl = document.getElementById('analytics-custom-from');
+        let toEl = document.getElementById('analytics-custom-to');
+        if(!fromEl || !toEl) return;
+        let from = fromEl.value, to = toEl.value;
+        if(!from || !to) { showToast('Pick both a start and an end date'); return; }
+        if(from > to) { let t = from; from = to; to = t; fromEl.value = from; toEl.value = to; }
+        analyticsCustomRange = {from: from, to: to};
+        setAnalyticsFilter('custom');
+    }
+
+    function persistAnalyticsFilter() {
+        try {
+            KrishiStorage.setItem('krishi_analyticsFilter', JSON.stringify({range: analyticsFilterRange, custom: analyticsCustomRange}));
+        } catch(e) { /* non-fatal */ }
+    }
+
+    function loadAnalyticsFilter() {
+        try {
+            let raw = KrishiStorage.getItem('krishi_analyticsFilter');
+            if(raw) {
+                let o = JSON.parse(raw);
+                if(o && o.range) analyticsFilterRange = o.range;
+                if(o && o.custom) analyticsCustomRange = o.custom;
+            }
+        } catch(e) { /* non-fatal */ }
+    }
+
+    function restoreAnalyticsFilterUI() {
+        let today = getLocalDateString();
+        let fromEl = document.getElementById('analytics-custom-from');
+        let toEl = document.getElementById('analytics-custom-to');
+        if(fromEl){ fromEl.max = today; if(analyticsCustomRange && analyticsCustomRange.from) fromEl.value = analyticsCustomRange.from; }
+        if(toEl){ toEl.max = today; if(analyticsCustomRange && analyticsCustomRange.to) toEl.value = analyticsCustomRange.to; }
+    }
+
+    // Resolve the active filter into concrete date bounds, a matching "previous"
+    // window for period-over-period comparison, day count, and ms bounds.
+    function getAnalyticsRange() {
+        let today = new Date();
+        let todayStr = getLocalDateString(today);
+        let range = analyticsFilterRange;
+        let fromDate = null, toDate = todayStr, prevFromDate = null, prevToDate = null, days = null, label = 'all time';
+        const DAY = 24 * 3600 * 1000;
+
+        if (range === 'all') {
+            return {fromDate: null, toDate: todayStr, prevFromDate: null, prevToDate: null, days: null, label: 'all time', fromTs: null, toTs: null};
+        } else if (range === 'custom') {
+            fromDate = analyticsCustomRange.from || todayStr;
+            toDate = analyticsCustomRange.to || todayStr;
+            if (fromDate > toDate) { let t = fromDate; fromDate = toDate; toDate = t; }
+            let spanDays = Math.round((new Date(toDate + 'T00:00:00').getTime() - new Date(fromDate + 'T00:00:00').getTime()) / DAY) + 1;
+            days = spanDays;
+            prevToDate = getLocalDateString(new Date(new Date(fromDate + 'T00:00:00').getTime() - DAY));
+            prevFromDate = getLocalDateString(new Date(new Date(fromDate + 'T00:00:00').getTime() - spanDays * DAY));
+            label = 'prior period';
+        } else if (range === 'week') {
+            let dow = today.getDay(); // 0 = Sunday (Nepal week start)
+            let startMs = today.getTime() - dow * DAY;
+            fromDate = getLocalDateString(new Date(startMs));
+            days = dow + 1;
+            prevFromDate = getLocalDateString(new Date(startMs - 7 * DAY));
+            prevToDate = getLocalDateString(new Date(startMs - DAY));
+            label = 'last week';
+        } else if (range === 'month') {
+            let startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+            fromDate = getLocalDateString(startOfMonth);
+            days = Math.round((today.getTime() - startOfMonth.getTime()) / DAY) + 1;
+            let prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+            let prevMonthStart = new Date(prevMonthEnd.getFullYear(), prevMonthEnd.getMonth(), 1);
+            prevFromDate = getLocalDateString(prevMonthStart);
+            prevToDate = getLocalDateString(prevMonthEnd);
+            label = 'last month';
+        } else {
+            let n = parseInt(range) || 7;
+            days = n;
+            fromDate = getLocalDateString(new Date(today.getTime() - (n - 1) * DAY));
+            prevToDate = getLocalDateString(new Date(today.getTime() - n * DAY));
+            prevFromDate = getLocalDateString(new Date(today.getTime() - (2 * n - 1) * DAY));
+            label = 'prev ' + n + 'd';
+        }
+
+        let fromTs = fromDate ? new Date(fromDate + 'T00:00:00').getTime() : null;
+        let toTs = toDate ? new Date(toDate + 'T23:59:59').getTime() : null;
+        return {fromDate, toDate, prevFromDate, prevToDate, days, label, fromTs, toTs};
+    }
+
+    function sumStreakInRange(fromDate, toDate) {
+        let solved = 0, correct = 0;
+        if (!localData || !localData.streak) return {solved, correct};
+        Object.keys(localData.streak).forEach(dateStr => {
+            if ((!fromDate || dateStr >= fromDate) && (!toDate || dateStr <= toDate)) {
+                solved += localData.streak[dateStr].solved || 0;
+                correct += localData.streak[dateStr].correct || 0;
+            }
+        });
+        return {solved, correct};
+    }
+
+    function filterLogsInRange(fromDate, toDate) {
+        if (!fromDate && !toDate) return timingLog.slice();
+        return timingLog.filter(l => (!fromDate || l.date >= fromDate) && (!toDate || l.date <= toDate));
+    }
+
+    function computeSubjectStatsInRange(fromDate, toDate) {
+        let map = {};
+        filterLogsInRange(fromDate, toDate).forEach(l => {
+            let sub = l.subject || 'General';
+            if (!map[sub]) map[sub] = {solved: 0, correct: 0};
+            map[sub].solved++;
+            if (l.correct) map[sub].correct++;
+        });
+        return map;
+    }
+
+    // Mini accuracy sparkline shown next to the range filter.
+    function drawFilterSparkline() {
+        try {
+            let canvas = document.getElementById('analytics-filter-sparkline');
+            if (!canvas) return;
+            let range = getAnalyticsRange();
+            let endDate = range.toDate ? new Date(range.toDate + 'T00:00:00') : new Date();
+            let dayCount = (range.days != null) ? range.days : 30;
+            dayCount = Math.max(2, Math.min(dayCount, 120));
+
+            const DAY = 24 * 3600 * 1000;
+            let vals = [];
+            for (let i = dayCount - 1; i >= 0; i--) {
+                let ds = getLocalDateString(new Date(endDate.getTime() - i * DAY));
+                if (analyticsUseDemoMode) {
+                    let hash = 0;
+                    for (let c = 0; c < ds.length; c++) hash += ds.charCodeAt(c);
+                    vals.push(40 + (hash % 55));
+                } else {
+                    let day = localData.streak[ds];
+                    vals.push((day && day.solved > 0) ? (day.correct / day.solved) * 100 : null);
+                }
+            }
+
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const cssW = Math.max(1, canvas.clientWidth || 120);
+            const cssH = Math.max(1, canvas.clientHeight || 28);
+            const pxW = Math.round(cssW * dpr), pxH = Math.round(cssH * dpr);
+            if (canvas.width !== pxW || canvas.height !== pxH) { canvas.width = pxW; canvas.height = pxH; }
+            let ctx = canvas.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, cssW, cssH);
+
+            let anyData = vals.some(v => v != null);
+            if (!anyData) {
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '8px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('no data', cssW / 2, cssH / 2 + 3);
+                return;
+            }
+
+            let plot = vals.map(v => v == null ? 0 : v);
+            let pad = 3;
+            let n = plot.length;
+            let stride = n > 1 ? (cssW - pad * 2) / (n - 1) : 0;
+            ctx.beginPath();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#4f46e5';
+            plot.forEach((v, i) => {
+                let x = pad + i * stride;
+                let y = cssH - pad - (v / 100) * (cssH - pad * 2);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            let lx = pad + (n - 1) * stride;
+            let ly = cssH - pad - (plot[n - 1] / 100) * (cssH - pad * 2);
+            ctx.beginPath();
+            ctx.arc(lx, ly, 2, 0, Math.PI * 2);
+            ctx.fillStyle = '#4f46e5';
+            ctx.fill();
+        } catch (e) {
+            console.warn('Failed drawing filter sparkline:', e);
+        }
     }
 
     function updateEnhancedAnalyticsPage(){
@@ -14589,23 +14778,23 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         // Active range filtering variables
         let solved = 0;
         let correct = 0;
-        let limitDays = analyticsFilterRange === 'all' ? null : parseInt(analyticsFilterRange);
+        let analyticsRange = getAnalyticsRange();
+        let isRanged = analyticsFilterRange !== 'all';
 
         if (analyticsUseDemoMode) {
             solved = 148;
             correct = 124;
-            if (limitDays === 7) { solved = 35; correct = 31; }
-            else if (limitDays === 14) { solved = 68; correct = 58; }
-            else if (limitDays === 30) { solved = 112; correct = 95; }
+            if (isRanged && analyticsRange.days != null) {
+                let dd = analyticsRange.days;
+                if (dd <= 7) { solved = 35; correct = 31; }
+                else if (dd <= 14) { solved = 68; correct = 58; }
+                else if (dd <= 30) { solved = 112; correct = 95; }
+            }
         } else {
-            if (limitDays) {
-                let cutOffDate = new Date(Date.now() - limitDays * 24 * 3600 * 1000).toISOString().slice(0,10);
-                Object.keys(localData.streak).forEach(dateStr => {
-                    if (dateStr >= cutOffDate) {
-                        solved += localData.streak[dateStr].solved || 0;
-                        correct += localData.streak[dateStr].correct || 0;
-                    }
-                });
+            if (isRanged) {
+                let s = sumStreakInRange(analyticsRange.fromDate, analyticsRange.toDate);
+                solved = s.solved;
+                correct = s.correct;
             } else {
                 solved = localData.stats.totalSolved || 0;
                 correct = localData.stats.totalCorrect || 0;
@@ -14691,18 +14880,31 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
 
             let statAccuracyTrend = document.getElementById('stat-accuracy-trend');
             if (statAccuracyTrend) {
-                if (accPercent >= 80) {
-                    statAccuracyTrend.textContent = '▲ Elite';
+                if (analyticsUseDemoMode) {
+                    statAccuracyTrend.textContent = '▲ +4.0 pts vs prev';
                     statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-emerald-600';
-                } else if (accPercent >= 50) {
-                    statAccuracyTrend.textContent = '▲ Moderate';
-                    statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-amber-500';
-                } else if (solved > 0) {
-                    statAccuracyTrend.textContent = '▼ Focus Required';
-                    statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-rose-500';
-                } else {
-                    statAccuracyTrend.textContent = '--';
+                } else if (!isRanged || !analyticsRange.prevFromDate) {
+                    statAccuracyTrend.textContent = '— all-time';
                     statAccuracyTrend.className = 'font-bold text-slate-400';
+                } else {
+                    let prev = sumStreakInRange(analyticsRange.prevFromDate, analyticsRange.prevToDate);
+                    if (prev.solved === 0) {
+                        statAccuracyTrend.textContent = '— no prior data';
+                        statAccuracyTrend.className = 'font-bold text-slate-400';
+                    } else {
+                        let prevAcc = (prev.correct / prev.solved) * 100;
+                        let delta = Math.round((accPercent - prevAcc) * 10) / 10;
+                        if (delta > 0) {
+                            statAccuracyTrend.textContent = `▲ +${delta} pts vs ${analyticsRange.label}`;
+                            statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-emerald-600';
+                        } else if (delta < 0) {
+                            statAccuracyTrend.textContent = `▼ ${delta} pts vs ${analyticsRange.label}`;
+                            statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-rose-500';
+                        } else {
+                            statAccuracyTrend.textContent = `→ no change vs ${analyticsRange.label}`;
+                            statAccuracyTrend.className = 'font-bold text-slate-400';
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -14727,11 +14929,10 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             console.warn("Failed updating response breakdown segment:", e);
         }
 
-        // Times stats setup
+        // Times stats setup — reuse the resolved range
         let logs = timingLog;
-        if (limitDays) {
-            let cutOffDate = new Date(Date.now() - limitDays * 24 * 3600 * 1000).toISOString().slice(0,10);
-            logs = timingLog.filter(log => log.date >= cutOffDate);
+        if (isRanged) {
+            logs = filterLogsInRange(analyticsRange.fromDate, analyticsRange.toDate);
         }
 
         let avgTimeStr = '--';
@@ -14790,6 +14991,21 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             console.warn("Failed updating recommendations card:", e);
         }
 
+        // Subject stats source — range-aware when a filter is active. Falls back
+        // to cumulative all-time subjectStats when there are no timingLog entries
+        // retained in-range (old users beyond the 500-entry cap).
+        let rangedSubjectLimited = false;
+        let subjectStatsSource;
+        if (isRanged) {
+            subjectStatsSource = computeSubjectStatsInRange(analyticsRange.fromDate, analyticsRange.toDate);
+            if (Object.keys(subjectStatsSource).length === 0) {
+                subjectStatsSource = localData.stats.subjectStats;
+                rangedSubjectLimited = true;
+            }
+        } else {
+            subjectStatsSource = localData.stats.subjectStats;
+        }
+
         // Diagnoses prep
         let weakList = [];
         let strongList = [];
@@ -14807,7 +15023,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         } else {
             let subjects = getAllSubjects();
             subjects.forEach(sub => {
-                let s = localData.stats.subjectStats[sub] || {solved:0, correct:0};
+                let s = subjectStatsSource[sub] || {solved:0, correct:0};
                 if (s.solved > 0) {
                     let acc = Math.round((s.correct / s.solved) * 100);
                     let dynamicWeakThreshold = getPlannerSettings().weakThreshold || 60;
@@ -14876,7 +15092,10 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             let subGridEl = document.getElementById('analytics-subjects-v2');
             if (subGridEl) {
                 let subjects = getAllSubjects();
-                subGridEl.innerHTML = subjects.map(sub => {
+                let _gridNote = (!analyticsUseDemoMode && rangedSubjectLimited)
+                    ? '<p class="text-[10px] text-amber-500 dark:text-amber-400 mb-1">Showing all-time totals — limited per-subject history in this range.</p>'
+                    : '';
+                subGridEl.innerHTML = _gridNote + subjects.map(sub => {
                     let solvedCount = 0;
                     let correctCount = 0;
                     
@@ -14887,7 +15106,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                         else if (sub === 'Plant Pathology') { solvedCount = 12; correctCount = 5; }
                         else { solvedCount = 10; correctCount = 6; }
                     } else {
-                        let s = localData.stats.subjectStats[sub] || {solved:0, correct:0};
+                        let s = subjectStatsSource[sub] || {solved:0, correct:0};
                         solvedCount = s.solved;
                         correctCount = s.correct;
                     }
@@ -14935,7 +15154,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             mediumSolved = 60; mediumCorrect = 49;
             hardSolved = 38; hardCorrect = 22;
         } else {
-            timingLog.forEach(log => {
+            logs.forEach(log => {
                 let diff = (log.difficulty || 'Easy').toLowerCase();
                 let isCorr = log.correct !== undefined ? log.correct : true;
                 if (diff === 'easy') {
@@ -14997,6 +15216,12 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 drawHeatmapCalendar();
             } catch (e) {
                 console.warn("Failed drawing heatmap calendar:", e);
+            }
+
+            try {
+                drawFilterSparkline();
+            } catch (e) {
+                console.warn("Failed drawing filter sparkline:", e);
             }
         }, 150);
 

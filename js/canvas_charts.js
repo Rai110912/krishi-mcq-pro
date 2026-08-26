@@ -44,62 +44,100 @@ function drawGrowthChart(){
             if (data.length === 1) data = [0, data[0]];
         }
         
-        // Draw grid lines
-        ctx.strokeStyle = '#f1f5f9';
-        if (document.documentElement.classList.contains('dark')) {
-            ctx.strokeStyle = '#334155';
-        }
-        ctx.lineWidth = 1;
-        for (let i = 1; i < 4; i++) {
-            let gy = h * i / 4;
+        // ---- Professional line chart: axes, smooth curve, gradient, rise-in animation ----
+        let padL = 26, padR = 14, padT = 22, padB = 20;
+        let plotW = Math.max(1, w - padL - padR);
+        let plotH = Math.max(1, h - padT - padB);
+        let baseY = padT + plotH;
+        let isDark = document.documentElement.classList.contains('dark');
+        let n = data.length;
+        let xAt = i => padL + (n > 1 ? (plotW * i / (n - 1)) : plotW / 2);
+        let yAt = v => padT + plotH - (Math.max(0, Math.min(100, v)) / 100) * plotH;
+
+        function smoothPath(pts) {
             ctx.beginPath();
-            ctx.moveTo(w * 0.05, gy);
-            ctx.lineTo(w * 0.95, gy);
-            ctx.stroke();
-        }
-        
-        // Draw smooth curve with gradient
-        if (data.some(val => val > 0) || analyticsUseDemoMode) {
-            let paddingX = 20;
-            let paddingY = 20;
-            let xStride = (w - paddingX * 2) / (data.length - 1);
-            
-            ctx.beginPath();
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = '#4f46e5'; // elegant purple curve
-            
-            let points = [];
-            data.forEach((val, i) => {
-                let rx = paddingX + i * xStride;
-                let ry = h - paddingY - (val / 100) * (h - paddingY * 2);
-                points.push({x: rx, y: ry});
-            });
-            
-            ctx.moveTo(points[0].x, points[0].y);
-            for (let i = 1; i < points.length; i++) {
-                ctx.lineTo(points[i].x, points[i].y);
+            if (!pts.length) return;
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 0; i < pts.length - 1; i++) {
+                let p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+                let c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+                let c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+                ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
             }
-            ctx.stroke();
-            
-            // Fill area under curve
-            ctx.lineTo(points[points.length - 1].x, h - paddingY);
-            ctx.lineTo(points[0].x, h - paddingY);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(79, 70, 229, 0.05)';
-            ctx.fill();
-            
-            // Draw dots
-            ctx.fillStyle = '#4f46e5';
-            points.forEach(pt => {
-                ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-                ctx.fill();
+        }
+
+        function drawFrame(t) {
+            ctx.clearRect(0, 0, w, h);
+            ctx.lineWidth = 1; ctx.font = '8px sans-serif';
+            ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+            [0, 25, 50, 75, 100].forEach(pct => {
+                let gy = yAt(pct);
+                ctx.strokeStyle = isDark ? '#1e293b' : '#f1f5f9';
+                ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(w - padR, gy); ctx.stroke();
+                if (pct % 50 === 0) { ctx.fillStyle = isDark ? '#475569' : '#94a3b8'; ctx.fillText(pct, padL - 4, gy); }
             });
+            ctx.save(); ctx.setLineDash([3, 3]); ctx.strokeStyle = isDark ? '#334155' : '#cbd5e1';
+            ctx.beginPath(); let ty = yAt(50); ctx.moveTo(padL, ty); ctx.lineTo(w - padR, ty); ctx.stroke(); ctx.restore();
+
+            let hasData = data.some(v => v > 0) || analyticsUseDemoMode;
+            if (!hasData) {
+                ctx.fillStyle = isDark ? '#64748b' : '#94a3b8';
+                ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('Take multiple Mock tests to render curve', w / 2, h / 2);
+                return;
+            }
+            let pts = data.map((v, i) => ({ x: xAt(i), y: baseY - (baseY - yAt(v)) * t, v: v }));
+
+            smoothPath(pts);
+            ctx.lineTo(pts[pts.length - 1].x, baseY);
+            ctx.lineTo(pts[0].x, baseY);
+            ctx.closePath();
+            let grad = ctx.createLinearGradient(0, padT, 0, baseY);
+            grad.addColorStop(0, 'rgba(79,70,229,0.28)');
+            grad.addColorStop(1, 'rgba(79,70,229,0.02)');
+            ctx.fillStyle = grad; ctx.fill();
+
+            ctx.save();
+            ctx.shadowColor = 'rgba(79,70,229,0.35)'; ctx.shadowBlur = 6;
+            ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+            ctx.lineWidth = 2.5; ctx.strokeStyle = '#4f46e5';
+            smoothPath(pts); ctx.stroke();
+            ctx.restore();
+
+            ctx.fillStyle = isDark ? '#475569' : '#94a3b8';
+            ctx.font = '7px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+            pts.forEach((pt, i) => { if (n <= 8 || i === 0 || i === n - 1) ctx.fillText(String(i + 1), pt.x, baseY + 4); });
+            pts.forEach(pt => { ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2); ctx.fillStyle = '#4f46e5'; ctx.fill(); });
+            let last = pts[pts.length - 1];
+            ctx.beginPath(); ctx.arc(last.x, last.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#4f46e5'; ctx.fill();
+            ctx.beginPath(); ctx.arc(last.x, last.y, 5, 0, Math.PI * 2); ctx.strokeStyle = isDark ? '#0f172a' : '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+            if (t >= 1) {
+                let label = Math.round(last.v) + '%';
+                ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+                let tw = ctx.measureText(label).width + 8;
+                let bx = Math.min(w - padR - tw / 2, Math.max(padL + tw / 2, last.x)), by = last.y - 8;
+                ctx.fillStyle = '#4f46e5';
+                if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx - tw / 2, by - 12, tw, 13, 3); ctx.fill(); }
+                else { ctx.fillRect(bx - tw / 2, by - 12, tw, 13); }
+                ctx.fillStyle = '#ffffff'; ctx.fillText(label, bx, by);
+            }
+        }
+
+        let reduceMotion = false;
+        try { reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) {}
+        if (growthCanvas.__growthRAF) { cancelAnimationFrame(growthCanvas.__growthRAF); growthCanvas.__growthRAF = null; }
+        if (reduceMotion || ps.perfMode === 'battery') {
+            drawFrame(1);
         } else {
-            ctx.fillStyle = '#64748b';
-            ctx.font = '10px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('Take multiple Mock tests to render curve', w/2, h/2);
+            let startT = null, DUR = 650;
+            let step = (now) => {
+                if (startT == null) startT = now;
+                let p = Math.min(1, (now - startT) / DUR);
+                drawFrame(1 - Math.pow(1 - p, 3));
+                if (p < 1) growthCanvas.__growthRAF = requestAnimationFrame(step);
+                else growthCanvas.__growthRAF = null;
+            };
+            growthCanvas.__growthRAF = requestAnimationFrame(step);
         }
     }
 
@@ -160,77 +198,77 @@ let cy = h / 2 - 5;
 let maxRadius = Math.min(w, h) / 2 - 25;
 let numAxes = subjects.length > 0 ? subjects.length : 4; // Fallback to 4 to avoid division-by-zeroy
         
-        ctx.strokeStyle = '#e2e8f0';
-        if (document.documentElement.classList.contains('dark')) {
-            ctx.strokeStyle = '#334155';
-        }
-        ctx.lineWidth = 1;
-        
-        for (let ring = 1; ring <= 4; ring++) {
-            let r = maxRadius * ring / 4;
-            ctx.beginPath();
-            for (let i = 0; i < numAxes; i++) {
-                let angle = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
-                let rx = cx + r * Math.cos(angle);
-                let ry = cy + r * Math.sin(angle);
-                if (i === 0) ctx.moveTo(rx, ry);
-                else ctx.lineTo(rx, ry);
+        let isDark = document.documentElement.classList.contains('dark');
+        let gridColor = isDark ? '#334155' : '#e2e8f0';
+
+        function radarFrame(t) {
+            ctx.clearRect(0, 0, w, h);
+            for (let ring = 4; ring >= 1; ring--) {
+                let r = maxRadius * ring / 4;
+                ctx.beginPath();
+                for (let i = 0; i < numAxes; i++) {
+                    let a = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
+                    let rx = cx + r * Math.cos(a), ry = cy + r * Math.sin(a);
+                    if (i === 0) ctx.moveTo(rx, ry); else ctx.lineTo(rx, ry);
+                }
+                ctx.closePath();
+                ctx.fillStyle = ring % 2 === 0 ? (isDark ? 'rgba(51,65,85,0.18)' : 'rgba(241,245,249,0.6)') : 'transparent';
+                ctx.fill();
+                ctx.strokeStyle = gridColor; ctx.lineWidth = 1; ctx.stroke();
             }
+            ctx.font = '7px sans-serif';
+            subjects.forEach((sub, i) => {
+                let a = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
+                let rx = cx + maxRadius * Math.cos(a), ry = cy + maxRadius * Math.sin(a);
+                ctx.strokeStyle = gridColor; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(rx, ry); ctx.stroke();
+                let ld = maxRadius + 14;
+                let lx = cx + ld * Math.cos(a), ly = cy + ld * Math.sin(a);
+                ctx.textAlign = 'center';
+                if (Math.cos(a) > 0.1) ctx.textAlign = 'left';
+                else if (Math.cos(a) < -0.1) ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+                ctx.fillText(sub.substring(0, 10), lx, ly);
+            });
+            let poly = profs.map((prof, i) => {
+                let a = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
+                let r = maxRadius * (prof / 100) * t;
+                return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+            });
+            ctx.beginPath();
+            poly.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
             ctx.closePath();
+            let rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxRadius);
+            rg.addColorStop(0, 'rgba(99,102,241,0.30)');
+            rg.addColorStop(1, 'rgba(79,70,229,0.12)');
+            ctx.fillStyle = rg; ctx.fill();
+            ctx.save();
+            ctx.shadowColor = 'rgba(79,70,229,0.4)'; ctx.shadowBlur = 6;
+            ctx.strokeStyle = '#4f46e5'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
             ctx.stroke();
+            ctx.restore();
+            poly.forEach(p => {
+                ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.fillStyle = '#4f46e5'; ctx.fill();
+                ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.strokeStyle = isDark ? '#0f172a' : '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+            });
         }
-        
-        ctx.font = '7px sans-serif';
-        ctx.fillStyle = '#64748b';
-        subjects.forEach((sub, i) => {
-            let angle = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
-            let rx = cx + maxRadius * Math.cos(angle);
-            let ry = cy + maxRadius * Math.sin(angle);
-            
-            ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.lineTo(rx, ry);
-            ctx.stroke();
-            
-            let labelDistance = maxRadius + 14;
-            let lx = cx + labelDistance * Math.cos(angle);
-            let ly = cy + labelDistance * Math.sin(angle);
-            
-            ctx.textAlign = 'center';
-            if (Math.cos(angle) > 0.1) ctx.textAlign = 'left';
-            else if (Math.cos(angle) < -0.1) ctx.textAlign = 'right';
-            
-            ctx.fillText(sub.substring(0, 10), lx, ly);
-        });
-        
-        ctx.beginPath();
-        profs.forEach((prof, i) => {
-            let angle = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
-            let r = maxRadius * (prof / 100);
-            let rx = cx + r * Math.cos(angle);
-            let ry = cy + r * Math.sin(angle);
-            if (i === 0) ctx.moveTo(rx, ry);
-            else ctx.lineTo(rx, ry);
-        });
-        ctx.closePath();
-        
-        ctx.strokeStyle = '#4f46e5'; 
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        ctx.fillStyle = 'rgba(79, 70, 229, 0.12)';
-        ctx.fill();
-        
-        profs.forEach((prof, i) => {
-            let angle = (i * 2 * Math.PI / numAxes) - Math.PI / 2;
-            let r = maxRadius * (prof / 100);
-            let rx = cx + r * Math.cos(angle);
-            let ry = cy + r * Math.sin(angle);
-            ctx.beginPath();
-            ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = '#4f46e5';
-            ctx.fill();
-        });
+        let reduceMotionR = false;
+        try { reduceMotionR = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) {}
+        if (radarCanvas.__radarRAF) { cancelAnimationFrame(radarCanvas.__radarRAF); radarCanvas.__radarRAF = null; }
+        if (reduceMotionR || ps.perfMode === 'battery') {
+            radarFrame(1);
+        } else {
+            let st = null, DUR = 600;
+            let step = (now) => {
+                if (st == null) st = now;
+                let p = Math.min(1, (now - st) / DUR);
+                radarFrame(1 - Math.pow(1 - p, 3));
+                if (p < 1) radarCanvas.__radarRAF = requestAnimationFrame(step);
+                else radarCanvas.__radarRAF = null;
+            };
+            radarCanvas.__radarRAF = requestAnimationFrame(step);
+        }
     }
 
 function drawHeatmapCalendar(){
@@ -274,14 +312,14 @@ function drawHeatmapCalendar(){
             totalActivitySolved += activity;
             if (activity > 0) activeDays++;
             
-            let colorClass = 'bg-slate-100 dark:bg-slate-800'; 
-            if (activity > 0 && activity <= 3) colorClass = 'bg-emerald-200 dark:bg-emerald-950';    
-            else if (activity > 3 && activity <= 7) colorClass = 'bg-emerald-450 dark:bg-emerald-800'; 
-            else if (activity > 7 && activity <= 12) colorClass = 'bg-emerald-650 dark:bg-emerald-650'; 
-            else if (activity > 12) colorClass = 'bg-emerald-850 dark:bg-emerald-450';               
-            
+            let colorClass = 'bg-slate-100 dark:bg-slate-800';
+            if (activity > 0 && activity <= 3) colorClass = 'bg-emerald-200 dark:bg-emerald-900';
+            else if (activity > 3 && activity <= 7) colorClass = 'bg-emerald-400 dark:bg-emerald-700';
+            else if (activity > 7 && activity <= 12) colorClass = 'bg-emerald-500 dark:bg-emerald-500';
+            else if (activity > 12) colorClass = 'bg-emerald-600 dark:bg-emerald-400 ring-1 ring-emerald-300/60 dark:ring-emerald-300/40';
+
             let square = document.createElement('div');
-            square.className = `w-2 h-2 rounded-xs ${colorClass} transition-all duration-300 hover:scale-125 cursor-help`;
+            square.className = `w-2 h-2 rounded-[2px] ${colorClass} transition-transform duration-200 hover:scale-150 hover:ring-2 hover:ring-emerald-400/50 cursor-help`;
             square.title = `${dateStr}: ${activity} questions solved`;
             frag.appendChild(square);
         });

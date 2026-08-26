@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=2hz93dd" rel="stylesheet">
+    <link href="./index.css?v=dmrsx5g" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1576,24 +1576,25 @@
                     <p class="text-[11px] text-slate-500 dark:text-slate-400">Unlock insights, forecast success, and power up your preparation.</p>
                 </div>
                 <!-- Time Range Filter -->
-                <div class="flex flex-col gap-2 self-start md:self-center md:items-end">
-                    <div class="flex items-center gap-2">
-                        <canvas id="analytics-filter-sparkline" width="120" height="28" class="w-[120px] h-7 hidden sm:block" title="Daily accuracy trend for the selected range"></canvas>
-                        <div class="flex items-center flex-wrap gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
-                            <button id="btn-filter-7" onclick="setAnalyticsFilter(7)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">7D</button>
-                            <button id="btn-filter-14" onclick="setAnalyticsFilter(14)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">14D</button>
-                            <button id="btn-filter-30" onclick="setAnalyticsFilter(30)" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">30D</button>
-                            <button id="btn-filter-week" onclick="setAnalyticsFilter('week')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">Week</button>
-                            <button id="btn-filter-month" onclick="setAnalyticsFilter('month')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">Month</button>
-                            <button id="btn-filter-all" onclick="setAnalyticsFilter('all')" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300">All</button>
-                        </div>
+                <div class="flex flex-col gap-2 w-full md:w-auto self-stretch md:self-center md:items-end">
+                    <!-- Preset chips: horizontal scroll on small screens, larger touch targets -->
+                    <div class="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl overflow-x-auto w-full md:w-auto" style="scrollbar-width:none; -webkit-overflow-scrolling:touch;">
+                        <button id="btn-filter-7" onclick="setAnalyticsFilter(7)" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">7D</button>
+                        <button id="btn-filter-14" onclick="setAnalyticsFilter(14)" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">14D</button>
+                        <button id="btn-filter-30" onclick="setAnalyticsFilter(30)" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">30D</button>
+                        <button id="btn-filter-week" onclick="setAnalyticsFilter('week')" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">Week</button>
+                        <button id="btn-filter-month" onclick="setAnalyticsFilter('month')" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">Month</button>
+                        <button id="btn-filter-all" onclick="setAnalyticsFilter('all')" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300">All</button>
                     </div>
-                    <div class="flex items-center gap-1.5">
-                        <input type="date" id="analytics-custom-from" class="text-[10px] px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
-                        <span class="text-[10px] text-slate-400">→</span>
-                        <input type="date" id="analytics-custom-to" class="text-[10px] px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
-                        <button id="btn-filter-custom" onclick="applyAnalyticsCustomRange()" class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 bg-indigo-600 text-white hover:bg-indigo-500 cursor-pointer">Apply</button>
+                    <!-- Custom range: inputs share width on mobile, bigger tap targets -->
+                    <div class="flex items-center gap-1.5 w-full md:w-auto">
+                        <input type="date" id="analytics-custom-from" class="flex-1 min-w-0 md:flex-none text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
+                        <span class="text-[10px] text-slate-400 shrink-0">→</span>
+                        <input type="date" id="analytics-custom-to" class="flex-1 min-w-0 md:flex-none text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200">
+                        <button id="btn-filter-custom" onclick="applyAnalyticsCustomRange()" class="shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300 bg-indigo-600 text-white hover:bg-indigo-500 cursor-pointer">Apply</button>
                     </div>
+                    <!-- Trend sparkline: full-width strip, now visible on mobile too -->
+                    <canvas id="analytics-filter-sparkline" height="32" class="w-full md:w-[150px] h-8 md:h-7" title="Daily accuracy trend for the selected range"></canvas>
                 </div>
             </div>
 
@@ -1655,6 +1656,15 @@
                         <div class="inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase mb-3 shadow-sm transition-all duration-300" id="readiness-badge">
                             High Risk
                         </div>
+
+                        <!-- Pass-mark framing (Phase 3) -->
+                        <p id="readiness-passline" class="hidden text-[9px] font-bold mb-2"></p>
+
+                        <!-- Readiness pillar breakdown (what actually drives the score) -->
+                        <div id="readiness-pillars" class="hidden space-y-1.5 text-left mb-2"></div>
+                        <p id="readiness-weaklink" class="hidden text-[9px] font-bold text-rose-500 dark:text-rose-400 mb-1"></p>
+                        <!-- Reliability + trajectory meta (Phase 3) -->
+                        <p id="readiness-meta" class="hidden text-[8px] font-semibold text-slate-400 dark:text-slate-500"></p>
                     </div>
                     <p class="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed italic border-t pt-2 border-dashed border-slate-200 dark:border-slate-800" id="readiness-summary">
                         Solve more questions to build your first intelligence report.
@@ -1915,10 +1925,10 @@
                             <span>Less</span>
                             <div class="flex gap-1">
                                 <span class="h-2 w-2 rounded bg-slate-100 dark:bg-slate-800"></span>
-                                <span class="h-2 w-2 rounded bg-emerald-200 dark:bg-emerald-950"></span>
-                                <span class="h-2 w-2 rounded bg-emerald-450 dark:bg-emerald-800"></span>
-                                <span class="h-2 w-2 rounded bg-emerald-650 dark:bg-emerald-650"></span>
-                                <span class="h-2 w-2 rounded bg-emerald-850 dark:bg-emerald-450"></span>
+                                <span class="h-2 w-2 rounded bg-emerald-200 dark:bg-emerald-900"></span>
+                                <span class="h-2 w-2 rounded bg-emerald-400 dark:bg-emerald-700"></span>
+                                <span class="h-2 w-2 rounded bg-emerald-500 dark:bg-emerald-500"></span>
+                                <span class="h-2 w-2 rounded bg-emerald-600 dark:bg-emerald-400"></span>
                             </div>
                             <span>More</span>
                 </div>
@@ -2642,7 +2652,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v186-2hz93dd (202608260746)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v187-dmrsx5g (202608261033)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3867,14 +3877,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=2hz93dd" defer></script>
-    <script src="./js/elite_3d_engine.js?v=2hz93dd" defer></script>
-    <script src="./js/canvas_charts.js?v=2hz93dd" defer></script>
+    <script src="./js/elite_animations_controller.js?v=dmrsx5g" defer></script>
+    <script src="./js/elite_3d_engine.js?v=dmrsx5g" defer></script>
+    <script src="./js/canvas_charts.js?v=dmrsx5g" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=2hz93dd" defer></script>
-    <script src="./js/sqlite_db.js?v=2hz93dd" defer></script>
-    <script src="./js/krishi_idb.js?v=2hz93dd"></script>
-    <script src="./js/app.js?v=2hz93dd" defer></script>
+    <script src="./js/pwa_helpers.js?v=dmrsx5g" defer></script>
+    <script src="./js/sqlite_db.js?v=dmrsx5g" defer></script>
+    <script src="./js/krishi_idb.js?v=dmrsx5g"></script>
+    <script src="./js/app.js?v=dmrsx5g" defer></script>
 
 
     <!--
@@ -3902,8 +3912,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=2hz93dd" defer></script>
-    <script src="./js/voice_assistant.js?v=2hz93dd" defer></script>
+<script src="./js/data_safety.js?v=dmrsx5g" defer></script>
+    <script src="./js/voice_assistant.js?v=dmrsx5g" defer></script>
 </body>
 </html>
 

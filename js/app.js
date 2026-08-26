@@ -14542,8 +14542,8 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         showToast(isDemo ? 'Using interactive demo data' : 'Using real statistics');
     }
 
-    const ANALYTICS_BTN_ACTIVE = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-slate-100 cursor-pointer';
-    const ANALYTICS_BTN_INACTIVE = 'px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer';
+    const ANALYTICS_BTN_ACTIVE = 'shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300 bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-slate-100 cursor-pointer';
+    const ANALYTICS_BTN_INACTIVE = 'shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer';
 
     function setAnalyticsFilter(filter) {
         analyticsFilterRange = String(filter);
@@ -14556,6 +14556,14 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 btn.className = (k === String(filter)) ? ANALYTICS_BTN_ACTIVE : ANALYTICS_BTN_INACTIVE;
             }
         });
+
+        // Ring the custom "Apply" button when a custom range is the active filter,
+        // so mobile users can see none of the presets are selected.
+        let customBtn = document.getElementById('btn-filter-custom');
+        if(customBtn) {
+            let base = 'shrink-0 px-3 py-2 text-[11px] font-bold rounded-lg transition-all duration-300 cursor-pointer bg-indigo-600 text-white hover:bg-indigo-500';
+            customBtn.className = base + (String(filter) === 'custom' ? ' ring-2 ring-indigo-300 dark:ring-indigo-500' : '');
+        }
 
         persistAnalyticsFilter();
         updateEnhancedAnalyticsPage();
@@ -14801,12 +14809,71 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             }
         }
 
-        // Exam Readiness Score
+        // Exam Readiness Score v2 — composite predictor (NOT raw accuracy).
+        // Blends: difficulty-weighted accuracy, syllabus coverage, recent mock
+        // performance, and consistency. Weights auto-redistribute when a signal
+        // is unavailable (e.g. no mocks yet). Volume shrinkage on the accuracy
+        // pillar + coverage keep tiny samples (2/2) from reading as "Ready".
         let readinessPercent = 0;
+        let readinessPillars = null;
+        let readinessTrend = null; // {trendPts, projDays} — Phase 3 trajectory
         if (analyticsUseDemoMode) {
             readinessPercent = 84;
-        } else {
-            readinessPercent = solved > 0 ? Math.round((correct / solved) * 100) : 0;
+            readinessPillars = { accuracy: 82, coverage: 71, mock: 88, consistency: 80, pace: 76 };
+            readinessTrend = { trendPts: 4.2, projDays: null };
+        } else if (solved > 0) {
+            const RK = 12; // pseudo-attempts: damps low volume, fades as volume grows
+            // Pillar 1: difficulty-weighted accuracy (Easy×1, Medium×1.5, Hard×2)
+            let logs = isRanged ? filterLogsInRange(analyticsRange.fromDate, analyticsRange.toDate) : timingLog;
+            let dwCorr = 0, dwTot = 0;
+            (logs || []).forEach(l => {
+                let wgt = l.difficulty === 'Hard' ? 2 : (l.difficulty === 'Medium' ? 1.5 : 1);
+                dwTot += wgt; if (l.correct) dwCorr += wgt;
+            });
+            let accPillar = dwTot > 0 ? (100 * dwCorr) / (dwTot + RK) : (100 * correct) / (solved + RK);
+            // Pillar 2: syllabus coverage (soft credit up to 8 Q per subject)
+            let subjSrc = localData.stats.subjectStats;
+            if (isRanged) { let m = computeSubjectStatsInRange(analyticsRange.fromDate, analyticsRange.toDate); if (Object.keys(m).length) subjSrc = m; }
+            let allSubs = (typeof getAllSubjects === 'function') ? getAllSubjects() : [];
+            let coverage = 0;
+            if (allSubs.length) { allSubs.forEach(s => { coverage += Math.min(1, ((subjSrc[s] && subjSrc[s].solved) || 0) / 8); }); coverage = (coverage / allSubs.length) * 100; }
+            // Pillar 3: recent mock accuracy (last 3, range-filtered by ts)
+            let mocks = normalizeMockScores(mockTestScores).filter(m => !isRanged || m.ts == null || ((analyticsRange.fromTs == null || m.ts >= analyticsRange.fromTs) && (analyticsRange.toTs == null || m.ts <= analyticsRange.toTs)));
+            let mockAvail = mocks.length > 0;
+            let mockAcc = mockAvail ? (mocks.slice(-3).reduce((a, m) => a + m.acc, 0) / Math.min(mocks.length, 3)) : 0;
+            // Pillar 4: consistency (recent active days, window capped at 30)
+            let consWindow = Math.min((analyticsRange && analyticsRange.days) || 30, 30);
+            let consEnd = (analyticsRange && analyticsRange.toDate) ? new Date(analyticsRange.toDate + 'T00:00:00') : new Date();
+            let activeDays = 0;
+            for (let i = 0; i < consWindow; i++) { let k = getLocalDateString(new Date(consEnd.getTime() - i * 86400000)); if (localData.streak[k] && localData.streak[k].solved > 0) activeDays++; }
+            let consistency = Math.min(1, activeDays / consWindow) * 100;
+            // Pillar 5: pace — the exam is timed, so speed matters (target ≈60s/Q)
+            const TARGET_SEC = 60;
+            let paceLogs = (logs || []).filter(l => l.timeSec > 0);
+            let paceAvail = paceLogs.length >= 3;
+            let avgSec = paceAvail ? (paceLogs.reduce((a, l) => a + l.timeSec, 0) / paceLogs.length) : 0;
+            let pace = paceAvail ? Math.max(0, Math.min(100, Math.round((TARGET_SEC / avgSec) * 100))) : 0;
+            // Weighted blend with auto-redistribution over available pillars
+            let parts = [{ w: 0.30, v: accPillar }, { w: 0.10, v: consistency }];
+            if (allSubs.length) parts.push({ w: 0.20, v: coverage });
+            if (mockAvail) parts.push({ w: 0.35, v: mockAcc });
+            if (paceAvail) parts.push({ w: 0.05, v: pace });
+            let totW = parts.reduce((a, p) => a + p.w, 0);
+            let composite = parts.reduce((a, p) => a + p.w * p.v, 0) / totW;
+            readinessPercent = Math.max(0, Math.min(100, Math.round(composite)));
+            readinessPillars = { accuracy: Math.round(accPillar), coverage: Math.round(coverage), mock: mockAvail ? Math.round(mockAcc) : null, consistency: Math.round(consistency), pace: paceAvail ? pace : null };
+            // Trajectory: last-14d vs prior-14d accuracy (pts) → trend + honest "ready by" ETA
+            let _today = getLocalDateString();
+            let cur14 = sumStreakInRange(getLocalDateString(new Date(Date.now() - 13 * 86400000)), _today);
+            let prev14 = sumStreakInRange(getLocalDateString(new Date(Date.now() - 27 * 86400000)), getLocalDateString(new Date(Date.now() - 14 * 86400000)));
+            let curA = cur14.solved > 0 ? (cur14.correct / cur14.solved) * 100 : null;
+            let prevA = prev14.solved > 0 ? (prev14.correct / prev14.solved) * 100 : null;
+            let trendPts = (curA != null && prevA != null) ? Math.round((curA - prevA) * 10) / 10 : null;
+            let projDays = null;
+            if (trendPts != null && trendPts > 0.2 && readinessPercent < 70) {
+                projDays = Math.min(180, Math.ceil((70 - readinessPercent) / (trendPts / 14)));
+            }
+            readinessTrend = { trendPts: trendPts, projDays: projDays };
         }
 
         // --- SUB-BLOCK 2: Exam Readiness Score ---
@@ -14844,17 +14911,98 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 } else {
                     if (localData.stats.totalSolved < 5) {
                         rdSummary.textContent = "Solve at least 5 questions to generate a dynamic intelligence report advice.";
-                    } else if (readinessPercent < 50) {
+                    } else if (readinessPercent < 40) {
                         rdSummary.textContent = "High priority: focus on weak topics. Build up accuracy by practicing specific, bite-size modules.";
-                    } else if (readinessPercent < 75) {
-                        rdSummary.textContent = "On track, but needs consistency. Start practicing hard difficulty questions to boost confidence.";
+                    } else if (readinessPercent < 70) {
+                        rdSummary.textContent = "On track, but needs consistency. Practice daily and take on harder questions to boost confidence.";
                     } else {
                         rdSummary.textContent = "Excellent standing! Maintain your daily streak to preserve elite performance metrics.";
                     }
                 }
             }
+
+            // Pillar breakdown + weakest-link callout (what drives the readiness score)
+            let pillarsEl = document.getElementById('readiness-pillars');
+            let weakEl = document.getElementById('readiness-weaklink');
+            if (pillarsEl) {
+                if (!readinessPillars) {
+                    pillarsEl.classList.add('hidden');
+                    if (weakEl) weakEl.classList.add('hidden');
+                } else {
+                    let rows = [
+                        { key: 'accuracy', label: 'Accuracy', tip: 'attempt harder questions' },
+                        { key: 'coverage', label: 'Coverage', tip: 'practice more subjects' },
+                        { key: 'mock', label: 'Mocks', tip: 'take a mock test' },
+                        { key: 'consistency', label: 'Consistency', tip: 'practice daily' },
+                        { key: 'pace', label: 'Pace', tip: 'answer a little faster' }
+                    ];
+                    let html = '';
+                    rows.forEach(r => {
+                        let v = readinessPillars[r.key];
+                        let has = v != null;
+                        let val = has ? v : 0;
+                        let bar = !has ? 'bg-slate-300 dark:bg-slate-700' : (val < 40 ? 'bg-rose-500' : (val < 70 ? 'bg-amber-500' : 'bg-emerald-500'));
+                        html += '<div class="flex items-center gap-2">'
+                            + '<span class="text-[8px] font-bold uppercase tracking-wide text-slate-400 w-16 shrink-0">' + r.label + '</span>'
+                            + '<div class="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden"><div class="h-full ' + bar + ' transition-all duration-700" style="width:' + val + '%"></div></div>'
+                            + '<span class="text-[9px] font-black text-slate-600 dark:text-slate-300 w-8 text-right">' + (has ? val + '%' : 'N/A') + '</span>'
+                            + '</div>';
+                    });
+                    pillarsEl.innerHTML = html;
+                    pillarsEl.classList.remove('hidden');
+                    if (weakEl) {
+                        let avail = rows.filter(r => readinessPillars[r.key] != null)
+                            .sort((a, b) => readinessPillars[a.key] - readinessPillars[b.key]);
+                        let low = avail[0];
+                        let enoughData = analyticsUseDemoMode || localData.stats.totalSolved >= 5;
+                        if (low && enoughData && readinessPillars[low.key] < 70) {
+                            weakEl.textContent = '⚠ Weakest: ' + low.label + ' (' + readinessPillars[low.key] + '%) — ' + low.tip;
+                            weakEl.classList.remove('hidden');
+                        } else {
+                            weakEl.classList.add('hidden');
+                        }
+                    }
+                }
+            }
+
+            // Pass-mark framing — is the predicted level above the Lok Sewa pass line?
+            let passEl = document.getElementById('readiness-passline');
+            if (passEl) {
+                if (!readinessPillars && !analyticsUseDemoMode) {
+                    passEl.classList.add('hidden');
+                } else {
+                    const PASS_MARK = 40;
+                    let status, cls;
+                    if (readinessPercent >= PASS_MARK + 15) { status = 'Safe zone'; cls = 'text-emerald-600 dark:text-emerald-400'; }
+                    else if (readinessPercent >= PASS_MARK) { status = 'Borderline'; cls = 'text-amber-600 dark:text-amber-400'; }
+                    else { status = 'Below pass line'; cls = 'text-rose-600 dark:text-rose-400'; }
+                    passEl.textContent = 'Pass line ' + PASS_MARK + '% · ' + status;
+                    passEl.className = 'text-[9px] font-bold mb-2 ' + cls;
+                }
+            }
+
+            // Reliability + trajectory + projected "ready by" (honest, sample-size aware)
+            let metaEl = document.getElementById('readiness-meta');
+            if (metaEl) {
+                if (!readinessPillars && !analyticsUseDemoMode) {
+                    metaEl.classList.add('hidden');
+                } else {
+                    let bits = [];
+                    let solvedShown = analyticsUseDemoMode ? 148 : solved;
+                    let rel = analyticsUseDemoMode ? 'reliable' : (solved < 20 ? 'indicative' : (solved < 80 ? 'fair' : 'reliable'));
+                    bits.push('Based on ' + solvedShown + ' Qs · ' + rel);
+                    if (readinessTrend && readinessTrend.trendPts != null) {
+                        let tp = readinessTrend.trendPts;
+                        bits.push(tp > 0 ? '▲ +' + tp + ' pts/14d' : (tp < 0 ? '▼ ' + tp + ' pts/14d' : '→ steady'));
+                    }
+                    if (readinessTrend && readinessTrend.projDays != null) {
+                        bits.push('~' + readinessTrend.projDays + 'd to Ready');
+                    }
+                    metaEl.textContent = bits.join(' · ');
+                    metaEl.classList.remove('hidden');
+                }
+            }
         } catch (e) {
-            console.warn("Failed updating readiness card:", e);
         }
 
         // --- SUB-BLOCK 3: Attempted Items Card ---
@@ -14939,16 +15087,29 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         let fastTimeStr = '--';
         let slowTimeStr = '--';
 
+        // Format seconds compactly: 100s -> "1m 40s", 42 -> "42s"
+        const fmtT = s => s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
+
         if (analyticsUseDemoMode) {
             avgTimeStr = '14s';
             fastTimeStr = '4s';
             slowTimeStr = '42s';
-        } else if (logs.length > 0) {
-            let totalTime = logs.reduce((sum, log) => sum + log.timeSec, 0);
-            avgTimeStr = Math.round(totalTime / logs.length) + 's';
-            let times = logs.map(log => log.timeSec);
-            fastTimeStr = Math.min(...times) + 's';
-            slowTimeStr = Math.max(...times) + 's';
+        } else {
+            // timeSec = (Date.now()-startTime)/1000, so an abandoned tab yields a huge
+            // value. Strip idle outliers + invalid entries before any min/max/mean.
+            const IDLE_CAP = 600; // 10 min — beyond this it's idle noise, not thinking time
+            let valid = (logs || []).filter(l => typeof l.timeSec === 'number' && isFinite(l.timeSec) && l.timeSec > 0 && l.timeSec <= IDLE_CAP);
+            if (valid.length > 0) {
+                let totalTime = valid.reduce((sum, log) => sum + log.timeSec, 0);
+                avgTimeStr = fmtT(Math.round(totalTime / valid.length));
+                // Fast/slow from correct attempts only (a quick wrong guess isn't a real
+                // "run"); fall back to all valid if nothing correct yet.
+                let pool = valid.filter(l => l.correct);
+                if (pool.length === 0) pool = valid;
+                let times = pool.map(l => l.timeSec);
+                fastTimeStr = fmtT(Math.min(...times));
+                slowTimeStr = fmtT(Math.max(...times));
+            }
         }
 
         // --- SUB-BLOCK 6: Times stats ---
@@ -14978,14 +15139,38 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 if (recPracticeEl) recPracticeEl.textContent = 'Practice 15 specialized MCQs';
                 if (recMockEl) recMockEl.textContent = 'Take a dedicated Soil Chemistry Mock Test';
             } else {
-                let weakInfo = getWeakestSubject();
-                let weakSub = weakInfo.hasData ? weakInfo.subject : 'Fundamentals';
-                let leastAcc = weakInfo.hasData ? weakInfo.accuracy : 100;
-
-                if (recSubEl) recSubEl.textContent = weakSub;
-                if (recTopicEl) recTopicEl.textContent = `Revise core concepts of ${weakSub} structures`;
-                if (recPracticeEl) recPracticeEl.textContent = `Solve 10 random ${weakSub} MCQs`;
-                if (recMockEl) recMockEl.textContent = 'Take a quick targeted practice session';
+                // Range-aware weakest subject (mirrors the diagnosis source below, so
+                // the recommendation matches the Weakness card under the active filter).
+                let recSrc = localData.stats.subjectStats;
+                if (isRanged) { let m = computeSubjectStatsInRange(analyticsRange.fromDate, analyticsRange.toDate); if (Object.keys(m).length) recSrc = m; }
+                let recSubs = (typeof getAllSubjects === 'function') ? getAllSubjects() : [];
+                let weakSub = null, weakAcc = Infinity;
+                recSubs.forEach(s => {
+                    let st = recSrc[s] || { solved: 0, correct: 0 };
+                    if (st.solved > 0) {
+                        let acc = (st.correct / st.solved) * 100;
+                        if (acc < weakAcc) { weakAcc = acc; weakSub = s; }
+                    }
+                });
+                if (!weakSub) {
+                    if (recSubEl) recSubEl.textContent = 'Get started';
+                    if (recTopicEl) recTopicEl.textContent = 'Attempt a few questions to unlock tailored guidance';
+                    if (recPracticeEl) recPracticeEl.textContent = 'Solve 10 mixed MCQs to build a baseline';
+                    if (recMockEl) recMockEl.textContent = 'Take a short practice session';
+                } else if (weakAcc >= 75) {
+                    // Strong across the board — reframe from "fix weakness" to "sharpen edge"
+                    if (recSubEl) recSubEl.textContent = weakSub;
+                    if (recTopicEl) recTopicEl.textContent = `Strong across subjects — push ${weakSub} to mastery`;
+                    if (recPracticeEl) recPracticeEl.textContent = `Solve 10 Hard ${weakSub} MCQs`;
+                    if (recMockEl) recMockEl.textContent = 'Take a full-length mock to simulate exam pressure';
+                } else {
+                    let acc = Math.round(weakAcc);
+                    let goalN = acc < 40 ? 20 : (acc < 60 ? 15 : 10); // scale goal to severity
+                    if (recSubEl) recSubEl.textContent = weakSub;
+                    if (recTopicEl) recTopicEl.textContent = `Revise core ${weakSub} concepts (currently ${acc}%)`;
+                    if (recPracticeEl) recPracticeEl.textContent = `Solve ${goalN} focused ${weakSub} MCQs`;
+                    if (recMockEl) recMockEl.textContent = acc < 50 ? `Drill ${weakSub} basics, then a short mock` : `Take a targeted ${weakSub} practice set`;
+                }
             }
         } catch (e) {
             console.warn("Failed updating recommendations card:", e);
@@ -15022,11 +15207,12 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             ];
         } else {
             let subjects = getAllSubjects();
+            let dynamicWeakThreshold = getPlannerSettings().weakThreshold || 60;
+            const MIN_SAMPLE = 3; // ignore 1–2 Q subjects — accuracy too noisy to classify
             subjects.forEach(sub => {
                 let s = subjectStatsSource[sub] || {solved:0, correct:0};
-                if (s.solved > 0) {
+                if (s.solved >= MIN_SAMPLE) {
                     let acc = Math.round((s.correct / s.solved) * 100);
-                    let dynamicWeakThreshold = getPlannerSettings().weakThreshold || 60;
                     if (acc < dynamicWeakThreshold) {
                         weakList.push({sub: sub, acc: acc, solved: s.solved});
                     } else if (acc >= 75) {
@@ -15035,6 +15221,10 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 }
             });
         }
+
+        // Rank weakest-first / strongest-first and cap for a compact, actionable card
+        weakList = weakList.sort((a, b) => a.acc - b.acc).slice(0, 6);
+        strongList = strongList.sort((a, b) => b.acc - a.acc).slice(0, 6);
 
         // --- SUB-BLOCK 8: Diagnosis ---
         try {
@@ -15077,7 +15267,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 } else {
                     let _filteredWr = getValidWrongCount();
                     if (_filteredWr > 0) {
-                        repMistakeEl.textContent = `You currently have ${_filteredWr} pending incorrect questions requiring correction.`;
+                        repMistakeEl.textContent = `You currently have ${_filteredWr} pending incorrect question${_filteredWr === 1 ? '' : 's'} requiring correction.`;
                     } else {
                         repMistakeEl.textContent = "No repeated errors found! Keeping a pristine progress record.";
                     }
@@ -15095,7 +15285,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 let _gridNote = (!analyticsUseDemoMode && rangedSubjectLimited)
                     ? '<p class="text-[10px] text-amber-500 dark:text-amber-400 mb-1">Showing all-time totals — limited per-subject history in this range.</p>'
                     : '';
-                subGridEl.innerHTML = _gridNote + subjects.map(sub => {
+                let _rows = subjects.map(sub => {
                     let solvedCount = 0;
                     let correctCount = 0;
                     
@@ -15110,13 +15300,21 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                         solvedCount = s.solved;
                         correctCount = s.correct;
                     }
-                    
-                    let acc = solvedCount > 0 ? Math.round((correctCount / solvedCount) * 100) : 0;
-                    let colorClass = acc >= 75 ? 'bg-emerald-500' : (acc >= 50 ? 'bg-amber-500' : 'bg-rose-500');
-                    let textClass = acc >= 75 ? 'text-emerald-600' : (acc >= 50 ? 'text-amber-500' : 'text-rose-500');
+                    return { sub, solvedCount, correctCount };
+                }).sort((a, b) => b.solvedCount - a.solvedCount); // attempted subjects first
+                subGridEl.innerHTML = _gridNote + _rows.map(row => {
+                    let sub = row.sub, solvedCount = row.solvedCount, correctCount = row.correctCount;
+                    let started = solvedCount > 0;
+                    let acc = started ? Math.round((correctCount / solvedCount) * 100) : 0;
+                    // Untouched subjects render as a neutral "Not started" row — not a red 0%
+                    let colorClass = !started ? 'bg-slate-300 dark:bg-slate-700' : (acc >= 75 ? 'bg-emerald-500' : (acc >= 50 ? 'bg-amber-500' : 'bg-rose-500'));
+                    let textClass = !started ? 'text-slate-400' : (acc >= 75 ? 'text-emerald-600' : (acc >= 50 ? 'text-amber-500' : 'text-rose-500'));
+                    let accLabel = started ? acc + '% Accuracy' : 'Not started';
+                    let barW = started ? acc : 0;
+                    let safeSub = String(sub).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                     
                     return `
-                        <div onclick="showSubjectDetailsModal('${sub}', ${solvedCount}, ${correctCount}, ${acc})" class="p-3 bg-slate-50 dark:bg-slate-950/20 rounded-xl border border-slate-150 dark:border-slate-800 hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-300 cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div onclick="showSubjectDetailsModal('${safeSub}', ${solvedCount}, ${correctCount}, ${acc})" class="p-3 bg-slate-50 dark:bg-slate-950/20 rounded-xl border border-slate-150 dark:border-slate-800 hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-300 cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-3">
                             <div class="flex-1 min-w-0">
                                 <span class="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5 truncate">
                                     📚 ${sub}
@@ -15130,9 +15328,9 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                             <div class="flex items-center gap-4">
                                 <!-- Progress Bar -->
                                 <div class="w-32 bg-slate-150 dark:bg-slate-800 h-2 rounded-full hidden md:block overflow-hidden">
-                                    <div class="h-full ${colorClass}" style="width: ${acc}%"></div>
+                                    <div class="h-full ${colorClass}" style="width: ${barW}%"></div>
                                 </div>
-                                <span class="text-xs font-black ${textClass} shrink-0">${acc}% Accuracy</span>
+                                <span class="text-xs font-black ${textClass} shrink-0">${accLabel}</span>
                             </div>
                         </div>
                     `;
@@ -15155,8 +15353,8 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             hardSolved = 38; hardCorrect = 22;
         } else {
             logs.forEach(log => {
-                let diff = (log.difficulty || 'Easy').toLowerCase();
-                let isCorr = log.correct !== undefined ? log.correct : true;
+                let diff = (log.difficulty || '').toLowerCase(); // unknown difficulty -> skipped, not lumped into Easy
+                let isCorr = !!log.correct; // missing/undefined counts as wrong, never silently "correct"
                 if (diff === 'easy') {
                     easySolved++;
                     if (isCorr) easyCorrect++;
@@ -15176,19 +15374,21 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
 
         // --- SUB-BLOCK 10: Difficulty level breakdown cards ---
         try {
+            // Show accuracy with sample size so a lone Hard question can't read as a bare "100%"
+            const fmtDiff = (acc, c, s) => s > 0 ? `${acc}% · ${c}/${s}` : '—';
             let elEasyAcc = document.getElementById('diff-easy-acc');
             let barEasy = document.getElementById('bar-diff-easy');
-            if (elEasyAcc) elEasyAcc.textContent = `${easyAcc}%`;
+            if (elEasyAcc) elEasyAcc.textContent = fmtDiff(easyAcc, easyCorrect, easySolved);
             if (barEasy) barEasy.style.width = `${easyAcc}%`;
 
             let elMediumAcc = document.getElementById('diff-medium-acc');
             let barMedium = document.getElementById('bar-diff-medium');
-            if (elMediumAcc) elMediumAcc.textContent = `${mediumAcc}%`;
+            if (elMediumAcc) elMediumAcc.textContent = fmtDiff(mediumAcc, mediumCorrect, mediumSolved);
             if (barMedium) barMedium.style.width = `${mediumAcc}%`;
 
             let elHardAcc = document.getElementById('diff-hard-acc');
             let barHard = document.getElementById('bar-diff-hard');
-            if (elHardAcc) elHardAcc.textContent = `${hardAcc}%`;
+            if (elHardAcc) elHardAcc.textContent = fmtDiff(hardAcc, hardCorrect, hardSolved);
             if (barHard) barHard.style.width = `${hardAcc}%`;
         } catch (e) {
             console.warn("Failed updating difficulty level breakdowns:", e);

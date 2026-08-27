@@ -1582,6 +1582,39 @@ button, a, input, select, textarea {
     }
 }
 
+/* Auto-hide the floating bottom nav while an overlay/sub-tab modal is open, so the
+   nav (z-index 99999) does not float over the dialog. Slides down + fades; the nav's
+   own `transition-transform duration-300` animates it. Horizontal centering
+   (translateX(-50%)) is preserved. Restored the instant the modal closes. */
+#mobile-bottom-nav.bottom-nav-hidden {
+    transform: translateY(140%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: transform 0.28s ease-in-out, opacity 0.2s ease-in-out !important;
+}
+
+/* Auto-hide the top chrome (mobile header + stats ribbon) during a live MCQ quiz,
+   the same way the bottom nav hides — for a full-screen practice/exam view. These
+   sit at the very top in normal flow, so collapsing their height (not just a slide)
+   reclaims the space and avoids a blank gap above the question. Restored the moment
+   the quiz view closes. A dedicated class (not `.header-hide`) so the smart-scroll
+   listener can't fight it. */
+#mobile-header.quiz-chrome-hidden,
+#stats-ribbon.quiz-chrome-hidden {
+    max-height: 0 !important;
+    min-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    border-width: 0 !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    transform: translateY(-100%) !important;
+    transition: transform 0.28s ease-in-out, opacity 0.2s ease-in-out, max-height 0.28s ease-in-out, padding 0.28s ease-in-out !important;
+}
+
 .dock-item {
     display: flex !important;
     flex-direction: row !important;

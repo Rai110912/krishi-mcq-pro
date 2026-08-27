@@ -637,7 +637,38 @@ async function loadStaticQuestions() {
         };
         
         window.initMacOSDockZoom();
-        
+
+        // Auto-hide the floating bottom nav while a live MCQ question view (#page-mcq)
+        // is on screen, so practice / exam gameplay is full-screen — same behaviour as
+        // the Home Customizer sub-tab. Restored the moment the quiz view is hidden
+        // (results panel, exit, or navigating to another page). Reuses the
+        // `.bottom-nav-hidden` slide-off class.
+        window.syncBottomNavToQuiz = function() {
+            let bnav = document.getElementById('mobile-bottom-nav');
+            let mcq = document.getElementById('page-mcq');
+            // Live question view is on screen when #page-mcq is not .hidden and is
+            // actually laid out (offsetParent null => an ancestor page is display:none).
+            let quizShowing = !!mcq && !mcq.classList.contains('hidden') && mcq.offsetParent !== null;
+            // Bottom nav slides off the bottom.
+            if (bnav) bnav.classList.toggle('bottom-nav-hidden', quizShowing);
+            // Top chrome (header + stats ribbon) collapses/slides off the top, so the
+            // quiz is full-screen — same auto-hide behaviour as the bottom nav.
+            let header = document.getElementById('mobile-header');
+            if (header) header.classList.toggle('quiz-chrome-hidden', quizShowing);
+            let ribbon = document.getElementById('stats-ribbon');
+            if (ribbon) ribbon.classList.toggle('quiz-chrome-hidden', quizShowing);
+        };
+        (function initQuizNavAutoHide() {
+            let mcq = document.getElementById('page-mcq');
+            if (!mcq || typeof MutationObserver === 'undefined') return;
+            // Every code path that opens/closes the quiz toggles #page-mcq's own
+            // class/style, so observing those attributes catches all of them.
+            let obs = new MutationObserver(() => window.syncBottomNavToQuiz());
+            obs.observe(mcq, { attributes: true, attributeFilter: ['class', 'style'] });
+            window.syncBottomNavToQuiz(); // set correct initial state
+        })();
+
+
         // WebView Keyboard Overlap Guard: Hide bottom navigation when input fields are focused
         document.body.addEventListener('focusin', (e) => {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
@@ -2358,7 +2389,7 @@ function loadData(){
     let firebaseSDKLoaded = false;
 
     async function loadFirebaseSDKs() {
-        if (window.firebase && window.firebase.auth && window.firebase.firestore && window.firebase.database) {
+        if (window.firebase && window.firebase.auth && window.firebase.firestore && window.firebase.database && window.firebase.storage) {
             firebaseSDKLoaded = true;
             return Promise.resolve();
         }
@@ -2391,7 +2422,13 @@ function loadData(){
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
                 }
                 await loadScript('./js/firebase-auth-compat.js');
-                
+                try {
+                    await loadScript('./js/firebase-storage-compat.js');
+                } catch(stLocalErr) {
+                    // Fallback to CDN for storage compat if local is missing
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js');
+                }
+
                 console.log("[Firebase Loader] Firebase SDKs loaded successfully with local assets!");
                 firebaseSDKLoaded = true;
                 resolve();
@@ -2403,7 +2440,8 @@ function loadData(){
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js');
-                    
+                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js');
+
                     console.log("[Firebase Loader] All Firebase SDKs loaded successfully via Google CDN!");
                     firebaseSDKLoaded = true;
                     resolve();
@@ -3766,11 +3804,15 @@ function loadData(){
                         syncInProgress = true;
                         ownsSyncLock = true;
                         console.log('[Cloud Sync] Snappy silent real-time CRDT merge executing...');
+                        await hydrateQbankFromStorage(uid, cloudData);
                         const mergedPayload = mergeCloudAndLocalData(cloudData);
                         detectPeerChangesAndNotify(cloudData);
                         applyAllAppData(mergedPayload);
 
                         const delta = getDifferentialSyncDelta(mergedPayload, cloudData);
+                        // Sync the question bank to Storage independently of the Firestore
+                        // delta (a question-only change produces no delta key).
+                        await syncQbankBlob(uid, firestore.collection('users').doc(uid), mergedPayload.customQuestions, delta);
                         if (delta && Object.keys(delta).length > 0) {
                             const now = firebase.firestore.FieldValue.serverTimestamp();
                             mergedPayload.updatedAt = Date.now();
@@ -3781,6 +3823,9 @@ function loadData(){
                         } else {
                             KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
                         }
+
+                        // One-time cleanup of any legacy inline Firestore customQuestions field.
+                        await deleteLegacyQbankField(uid, firestore.collection('users').doc(uid), cloudData);
 
 KrishiStorage.removeItem('krishi_sync_pending');
 KrishiStorage.setItem('krishi_sync_pending_count', '0');
@@ -11619,6 +11664,10 @@ document.querySelectorAll('button').forEach(btn => {
 
         let inner = document.getElementById('home-customizer-inner');
         modal.classList.remove('hidden');
+        // Auto-hide the floating bottom nav (z-index 99999) so it doesn't float over
+        // the sub-tab modal; restored in closeHomeCustomizerModal() within ms.
+        let bnav = document.getElementById('mobile-bottom-nav');
+        if (bnav) bnav.classList.add('bottom-nav-hidden');
         setTimeout(() => {
             if (inner) {
                 inner.classList.remove('scale-95', 'opacity-0');
@@ -11645,6 +11694,76 @@ document.querySelectorAll('button').forEach(btn => {
         }, 60);
     };
 
+    // Tap the readiness ring on the ACTIVE EXAM TARGET card -> explain what the % means.
+    // Shows the exact breakdown so users understand the score (Accuracy 50 + Streak 10 +
+    // Syllabus 40), mirroring the getExamReadinessScore() weighting.
+    window.showReadinessInfo = function() {
+        let solved = (localData.stats && localData.stats.totalSolved) || 0;
+        let correct = (localData.stats && localData.stats.totalCorrect) || 0;
+        let accPct = solved > 0 ? Math.round((correct / solved) * 100) : 0;
+        let streak = (typeof getStreakCount === 'function') ? getStreakCount() : 0;
+        let syllabus = (typeof calculateSyllabusPercentages === 'function') ? Math.round(calculateSyllabusPercentages().overall || 0) : 0;
+        let score = (typeof getExamReadinessScore === 'function') ? getExamReadinessScore() : 0;
+
+        // Points each factor contributes to the 0-100 score (same weights as the engine).
+        let accPts = Math.round((solved > 0 ? (correct / solved) : 0) * 50);
+        let streakPts = Math.round(Math.min(30, streak) / 30 * 10);
+        let sylPts = Math.round(syllabus * 0.4);
+
+        let rating = score < 45 ? 'Low — needs regular practice' : (score < 75 ? 'Fair — steady, keep pushing' : 'Strong — exam-ready pacing');
+        let accent = score < 45 ? '#f43f5e' : (score < 75 ? '#f59e0b' : '#10b981');
+
+        // Remove any previous instance
+        let old = document.getElementById('readiness-info-overlay');
+        if (old) old.remove();
+
+        let overlay = document.createElement('div');
+        overlay.id = 'readiness-info-overlay';
+        overlay.className = 'fixed inset-0 z-[10050] flex items-center justify-center p-5 bg-slate-900/60 backdrop-blur-xs';
+        overlay.innerHTML = `
+            <div id="readiness-info-card" class="w-full max-w-xs rounded-3xl p-5 shadow-2xl border transition-all duration-200 scale-95 opacity-0" style="background:var(--card); border-color:var(--border);">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="relative w-14 h-14 flex items-center justify-center flex-shrink-0">
+                        <svg class="absolute transform -rotate-90 w-14 h-14">
+                            <circle cx="28" cy="28" r="22" stroke="var(--border)" stroke-width="5" fill="transparent"></circle>
+                            <circle cx="28" cy="28" r="22" stroke="${accent}" stroke-width="5" fill="transparent" stroke-linecap="round" stroke-dasharray="138" stroke-dashoffset="${138 - (138 * score / 100)}"></circle>
+                        </svg>
+                        <span class="font-black text-sm tabular-nums" style="color:${accent};">${score}%</span>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="font-extrabold text-sm text-slate-850 dark:text-white leading-tight">Exam Readiness Score</h3>
+                        <p class="text-[11px] font-semibold mt-0.5" style="color:${accent};">${rating}</p>
+                    </div>
+                </div>
+                <p class="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-3">Your readiness is built from 3 things:</p>
+                <div class="space-y-2 text-[11.5px] font-semibold text-slate-700 dark:text-slate-200">
+                    <div class="flex justify-between items-center"><span>🎯 Accuracy (${accPct}%)</span><span class="tabular-nums text-slate-500 dark:text-slate-400">${accPts} / 50</span></div>
+                    <div class="flex justify-between items-center"><span>🔥 Streak (${streak} day${streak === 1 ? '' : 's'})</span><span class="tabular-nums text-slate-500 dark:text-slate-400">${streakPts} / 10</span></div>
+                    <div class="flex justify-between items-center"><span>📚 Syllabus (${syllabus}%)</span><span class="tabular-nums text-slate-500 dark:text-slate-400">${sylPts} / 40</span></div>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-150 dark:border-slate-800 text-[10.5px] font-medium text-slate-500 dark:text-slate-400 leading-relaxed">
+                    To improve: solve MCQs daily to raise accuracy, keep your streak alive, and complete the syllabus.
+                </div>
+                <button id="readiness-info-close" class="mt-4 w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[12px] cursor-pointer active:scale-95 transition">Got it</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        let card = overlay.querySelector('#readiness-info-card');
+        requestAnimationFrame(() => {
+            if (card) { card.classList.remove('scale-95', 'opacity-0'); card.classList.add('scale-100', 'opacity-100'); }
+        });
+
+        function closeInfo() {
+            if (card) { card.classList.add('scale-95', 'opacity-0'); }
+            setTimeout(() => { if (overlay && overlay.parentNode) overlay.remove(); }, 180);
+        }
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeInfo(); });
+        let closeBtn = overlay.querySelector('#readiness-info-close');
+        if (closeBtn) closeBtn.addEventListener('click', closeInfo);
+        if (typeof playSound === 'function') playSound('click');
+    };
+
     function closeHomeCustomizerModal() {
         // Revert live appearance settings back to saved state when closing without saving
         if (typeof applyCustomAppearanceAndLanguageSettings === 'function') {
@@ -11656,6 +11775,9 @@ document.querySelectorAll('button').forEach(btn => {
             inner.classList.remove('scale-100', 'opacity-100');
             inner.classList.add('scale-95', 'opacity-0');
         }
+        // Restore the floating bottom nav immediately once the sub-tab modal starts closing.
+        let bnav = document.getElementById('mobile-bottom-nav');
+        if (bnav) bnav.classList.remove('bottom-nav-hidden');
         setTimeout(() => {
             if (modal) modal.classList.add('hidden');
         }, 150);
@@ -12775,10 +12897,12 @@ document.querySelectorAll('button').forEach(btn => {
             // Mini readiness ring on the card (reuses getExamReadinessScore()).
             let hprofileArc = document.getElementById('hprofile-readiness-arc');
             let hprofilePct = document.getElementById('hprofile-readiness-pct');
-            if (hprofileArc || hprofilePct) {
+            let hprofileReadinessLabel = document.getElementById('hprofile-readiness-label');
+            if (hprofileArc || hprofilePct || hprofileReadinessLabel) {
                 let readiness = (typeof getExamReadinessScore === 'function') ? getExamReadinessScore() : 0;
                 let ringColor = readiness < 45 ? 'text-rose-500' : (readiness < 75 ? 'text-amber-500' : 'text-emerald-500');
                 let pctColor = readiness < 45 ? 'text-rose-600 dark:text-rose-400' : (readiness < 75 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400');
+                let ratingWord = readiness < 45 ? 'Low' : (readiness < 75 ? 'Fair' : 'Strong');
                 const CIRC = 113; // 2πr, r=18
                 if (hprofileArc) {
                     hprofileArc.setAttribute('stroke-dashoffset', String(CIRC - (CIRC * readiness / 100)));
@@ -12786,7 +12910,10 @@ document.querySelectorAll('button').forEach(btn => {
                 }
                 if (hprofilePct) {
                     hprofilePct.textContent = `${readiness}%`;
-                    hprofilePct.className = 'font-black text-[10px] tabular-nums ' + pctColor;
+                    hprofilePct.className = 'font-black text-[10px] tabular-nums pointer-events-none ' + pctColor;
+                }
+                if (hprofileReadinessLabel) {
+                    hprofileReadinessLabel.textContent = `Readiness · ${ratingWord}`;
                 }
             }
 
@@ -16379,7 +16506,8 @@ ${text}`;
         const keysToCheck = [
             'bookmarked', 'bookmarkedLog',
             'wrong', 'wrongLog',
-            'customQuestions',
+            // customQuestions is intentionally omitted — it is synced to a Cloud
+            // Storage blob by syncQbankBlob(), never written into the Firestore doc.
             'streak', 'stats', 'achievements', 'sm2', 'progression',
             'examProfiles', 'homeSettings', 'appearanceSettings',
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
@@ -16570,15 +16698,18 @@ ${text}`;
                 syncInProgress = true;
                 ownsSyncLock = true;
                 console.log('[Cloud Sync] Robust CRDT Union Merge executing...');
+                await hydrateQbankFromStorage(uid, currentCloudData);
                 const mergedPayload = mergeCloudAndLocalData(currentCloudData);
                 applyAllAppData(mergedPayload);
 
                 const delta = getDifferentialSyncDelta(mergedPayload, currentCloudData);
+                // Sync the question bank to Storage independently of the Firestore delta
+                // (a question-only change produces no delta key). Uploads only when changed.
+                await syncQbankBlob(uid, docRef, mergedPayload.customQuestions, delta);
                 if (delta && Object.keys(delta).length > 0) {
                     if (typeof LZString !== 'undefined') {
                         if (delta.timingLog) delta.timingLog = LZString.compressToUTF16(JSON.stringify(delta.timingLog));
                         if (delta.mockScores) delta.mockScores = LZString.compressToUTF16(JSON.stringify(delta.mockScores));
-                        if (delta.customQuestions) delta.customQuestions = LZString.compressToUTF16(JSON.stringify(delta.customQuestions));
                         delta.isCompressed = true;
                     }
                     assertPayloadFits(delta, 'Sync delta');
@@ -16595,6 +16726,10 @@ ${text}`;
                     KrishiStorage.setItem('krishi_last_updated_at', currentCloudData.updatedAt || Date.now());
                     logSyncActivity('Cloud sync verified: Local data is already up to date.');
                 }
+
+                // One-time cleanup of any legacy inline Firestore customQuestions field
+                // (the bank is now in Storage via syncQbankBlob above).
+                await deleteLegacyQbankField(uid, docRef, currentCloudData);
 
 KrishiStorage.removeItem('krishi_sync_pending');
 KrishiStorage.setItem('krishi_sync_pending_count', '0');
@@ -16635,10 +16770,10 @@ if (typeof updateSyncUI === 'function') updateSyncUI();
                 }
 
                 const now = firebase.firestore.FieldValue.serverTimestamp();
+                await syncQbankBlob(uid, docRef, localDataPayload.customQuestions, localDataPayload);
                 if (typeof LZString !== 'undefined') {
                     if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
                     if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
-                    if (localDataPayload.customQuestions) localDataPayload.customQuestions = LZString.compressToUTF16(JSON.stringify(localDataPayload.customQuestions));
                     localDataPayload.isCompressed = true;
                 }
                 assertPayloadFits(localDataPayload, 'Initial full sync payload');
@@ -16663,6 +16798,133 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             // Without this, any throw above latched syncInProgress true for the rest of
             // the session, silently disabling both this path and the snapshot listener.
             if (ownsSyncLock) syncInProgress = false;
+        }
+    }
+
+    // ─── Cloud Storage question-bank offload ──────────────────────────────────
+    // customQuestions is moved OUT of the Firestore users/{uid} doc (which caps at
+    // ~1MB) into a Cloud Storage blob at user_qbank/{uid}/customQuestions.lz.
+    // Firestore keeps only tiny metadata: qbankUpdatedAt / qbankCount / qbankHash.
+    // customQuestions is deliberately absent from getDifferentialSyncDelta's
+    // keysToCheck, so the blob is synced here independently of the Firestore delta.
+    const QBANK_SYNCED_HASH_KEY = 'krishi_qbank_synced_hash';
+
+    function getQbankRef(uid) {
+        if (!window.firebase || typeof firebase.storage !== 'function') {
+            throw new Error('[Qbank] Firebase Storage SDK not loaded');
+        }
+        return firebase.storage(firebaseApp).ref('user_qbank/' + uid + '/customQuestions.lz');
+    }
+
+    // Order-INDEPENDENT digest of the bank (sorted id@updatedAt signatures). Two
+    // devices holding the same questions in a different merge order agree on the
+    // hash, which prevents an endless upload ping-pong. Reflects adds/removes/edits
+    // via count + per-question id + LWW updatedAt (the same signal the merge uses).
+    function computeQbankHash(arr) {
+        if (!Array.isArray(arr)) return '0.0';
+        const sigs = arr.map(q => {
+            const id = (q && q.id !== undefined && q.id !== null && q.id !== '')
+                ? ('id:' + q.id)
+                : ('anon:' + JSON.stringify([(q && q.question) || '', (q && q.options) || '', (q && q.subject) || '']));
+            return id + '@' + ((q && q.updatedAt) || 0);
+        }).sort();
+        const s = arr.length + '|' + sigs.join(',');
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) {
+            h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        }
+        return (h >>> 0).toString(36) + '.' + arr.length;
+    }
+
+    function compressQbank(arr) {
+        return (typeof LZString !== 'undefined')
+            ? LZString.compressToUTF16(JSON.stringify(arr))
+            : JSON.stringify(arr);
+    }
+
+    async function uploadQbankBlob(uid, compressedStr) {
+        const ref = getQbankRef(uid);
+        await ref.putString(compressedStr, 'raw', { contentType: 'text/plain; charset=utf-8' });
+    }
+
+    async function downloadQbankBlob(uid) {
+        let url;
+        try {
+            url = await getQbankRef(uid).getDownloadURL();
+        } catch (e) {
+            // Object simply doesn't exist yet (fresh account / pre-migration) — not an error.
+            if (e && e.code === 'storage/object-not-found') return null;
+            throw e;
+        }
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('[Qbank] Blob fetch failed: ' + res.status);
+        return await res.text();
+    }
+
+    // READ side: if the cloud doc's metadata says the remote bank is newer than what
+    // we last applied, pull the blob and inject it as the compressed string so the
+    // existing mergeCloudAndLocalData() decompress path handles it unchanged. Also
+    // flags a legacy (pre-migration) inline field so the caller can clean it up.
+    async function hydrateQbankFromStorage(uid, cloudData) {
+        if (!cloudData || !uid) return;
+        // Detect a legacy doc still carrying an inline customQuestions field with no
+        // metadata — recorded before merge mutates the object.
+        cloudData.__qbankLegacyInline = (('customQuestions' in cloudData) && !cloudData.qbankUpdatedAt);
+        if (!cloudData.qbankUpdatedAt) return; // legacy or no bank → merge uses inline/local
+        const localSyncedHash = KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '';
+        if (cloudData.qbankHash && cloudData.qbankHash === localSyncedHash) {
+            // Already applied this exact remote bank — skip download; merge keeps local.
+            return;
+        }
+        try {
+            const compressed = await downloadQbankBlob(uid);
+            if (compressed) {
+                cloudData.customQuestions = compressed; // merge decompresses strings
+                if (cloudData.qbankHash) KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, cloudData.qbankHash);
+            }
+        } catch (e) {
+            // Download failure must not blank the bank: drop the field so the union
+            // merge keeps the local copy, and leave the synced-hash untouched to retry.
+            console.warn('[Qbank] Blob download failed; keeping local questions.', e);
+            delete cloudData.customQuestions;
+        }
+    }
+
+    // WRITE side: (1) strip customQuestions from any Firestore payload so it never
+    // reaches the doc, and (2) if the local bank changed since our last upload, push
+    // the blob and write metadata directly to Firestore. Independent of the delta, so
+    // a question-only change still syncs even when no Firestore field changed.
+    // Throws on upload failure so the caller's catch keeps the sync pending (offline-safe).
+    async function syncQbankBlob(uid, docRef, sourceArr, payloadObj) {
+        if (payloadObj && 'customQuestions' in payloadObj) delete payloadObj.customQuestions;
+        if (!uid || !Array.isArray(sourceArr) || sourceArr.length === 0) return;
+        const hash = computeQbankHash(sourceArr);
+        if (hash === (KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '')) return; // unchanged
+        const compressed = compressQbank(sourceArr);
+        await uploadQbankBlob(uid, compressed);
+        if (docRef) {
+            await docRef.set({
+                qbankUpdatedAt: Date.now(),
+                qbankCount: sourceArr.length,
+                qbankHash: hash
+            }, { merge: true });
+        }
+        // Only mark synced once BOTH the blob and its metadata landed — otherwise a
+        // failed metadata write would leave peers unable to discover the new blob.
+        KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, hash);
+    }
+
+    // One-time migration cleanup: an account whose Firestore doc still holds an inline
+    // customQuestions field (flagged in hydrateQbankFromStorage) gets that field
+    // deleted after the merged bank has been offloaded to Storage. Idempotent.
+    async function deleteLegacyQbankField(uid, docRef, cloudData) {
+        if (!uid || !docRef || !cloudData || !cloudData.__qbankLegacyInline) return;
+        try {
+            await docRef.set({ customQuestions: firebase.firestore.FieldValue.delete() }, { merge: true });
+            console.log('[Qbank] Legacy Firestore customQuestions field removed after Storage migration.');
+            logSyncActivity('Custom question bank migrated to Cloud Storage.');
+        } catch (e) {
+            console.warn('[Qbank] Legacy field delete deferred (will retry):', e);
         }
     }
 

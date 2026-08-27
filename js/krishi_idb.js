@@ -156,11 +156,20 @@ const KrishiStorage = (() => {
         clear() {
             if (!isInitialized) isCleared = true;
             cache.clear();
+            // SM2 scheduling (krishi_sm2 / krishi_sm2_daily_log) and a few other
+            // modules write straight to native localStorage, so it must be wiped too.
+            try { localStorage.clear(); } catch(e){ window.krishiLogSilent && window.krishiLogSilent('idb.ls_clear', e); }
             if (worker) {
-                worker.postMessage({ type: 'clear' });
-            } else {
-                try { localStorage.clear(); } catch(e){ window.krishiLogSilent && window.krishiLogSilent('idb.ls_clear', e); } // Fallback
+                // Use the tracked round-trip (sendToWorker assigns an id and the
+                // worker replies on completion) so callers can AWAIT the IndexedDB
+                // wipe before reloading. The old fire-and-forget postMessage was
+                // killed by location.reload() mid-clear, leaving KrishiAppDB — the
+                // real data store — intact, so cleared/reset data came right back.
+                return sendToWorker('clear').catch(e => {
+                    window.krishiLogSilent && window.krishiLogSilent('idb.clear', e);
+                });
             }
+            return Promise.resolve();
         }
     };
 })();

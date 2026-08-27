@@ -23,6 +23,7 @@ function drawGrowthChart(){
         ctx.clearRect(0, 0, w, h);
         
         let data = [];
+        let emptyMsg = 'Take multiple Mock tests to render curve';
         if (analyticsUseDemoMode) {
             data = [65, 72, 68, 80, 78, 84, 88];
         } else {
@@ -33,6 +34,7 @@ function drawGrowthChart(){
             let range = (typeof getAnalyticsRange === 'function') ? getAnalyticsRange() : null;
             let fromTs = range ? range.fromTs : null;
             let toTs = range ? range.toTs : null;
+            let isRangedChart = (typeof analyticsFilterRange !== 'undefined') && analyticsFilterRange !== 'all';
             data = scores.filter(s => {
                 let ts = (s && typeof s === 'object') ? s.ts : null;
                 if (ts == null) return true;
@@ -40,6 +42,11 @@ function drawGrowthChart(){
                 if (toTs != null && ts > toTs) return false;
                 return true;
             }).map(s => (typeof s === 'number') ? s : ((s && s.acc) || 0));
+            // Distinguish "no mocks ever" from "mocks exist but none in this range",
+            // so a filtered-empty chart doesn't wrongly imply the user never tested.
+            if (data.length === 0 && scores.length > 0 && isRangedChart) {
+                emptyMsg = 'No mock tests in this range';
+            }
             if (data.length === 0) data = [0, 0, 0];
             if (data.length === 1) data = [0, data[0]];
         }
@@ -83,7 +90,7 @@ function drawGrowthChart(){
             if (!hasData) {
                 ctx.fillStyle = isDark ? '#64748b' : '#94a3b8';
                 ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('Take multiple Mock tests to render curve', w / 2, h / 2);
+                ctx.fillText(emptyMsg, w / 2, h / 2);
                 return;
             }
             let pts = data.map((v, i) => ({ x: xAt(i), y: baseY - (baseY - yAt(v)) * t, v: v }));

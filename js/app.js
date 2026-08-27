@@ -1620,7 +1620,8 @@ function loadData(){
         profiles:  false,
         planner:   false,
         questions: false,
-        appearance: false
+        appearance: false,
+        analytics: false
     };
     // RAF handle — prevents scheduling two frames in the same sync cycle
     let _krishiSyncRafHandle = null;
@@ -1681,6 +1682,12 @@ function loadData(){
                 } else if ((activeId === 'page-mcq-creator') && _krishiDirty.questions) {
                     _krishiDirty.questions = false;
                     if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList();
+                } else if (activeId === 'page-analytics' && _krishiDirty.analytics) {
+                    // Analytics reads streak/stats/timingLog/mockScores/sm2 — all of which
+                    // can change from a cloud sync arriving on another device. Without this
+                    // branch the tab kept showing stale numbers until navigate() re-rendered.
+                    _krishiDirty.analytics = false;
+                    if (typeof updateEnhancedAnalyticsPage === 'function') updateEnhancedAnalyticsPage();
                 }
                 // All other dirty modules remain dirty; navigate() clears them on visit.
             } catch (e) {
@@ -8807,22 +8814,51 @@ function openEditImportModal(idx) {
     }
 
     // ==================== CLEAR & RESET ====================
-    function clearCache(){
+    async function clearCache(){
         try {
             // Safety: offer a quick backup before destructive clearing
             if (confirm('Download a backup before clearing cache?')) backupAllData();
         } catch(e){}
-        localStorage.clear();
+        // The real data store is IndexedDB (KrishiAppDB) behind KrishiStorage, not
+        // native localStorage. A bare localStorage.clear() left every stat, streak,
+        // timing log and mock score in IndexedDB, so Analytics still showed old data
+        // after a "clear". KrishiStorage.clear() wipes the IDB store AND localStorage,
+        // and we await it so the worker finishes before the reload kills it.
+        try {
+            if (window.KrishiStorage && typeof KrishiStorage.clear === 'function') {
+                await KrishiStorage.clear();
+            } else {
+                localStorage.clear();
+            }
+        } catch(e){ try { localStorage.clear(); } catch(_){} }
         showToast('Storage cache cleared!');
         setTimeout(()=>location.reload(), 500);
     }
 
-    function resetAllData(){
+    async function resetAllData(){
         if(confirm('⚠️ Are you sure you want to reset everything?')){
             try {
                 if (confirm('Download a backup before reset?')) backupAllData();
             } catch(e){}
-            localStorage.clear();
+            // Wipe the IndexedDB-backed KV store (all analytics data + settings) as
+            // well as native localStorage; awaited so the IDB clear actually lands
+            // before the reload. See clearCache() for why localStorage.clear() alone
+            // was not enough.
+            try {
+                if (window.KrishiStorage && typeof KrishiStorage.clear === 'function') {
+                    await KrishiStorage.clear();
+                } else {
+                    localStorage.clear();
+                }
+            } catch(e){ try { localStorage.clear(); } catch(_){} }
+            // Hard reset means everything: the custom question bank lives in its own
+            // IndexedDB (KrishiCustomQuestionsDB), which KrishiStorage.clear() does not
+            // touch. saveAll([], {allowEmpty:true}) is the sanctioned deliberate wipe.
+            try {
+                if (typeof KrishiDB !== 'undefined' && KrishiDB.saveAll) {
+                    await KrishiDB.saveAll([], { allowEmpty: true });
+                }
+            } catch(e){ console.warn('[Reset] Custom question bank clear failed:', e); }
             location.reload();
         }
     }
@@ -15038,7 +15074,8 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             let statAccuracyTrend = document.getElementById('stat-accuracy-trend');
             if (statAccuracyTrend) {
                 if (analyticsUseDemoMode) {
-                    statAccuracyTrend.textContent = '▲ +4.0 pts vs prev';
+                    let demoLabel = (isRanged && analyticsRange.label) ? analyticsRange.label : 'prev period';
+                    statAccuracyTrend.textContent = `▲ +4.0 pts vs ${demoLabel}`;
                     statAccuracyTrend.className = 'font-black flex items-center gap-0.5 text-emerald-600';
                 } else if (!isRanged || !analyticsRange.prevFromDate) {
                     statAccuracyTrend.textContent = '— all-time';
@@ -15944,10 +15981,14 @@ ${text}`;
             _krishiDirty.practice  = true;
         }
         if (syncSelectiveLogs) {
-            if (data.streak)      { _krishiDirty.home = true; _krishiDirty.planner = true; }
-            if (data.stats)       { _krishiDirty.home = true; _krishiDirty.practice = true; }
+            if (data.streak)      { _krishiDirty.home = true; _krishiDirty.planner = true; _krishiDirty.analytics = true; }
+            if (data.stats)       { _krishiDirty.home = true; _krishiDirty.practice = true; _krishiDirty.analytics = true; }
             if (data.achievements){ _krishiDirty.home = true; }
-            if (data.progression) { _krishiDirty.home = true; }
+            if (data.progression) { _krishiDirty.home = true; _krishiDirty.analytics = true; }
+            // Time stats, response breakdown, mastery grid and the performance curve all
+            // read from these — mark analytics dirty so a live sync refreshes the tab.
+            if (Array.isArray(data.timingLog) || Array.isArray(data.mockScores) ||
+                (data.sm2 && typeof data.sm2 === 'object')) { _krishiDirty.analytics = true; }
             if (data.examProfiles){ _krishiDirty.profiles = true; }
             if (data.plannerSettings) { _krishiDirty.planner = true; }
             if (data.appearanceSettings || data.customAppearanceSettings) {

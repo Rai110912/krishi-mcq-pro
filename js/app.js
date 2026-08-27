@@ -14799,7 +14799,10 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
     function updateEnhancedAnalyticsPage(){
         let solvedCount = localData.stats.totalSolved || 0;
         if (analyticsUseDemoMode === null) {
-            analyticsUseDemoMode = (solvedCount < 20);
+            // Auto-demo OFF: a fresh or just-cleared app must show the user's OWN
+            // (empty) stats, never template numbers that look like retained data.
+            // Demo is now strictly opt-in via the "Preview demo data" button.
+            analyticsUseDemoMode = false;
         }
 
         // --- SUB-BLOCK 1: Warning blocks & mode elements ---
@@ -14809,7 +14812,10 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
 
             let lockWarning = document.getElementById('analytics-lock-warning');
             if (lockWarning) {
-                if (solvedCount < 20 && analyticsUseDemoMode) {
+                // Show the "limited data / preview available" hint when the user
+                // is under 20 solved AND currently viewing their real stats.
+                // (When demo is ON, the green demo banner takes over instead.)
+                if (solvedCount < 20 && !analyticsUseDemoMode) {
                     lockWarning.classList.remove('hidden');
                 } else {
                     lockWarning.classList.add('hidden');

@@ -759,19 +759,20 @@ class KrishiSM2Engine {
         const now = todayEnd.getTime();
         let dueCount = 0;
         let masteredCount = 0;
+        let leechedCount = 0;
         let totalTracked = Object.keys(data).length;
         const mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
 
         Object.entries(data).forEach(([id, rec]) => {
             if (rec.status === 'mastered') { masteredCount++; return; }
-            if (rec.status === 'suspended') return;
+            if (rec.status === 'suspended') { leechedCount++; return; }
             // Keep the due count in lockstep with getDueQuestions: exclude
             // unresolved mistakes and count strictly by schedule (nextReview).
             if (mistakeSet && mistakeSet.has(String(id))) return;
             if (rec.nextReview && rec.nextReview <= now) dueCount++;
         });
 
-        return { dueCount, masteredCount, totalTracked };
+        return { dueCount, masteredCount, leechedCount, totalTracked };
     }
 
     static updateHUDStats() {

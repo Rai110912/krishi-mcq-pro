@@ -14726,26 +14726,35 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 return;
             }
 
-            let plot = vals.map(v => v == null ? 0 : v);
+            // Plot only days that have real data; connect across idle gaps so a day
+            // with no practice doesn't render as a crash to 0% accuracy. The x-position
+            // still reflects the day index, preserving the time spacing.
             let pad = 3;
-            let n = plot.length;
+            let n = vals.length;
             let stride = n > 1 ? (cssW - pad * 2) / (n - 1) : 0;
+            let pts = [];
+            vals.forEach((v, i) => {
+                if (v == null) return;
+                let x = pad + i * stride;
+                let y = cssH - pad - (v / 100) * (cssH - pad * 2);
+                pts.push({x, y});
+            });
             ctx.beginPath();
             ctx.lineWidth = 1.5;
             ctx.strokeStyle = '#4f46e5';
-            plot.forEach((v, i) => {
-                let x = pad + i * stride;
-                let y = cssH - pad - (v / 100) * (cssH - pad * 2);
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            pts.forEach((p, i) => {
+                if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
             });
             ctx.stroke();
 
-            let lx = pad + (n - 1) * stride;
-            let ly = cssH - pad - (plot[n - 1] / 100) * (cssH - pad * 2);
-            ctx.beginPath();
-            ctx.arc(lx, ly, 2, 0, Math.PI * 2);
-            ctx.fillStyle = '#4f46e5';
-            ctx.fill();
+            // Dot on the most recent real data point.
+            let last = pts[pts.length - 1];
+            if (last) {
+                ctx.beginPath();
+                ctx.arc(last.x, last.y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = '#4f46e5';
+                ctx.fill();
+            }
         } catch (e) {
             console.warn('Failed drawing filter sparkline:', e);
         }
@@ -15394,6 +15403,38 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             console.warn("Failed updating difficulty level breakdowns:", e);
         }
 
+        // --- SUB-BLOCK 10b: Mastery Breakdown (spaced-repetition card states) ---
+        // SRS card status is current-state, not time-ranged: a card's mastery is
+        // its present status, so this intentionally ignores the analytics date filter.
+        try {
+            let mCard = document.getElementById('analytics-mastery-total');
+            if (mCard) {
+                let mastered = 0, learning = 0, leeched = 0, total = 0;
+                if (analyticsUseDemoMode) {
+                    mastered = 24; learning = 38; leeched = 3;
+                    total = mastered + learning + leeched;
+                } else if (window.KrishiSM2Engine && typeof KrishiSM2Engine.getStats === 'function') {
+                    let s = KrishiSM2Engine.getStats();
+                    total = s.totalTracked || 0;
+                    mastered = s.masteredCount || 0;
+                    leeched = s.leechedCount || 0;
+                    learning = Math.max(0, total - mastered - leeched);
+                }
+                mCard.textContent = total + (total === 1 ? ' Card' : ' Cards');
+                let setNum = (id, v) => { let el = document.getElementById(id); if (el) el.textContent = v; };
+                setNum('stat-mastered', mastered);
+                setNum('stat-learning', learning);
+                setNum('stat-leeched', leeched);
+                let pct = v => total > 0 ? (v / total) * 100 : 0;
+                let setBar = (id, v) => { let el = document.getElementById(id); if (el) el.style.width = pct(v) + '%'; };
+                setBar('pb-mastered', mastered);
+                setBar('pb-learning', learning);
+                setBar('pb-leeched', leeched);
+            }
+        } catch (e) {
+            console.warn("Failed updating mastery breakdown:", e);
+        }
+
         // --- SUB-BLOCK 11: Draw and update charts ---
         // Debounce canvas redraws to ensure tab slide transitions execute at a solid 60fps/120Hz
         if (window.analyticsDebounceTimeout) {
@@ -15456,7 +15497,9 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         if (titleEl) titleEl.textContent = `Subject Insights: ${sub}`;
         
         let strengthMessage = "";
-        if (acc >= 75) {
+        if (solved <= 0) {
+            strengthMessage = "🚀 <strong>Not started yet:</strong> You haven't attempted this subject in the selected range. Begin with a short practice set to build a baseline.";
+        } else if (acc >= 75) {
             strengthMessage = "🌟 <strong>Super Power:</strong> You have solid control over this subject. Keep doing quick spaced-repetition refreshers to maintain top status!";
         } else if (acc >= 50) {
             strengthMessage = "📈 <strong>Progressing:</strong> Solid foundations established. Work on Medium and Hard difficulty level questions to build complete subject mastery.";
@@ -15478,7 +15521,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                         </div>
                         <div>
                             <span class="text-[9px] text-slate-400 font-bold block">ACCURACY</span>
-                            <span class="text-base font-black text-indigo-500">${acc}%</span>
+                            <span class="text-base font-black text-indigo-500">${solved > 0 ? acc + '%' : '—'}</span>
                         </div>
                     </div>
                     <div class="p-3 bg-indigo-500/5 border border-indigo-500/10 rounded-xl space-y-1">
@@ -15490,7 +15533,9 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         }
         
         if (practiceBtn) {
-            practiceBtn.setAttribute('onclick', `closeSubjectDetailsModal(); startPractice('${sub}', 10);`);
+            // Assign the handler as a property (capturing `sub` in a closure) instead of an
+            // interpolated onclick string, so subject names with quotes/backslashes can't break it.
+            practiceBtn.onclick = () => { closeSubjectDetailsModal(); startPractice(sub, 10); };
         }
         
         if (overlay) {

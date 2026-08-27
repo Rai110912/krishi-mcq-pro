@@ -15197,9 +15197,13 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
                 if (isRanged) { let m = computeSubjectStatsInRange(analyticsRange.fromDate, analyticsRange.toDate); if (Object.keys(m).length) recSrc = m; }
                 let recSubs = (typeof getAllSubjects === 'function') ? getAllSubjects() : [];
                 let weakSub = null, weakAcc = Infinity;
+                // MIN_SAMPLE must match the Diagnosis block below (>=3). Otherwise a
+                // noisy 1–2 Q subject gets flagged here as the focus while the Weakness
+                // card ignores it, and the two cards contradict each other.
+                const REC_MIN_SAMPLE = 3;
                 recSubs.forEach(s => {
                     let st = recSrc[s] || { solved: 0, correct: 0 };
-                    if (st.solved > 0) {
+                    if (st.solved >= REC_MIN_SAMPLE) {
                         let acc = (st.correct / st.solved) * 100;
                         if (acc < weakAcc) { weakAcc = acc; weakSub = s; }
                     }

@@ -9135,7 +9135,6 @@ function openEditImportModal(idx) {
     // ==================== DASHBOARD DETAILS UPDATES ====================
     const DEFAULT_HOME_WIDGETS = [
         { id: 'smartRecommendation', label: '🧠 Today\'s Smart Action Plan' },
-        { id: 'examCountdown', label: '⏳ Target Exam Countdown' },
         { id: 'readinessScore', label: '📈 Exam Readiness Score Wheel' },
         { id: 'dailyTarget', label: '🎯 Daily Solved Progress' },
         { id: 'accuracy', label: '📊 Segmented Accuracy Comparison' },
@@ -9154,7 +9153,6 @@ function openEditImportModal(idx) {
         compact: false,
         order: [
             "smartRecommendation",
-            "examCountdown",
             "readinessScore",
             "dailyTarget",
             "accuracy",
@@ -9191,6 +9189,11 @@ function openEditImportModal(idx) {
                 if (!parsed.order.includes(w)) parsed.order.push(w);
             });
             if (!parsed.hidden) parsed.hidden = [];
+            // Migration: 'examCountdown' widget was merged into the always-visible
+            // ACTIVE EXAM TARGET card. Strip it from saved order/hidden so it no longer
+            // appears as a blank widget on the home page or a dead toggle in the customizer.
+            if (Array.isArray(parsed.order)) parsed.order = parsed.order.filter(w => w !== 'examCountdown');
+            if (Array.isArray(parsed.hidden)) parsed.hidden = parsed.hidden.filter(w => w !== 'examCountdown');
             return parsed;
         } catch(e) {
             return JSON.parse(JSON.stringify(DEFAULT_HOME_SETTINGS));
@@ -11404,7 +11407,6 @@ document.querySelectorAll('button').forEach(btn => {
 
     const WIDGET_METADATA = {
         smartRecommendation: { label: "Today's Study Roadmap", category: 'Progress', priority: 'High', locked: true },
-        examCountdown: { label: "Exam Date Countdown", category: 'Progress', priority: 'Critical', locked: true },
         readinessScore: { label: "Exam Readiness Score Meter", category: 'Analytics', priority: 'High', locked: false },
         dailyTarget: { label: "Daily Core MCQ Target Tracker", category: 'Progress', priority: 'High', locked: false },
         accuracy: { label: "Average Performance Accuracy", category: 'Analytics', priority: 'Normal', locked: false },
@@ -12177,6 +12179,16 @@ document.querySelectorAll('button').forEach(btn => {
     }
 
     function renderWidgetExamCountdown(compact) {
+        // MERGED: this widget's content now lives in the always-visible
+        // "ACTIVE EXAM TARGET" card (#home-active-profile-card), which shows the
+        // countdown + streak/solved/aiming chips with correct past/near/unset states.
+        // Rendering nothing here removes the old duplicate red card. Kept as a no-op
+        // (instead of deleting the registry entry) so saved widget orders that still
+        // list 'examCountdown' don't break.
+        return '';
+    }
+
+    function renderWidgetExamCountdownLegacy(compact) {
         let pSettings = getPlannerSettings();
         let goalMeta = getGoalSettings();
         let dateVal = pSettings.examDate || "2026-07-03";
@@ -12725,29 +12737,38 @@ document.querySelectorAll('button').forEach(btn => {
 
             let hprofileCountdown = document.getElementById('hprofile-countdown');
             if (hprofileCountdown) {
-                let targetDate = new Date(sPlanner.examDate || "2026-07-03");
-                let diffDays = Math.ceil((targetDate - new Date()) / (1000 * 60 * 60 * 24));
-                if (isNaN(diffDays)) diffDays = 0;
-                if (diffDays > 0) {
-                    let newHtml = `📅 <span id="anim-countdownVal">${diffDays}</span> days remaining`;
-                    if (hprofileCountdown.innerHTML !== newHtml) {
-                        hprofileCountdown.innerHTML = newHtml;
-                        animateNumericText(document.getElementById('anim-countdownVal'), diffDays);
-                    }
+                // Single unified countdown (merged from the old red countdown widget).
+                // Handles every state correctly: no date set, already-passed, exam-day,
+                // near (<=7d), and normal — no more "Passed" + "EXAM IS VERY NEAR" clash.
+                let rawDate = sPlanner.examDate;
+                let urgent = false, dim = false;
+                let txt;
+                let diffDays = rawDate ? Math.ceil((new Date(rawDate) - new Date()) / (1000 * 60 * 60 * 24)) : NaN;
+                if (!rawDate || isNaN(diffDays)) {
+                    dim = true; txt = '🎯 Set your exam date';
+                } else if (diffDays < 0) {
+                    dim = true; txt = '🗓️ Exam date passed — set a new target';
+                } else if (diffDays === 0) {
+                    urgent = true; txt = '🎯 Exam is today! Final review';
+                } else if (diffDays <= 7) {
+                    urgent = true; txt = `⚠️ ${diffDays} day${diffDays === 1 ? '' : 's'} left — final review`;
                 } else {
-                    hprofileCountdown.textContent = `📅 Exam date passed / today`;
+                    txt = `📅 ${diffDays} days remaining`;
                 }
+                hprofileCountdown.textContent = txt;
+                hprofileCountdown.className = 'text-[10.5px] font-bold tabular-nums ' +
+                    (urgent ? 'text-rose-600 dark:text-rose-400'
+                            : (dim ? 'text-slate-400 dark:text-slate-500'
+                                   : 'text-slate-500 dark:text-slate-400'));
             }
 
-            let hprofileTargets = document.getElementById('hprofile-targets');
-            if (hprofileTargets) {
-                let dailyT = sPlanner.dailyTarget || 50;
-                let newHtml = `🎯 <span id="anim-dailyTargetVal">${dailyT}</span> Daily`;
-                if (hprofileTargets.innerHTML !== newHtml) {
-                    hprofileTargets.innerHTML = newHtml;
-                    animateNumericText(document.getElementById('anim-dailyTargetVal'), dailyT);
-                }
-            }
+            // Merged chips (streak / solved / daily target) — previously in the red widget.
+            let hprofileStreakChip = document.getElementById('hprofile-streak-chip');
+            if (hprofileStreakChip) hprofileStreakChip.textContent = `🔥 ${getStreakCount()} Day Streak`;
+            let hprofileSolvedChip = document.getElementById('hprofile-solved-chip');
+            if (hprofileSolvedChip) hprofileSolvedChip.textContent = `📝 ${localData.stats.totalSolved} Solved`;
+            let hprofileAimingChip = document.getElementById('hprofile-aiming-chip');
+            if (hprofileAimingChip) hprofileAimingChip.textContent = `🎯 Aiming ${sPlanner.dailyTarget || 50} Daily`;
 
             let greetingEl = document.getElementById('home-greeting');
             let sidebarGreeting = document.getElementById('sidebar-greeting');

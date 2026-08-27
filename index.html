@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=ib8uo2c" rel="stylesheet">
+    <link href="./index.css?v=vss7c41" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -394,10 +394,13 @@
                     <span class="home-eyebrow text-emerald-600 dark:text-emerald-450 flex items-center gap-1.5">🌱 ACTIVE EXAM TARGET <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span></span>
                     <h3 id="hprofile-name" class="font-bold text-slate-850 dark:text-white text-sm leading-snug mt-1.5">Agriculture Civil Service Exam</h3>
                     <p id="hprofile-meta" class="text-[11.5px] font-medium text-slate-500 dark:text-slate-400 mt-0.5">5th Level • Bagmati Province</p>
-                    <div class="flex gap-2 items-center text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mt-2 tabular-nums">
-                        <span id="hprofile-countdown">📅 -- days remaining</span>
-                        <span class="opacity-40">•</span>
-                        <span id="hprofile-targets">🎯 50 Daily</span>
+                    <div class="mt-2">
+                        <span id="hprofile-countdown" class="text-[10.5px] font-bold text-slate-500 dark:text-slate-400 tabular-nums">📅 -- days remaining</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 mt-2 text-[9.5px] font-bold tabular-nums">
+                        <span id="hprofile-streak-chip" class="px-2 py-0.5 rounded-full bg-emerald-100/70 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">🔥 0 Day Streak</span>
+                        <span id="hprofile-solved-chip" class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">📝 0 Solved</span>
+                        <span id="hprofile-aiming-chip" class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">🎯 Aiming 50 Daily</span>
                     </div>
                 </div>
                 <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="flex-shrink-0 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] rounded-xl shadow-xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
@@ -2652,7 +2655,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v196-ib8uo2c (202608271113)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v197-vss7c41 (202608271139)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3877,14 +3880,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=ib8uo2c" defer></script>
-    <script src="./js/elite_3d_engine.js?v=ib8uo2c" defer></script>
-    <script src="./js/canvas_charts.js?v=ib8uo2c" defer></script>
+    <script src="./js/elite_animations_controller.js?v=vss7c41" defer></script>
+    <script src="./js/elite_3d_engine.js?v=vss7c41" defer></script>
+    <script src="./js/canvas_charts.js?v=vss7c41" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=ib8uo2c" defer></script>
-    <script src="./js/sqlite_db.js?v=ib8uo2c" defer></script>
-    <script src="./js/krishi_idb.js?v=ib8uo2c"></script>
-    <script src="./js/app.js?v=ib8uo2c" defer></script>
+    <script src="./js/pwa_helpers.js?v=vss7c41" defer></script>
+    <script src="./js/sqlite_db.js?v=vss7c41" defer></script>
+    <script src="./js/krishi_idb.js?v=vss7c41"></script>
+    <script src="./js/app.js?v=vss7c41" defer></script>
 
 
     <!--
@@ -3912,8 +3915,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=ib8uo2c" defer></script>
-    <script src="./js/voice_assistant.js?v=ib8uo2c" defer></script>
+<script src="./js/data_safety.js?v=vss7c41" defer></script>
+    <script src="./js/voice_assistant.js?v=vss7c41" defer></script>
 </body>
 </html>
 

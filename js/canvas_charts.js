@@ -199,6 +199,11 @@ function drawRadarChart(){
                 return stats.solved > 0 ? Math.round((stats.correct/stats.solved)*100) : 0;
             }
         });
+
+        // With no attempts every axis sits at 0, collapsing the polygon to a dot on
+        // an otherwise empty spider-web. Detect that so we can show a hint instead of
+        // a chart that looks broken (matches the growth chart's empty state).
+        let hasRealData = analyticsUseDemoMode || profs.some(p => p > 0);
         
        let cx = w / 2;
 let cy = h / 2 - 5;
@@ -243,6 +248,22 @@ let numAxes = subjects.length > 0 ? subjects.length : 4; // Fallback to 4 to avo
                 let r = maxRadius * (prof / 100) * t;
                 return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
             });
+            if (!hasRealData) {
+                // Empty state: keep the grid + labels drawn above, add a centered hint.
+                let msg = 'Solve more MCQs to map competence';
+                ctx.font = '9px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                let tw = ctx.measureText(msg).width;
+                ctx.fillStyle = isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.82)';
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(cx - tw / 2 - 6, cy - 8, tw + 12, 16, 5);
+                else ctx.rect(cx - tw / 2 - 6, cy - 8, tw + 12, 16);
+                ctx.fill();
+                ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+                ctx.fillText(msg, cx, cy);
+                return;
+            }
             ctx.beginPath();
             poly.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
             ctx.closePath();
@@ -263,7 +284,7 @@ let numAxes = subjects.length > 0 ? subjects.length : 4; // Fallback to 4 to avo
         let reduceMotionR = false;
         try { reduceMotionR = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch(e) {}
         if (radarCanvas.__radarRAF) { cancelAnimationFrame(radarCanvas.__radarRAF); radarCanvas.__radarRAF = null; }
-        if (reduceMotionR || ps.perfMode === 'battery') {
+        if (reduceMotionR || ps.perfMode === 'battery' || !hasRealData) {
             radarFrame(1);
         } else {
             let st = null, DUR = 600;

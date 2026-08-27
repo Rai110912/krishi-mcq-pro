@@ -461,7 +461,7 @@ function drawNeuralMap(canvas) {
                 var dist = 55;
                 
                 // वास्तविक नतिजाको प्रतिशत निकाल्ने
-                var stats = window.localData.stats.subjectStats[sub] || {solved: 0, correct: 0};
+                var stats = (window.localData && window.localData.stats && window.localData.stats.subjectStats && window.localData.stats.subjectStats[sub]) || {solved: 0, correct: 0};
                 var acc = stats.solved > 0 ? Math.round((stats.correct / stats.solved) * 100) : 0;
                 
                 // एनिमेसन डेमों को अवस्थामा राम्रो डेटा राख्ने

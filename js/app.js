@@ -162,6 +162,11 @@ async function loadStaticQuestions() {
         bookmarked:[], wrong:[], bookmarkedLog:{}, wrongLog:{}, customQuestions:[], streak:{},
         stats:{totalSolved:0,totalCorrect:0,subjectStats:{}}, achievements:[], progression:{xp:0}
     };
+    // Expose the SAME object reference to standalone engine files (elite_3d_engine.js
+    // neural dome, canvas_charts.js subject charts) which read window.localData.stats.
+    // localData is declared once and only ever mutated in place — never reassigned — so
+    // this reference stays live. Without it those files crash on window.localData.stats.
+    window.localData = localData;
     // True only once localData.customQuestions has been proven to reflect IndexedDB.
     // Until then localData.customQuestions is the empty literal above, which must never
     // be persisted locally or uploaded — an unhydrated [] is indistinguishable from a
@@ -14574,6 +14579,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
 
     function setDemoMode(isDemo) {
         analyticsUseDemoMode = isDemo;
+        window.analyticsUseDemoMode = isDemo; // keep standalone engine files (dome, charts) in sync
         updateEnhancedAnalyticsPage();
         showToast(isDemo ? 'Using interactive demo data' : 'Using real statistics');
     }
@@ -14804,6 +14810,7 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             // Demo is now strictly opt-in via the "Preview demo data" button.
             analyticsUseDemoMode = false;
         }
+        window.analyticsUseDemoMode = analyticsUseDemoMode; // sync for standalone engine files
 
         // --- SUB-BLOCK 1: Warning blocks & mode elements ---
         try {

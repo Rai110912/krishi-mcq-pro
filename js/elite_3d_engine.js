@@ -344,7 +344,7 @@
                 let phi = Math.acos(-1 + (2 * idx) / subjects.length);
                 let theta = Math.sqrt(subjects.length * Math.PI) * phi;
                 
-                let stats = window.localData.stats.subjectStats[sub] || {solved: 0, correct: 0};
+                let stats = (window.localData && window.localData.stats && window.localData.stats.subjectStats && window.localData.stats.subjectStats[sub]) || {solved: 0, correct: 0};
                 let acc = stats.solved > 0 ? Math.round((stats.correct / stats.solved) * 100) : 0;
                 if (window.analyticsUseDemoMode) {
                     acc = [92, 85, 48, 42, 60][idx] || 70;

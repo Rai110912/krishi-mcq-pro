@@ -2389,7 +2389,7 @@ function loadData(){
     let firebaseSDKLoaded = false;
 
     async function loadFirebaseSDKs() {
-        if (window.firebase && window.firebase.auth && window.firebase.firestore && window.firebase.database && window.firebase.storage) {
+        if (window.firebase && window.firebase.auth && window.firebase.firestore && window.firebase.database) {
             firebaseSDKLoaded = true;
             return Promise.resolve();
         }
@@ -2422,12 +2422,6 @@ function loadData(){
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
                 }
                 await loadScript('./js/firebase-auth-compat.js');
-                try {
-                    await loadScript('./js/firebase-storage-compat.js');
-                } catch(stLocalErr) {
-                    // Fallback to CDN for storage compat if local is missing
-                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js');
-                }
 
                 console.log("[Firebase Loader] Firebase SDKs loaded successfully with local assets!");
                 firebaseSDKLoaded = true;
@@ -2440,7 +2434,6 @@ function loadData(){
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
                     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js');
-                    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js');
 
                     console.log("[Firebase Loader] All Firebase SDKs loaded successfully via Google CDN!");
                     firebaseSDKLoaded = true;
@@ -3804,15 +3797,15 @@ function loadData(){
                         syncInProgress = true;
                         ownsSyncLock = true;
                         console.log('[Cloud Sync] Snappy silent real-time CRDT merge executing...');
-                        await hydrateQbankFromStorage(uid, cloudData);
+                        await hydrateQbankFromChunks(uid, firestore.collection('users').doc(uid), cloudData);
                         const mergedPayload = mergeCloudAndLocalData(cloudData);
                         detectPeerChangesAndNotify(cloudData);
                         applyAllAppData(mergedPayload);
 
                         const delta = getDifferentialSyncDelta(mergedPayload, cloudData);
-                        // Sync the question bank to Storage independently of the Firestore
-                        // delta (a question-only change produces no delta key).
-                        await syncQbankBlob(uid, firestore.collection('users').doc(uid), mergedPayload.customQuestions, delta);
+                        // Sync the question bank to its Firestore qbank subcollection
+                        // independently of the delta (a question-only change produces no delta key).
+                        await syncQbankToChunks(uid, firestore.collection('users').doc(uid), mergedPayload.customQuestions, delta, (cloudData.qbankChunks || 0));
                         if (delta && Object.keys(delta).length > 0) {
                             const now = firebase.firestore.FieldValue.serverTimestamp();
                             mergedPayload.updatedAt = Date.now();
@@ -16506,8 +16499,8 @@ ${text}`;
         const keysToCheck = [
             'bookmarked', 'bookmarkedLog',
             'wrong', 'wrongLog',
-            // customQuestions is intentionally omitted — it is synced to a Cloud
-            // Storage blob by syncQbankBlob(), never written into the Firestore doc.
+            // customQuestions is intentionally omitted — it is synced to the Firestore
+            // qbank subcollection by syncQbankToChunks(), never inline in the users doc.
             'streak', 'stats', 'achievements', 'sm2', 'progression',
             'examProfiles', 'homeSettings', 'appearanceSettings',
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
@@ -16698,14 +16691,14 @@ ${text}`;
                 syncInProgress = true;
                 ownsSyncLock = true;
                 console.log('[Cloud Sync] Robust CRDT Union Merge executing...');
-                await hydrateQbankFromStorage(uid, currentCloudData);
+                await hydrateQbankFromChunks(uid, docRef, currentCloudData);
                 const mergedPayload = mergeCloudAndLocalData(currentCloudData);
                 applyAllAppData(mergedPayload);
 
                 const delta = getDifferentialSyncDelta(mergedPayload, currentCloudData);
-                // Sync the question bank to Storage independently of the Firestore delta
-                // (a question-only change produces no delta key). Uploads only when changed.
-                await syncQbankBlob(uid, docRef, mergedPayload.customQuestions, delta);
+                // Sync the question bank to its Firestore qbank subcollection independently
+                // of the delta (a question-only change produces no delta key). Writes only when changed.
+                await syncQbankToChunks(uid, docRef, mergedPayload.customQuestions, delta, (currentCloudData.qbankChunks || 0));
                 if (delta && Object.keys(delta).length > 0) {
                     if (typeof LZString !== 'undefined') {
                         if (delta.timingLog) delta.timingLog = LZString.compressToUTF16(JSON.stringify(delta.timingLog));
@@ -16728,7 +16721,7 @@ ${text}`;
                 }
 
                 // One-time cleanup of any legacy inline Firestore customQuestions field
-                // (the bank is now in Storage via syncQbankBlob above).
+                // (the bank is now in the qbank subcollection via syncQbankToChunks above).
                 await deleteLegacyQbankField(uid, docRef, currentCloudData);
 
 KrishiStorage.removeItem('krishi_sync_pending');
@@ -16770,7 +16763,7 @@ if (typeof updateSyncUI === 'function') updateSyncUI();
                 }
 
                 const now = firebase.firestore.FieldValue.serverTimestamp();
-                await syncQbankBlob(uid, docRef, localDataPayload.customQuestions, localDataPayload);
+                await syncQbankToChunks(uid, docRef, localDataPayload.customQuestions, localDataPayload, 0);
                 if (typeof LZString !== 'undefined') {
                     if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
                     if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
@@ -16801,19 +16794,23 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         }
     }
 
-    // ─── Cloud Storage question-bank offload ──────────────────────────────────
-    // customQuestions is moved OUT of the Firestore users/{uid} doc (which caps at
-    // ~1MB) into a Cloud Storage blob at user_qbank/{uid}/customQuestions.lz.
-    // Firestore keeps only tiny metadata: qbankUpdatedAt / qbankCount / qbankHash.
-    // customQuestions is deliberately absent from getDifferentialSyncDelta's
-    // keysToCheck, so the blob is synced here independently of the Firestore delta.
+    // ─── Firestore question-bank offload (card-free, no Cloud Storage) ────────
+    // customQuestions is moved OUT of the single Firestore users/{uid} doc (which
+    // caps at ~1MB) and split across a qbank subcollection: users/{uid}/qbank/chunk_N.
+    // Each chunk holds a slice of the LZString(UTF16)-compressed array, so the bank
+    // can grow far past the single-doc ceiling. The users/{uid} doc keeps only tiny
+    // metadata: qbankUpdatedAt / qbankCount / qbankHash / qbankChunks. customQuestions
+    // is deliberately absent from getDifferentialSyncDelta's keysToCheck, so the
+    // subcollection is synced here independently of the Firestore delta.
+    // NOTE: the existing firestore.rules users/{uid}/{document=**} owner rule already
+    // covers this subcollection — no rules change and no billing upgrade required.
     const QBANK_SYNCED_HASH_KEY = 'krishi_qbank_synced_hash';
+    // Conservative per-doc slice size. compressToUTF16 emits BMP chars that cost up to
+    // 3 bytes in UTF-8, so 300k chars ≈ 900KB — safely under Firestore's ~1MB doc cap.
+    const QBANK_CHUNK_CHARS = 300000;
 
-    function getQbankRef(uid) {
-        if (!window.firebase || typeof firebase.storage !== 'function') {
-            throw new Error('[Qbank] Firebase Storage SDK not loaded');
-        }
-        return firebase.storage(firebaseApp).ref('user_qbank/' + uid + '/customQuestions.lz');
+    function qbankChunkRef(userDocRef, i) {
+        return userDocRef.collection('qbank').doc('chunk_' + i);
     }
 
     // Order-INDEPENDENT digest of the bank (sorted id@updatedAt signatures). Two
@@ -16842,31 +16839,47 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             : JSON.stringify(arr);
     }
 
-    async function uploadQbankBlob(uid, compressedStr) {
-        const ref = getQbankRef(uid);
-        await ref.putString(compressedStr, 'raw', { contentType: 'text/plain; charset=utf-8' });
+    // Read every chunk of the compressed bank back into one string. Returns null when
+    // there are no chunks. Throws if a chunk the metadata promised is missing (torn
+    // write) so the caller can keep the local copy instead of applying a partial bank.
+    async function downloadQbankChunks(userDocRef, chunkCount) {
+        const n = Math.max(0, parseInt(chunkCount, 10) || 0);
+        if (n === 0) return null;
+        const parts = [];
+        for (let i = 0; i < n; i++) {
+            const snap = await qbankChunkRef(userDocRef, i).get();
+            const d = snap.exists ? snap.data() : null;
+            if (!d || typeof d.data !== 'string') {
+                throw new Error('[Qbank] Missing chunk ' + i + ' of ' + n);
+            }
+            parts.push(d.data);
+        }
+        return parts.join('');
     }
 
-    async function downloadQbankBlob(uid) {
-        let url;
-        try {
-            url = await getQbankRef(uid).getDownloadURL();
-        } catch (e) {
-            // Object simply doesn't exist yet (fresh account / pre-migration) — not an error.
-            if (e && e.code === 'storage/object-not-found') return null;
-            throw e;
+    // Write the compressed bank across chunk docs, then delete any leftover chunks from
+    // a previously larger bank. Returns the number of chunks written.
+    async function uploadQbankChunks(userDocRef, compressedStr, prevChunks) {
+        const slices = [];
+        for (let p = 0; p < compressedStr.length; p += QBANK_CHUNK_CHARS) {
+            slices.push(compressedStr.slice(p, p + QBANK_CHUNK_CHARS));
         }
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('[Qbank] Blob fetch failed: ' + res.status);
-        return await res.text();
+        for (let i = 0; i < slices.length; i++) {
+            await qbankChunkRef(userDocRef, i).set({ data: slices[i], isCompressed: true });
+        }
+        const prev = Math.max(0, parseInt(prevChunks, 10) || 0);
+        for (let i = slices.length; i < prev; i++) {
+            await qbankChunkRef(userDocRef, i).delete().catch(() => {});
+        }
+        return slices.length;
     }
 
     // READ side: if the cloud doc's metadata says the remote bank is newer than what
-    // we last applied, pull the blob and inject it as the compressed string so the
-    // existing mergeCloudAndLocalData() decompress path handles it unchanged. Also
+    // we last applied, pull the chunks and inject the reassembled compressed string so
+    // the existing mergeCloudAndLocalData() decompress path handles it unchanged. Also
     // flags a legacy (pre-migration) inline field so the caller can clean it up.
-    async function hydrateQbankFromStorage(uid, cloudData) {
-        if (!cloudData || !uid) return;
+    async function hydrateQbankFromChunks(uid, userDocRef, cloudData) {
+        if (!cloudData || !uid || !userDocRef) return;
         // Detect a legacy doc still carrying an inline customQuestions field with no
         // metadata — recorded before merge mutates the object.
         cloudData.__qbankLegacyInline = (('customQuestions' in cloudData) && !cloudData.qbankUpdatedAt);
@@ -16877,7 +16890,7 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             return;
         }
         try {
-            const compressed = await downloadQbankBlob(uid);
+            const compressed = await downloadQbankChunks(userDocRef, cloudData.qbankChunks);
             if (compressed) {
                 cloudData.customQuestions = compressed; // merge decompresses strings
                 if (cloudData.qbankHash) KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, cloudData.qbankHash);
@@ -16885,38 +16898,38 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         } catch (e) {
             // Download failure must not blank the bank: drop the field so the union
             // merge keeps the local copy, and leave the synced-hash untouched to retry.
-            console.warn('[Qbank] Blob download failed; keeping local questions.', e);
+            console.warn('[Qbank] Chunk download failed; keeping local questions.', e);
             delete cloudData.customQuestions;
         }
     }
 
     // WRITE side: (1) strip customQuestions from any Firestore payload so it never
-    // reaches the doc, and (2) if the local bank changed since our last upload, push
-    // the blob and write metadata directly to Firestore. Independent of the delta, so
-    // a question-only change still syncs even when no Firestore field changed.
-    // Throws on upload failure so the caller's catch keeps the sync pending (offline-safe).
-    async function syncQbankBlob(uid, docRef, sourceArr, payloadObj) {
+    // reaches the users/{uid} doc, and (2) if the local bank changed since our last
+    // upload, write the chunk docs and the metadata directly to Firestore. Independent
+    // of the delta, so a question-only change still syncs even when no Firestore field
+    // changed. prevChunks lets us delete orphaned chunks when the bank shrinks.
+    // Throws on write failure so the caller's catch keeps the sync pending (offline-safe).
+    async function syncQbankToChunks(uid, userDocRef, sourceArr, payloadObj, prevChunks) {
         if (payloadObj && 'customQuestions' in payloadObj) delete payloadObj.customQuestions;
-        if (!uid || !Array.isArray(sourceArr) || sourceArr.length === 0) return;
+        if (!uid || !userDocRef || !Array.isArray(sourceArr) || sourceArr.length === 0) return;
         const hash = computeQbankHash(sourceArr);
         if (hash === (KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '')) return; // unchanged
         const compressed = compressQbank(sourceArr);
-        await uploadQbankBlob(uid, compressed);
-        if (docRef) {
-            await docRef.set({
-                qbankUpdatedAt: Date.now(),
-                qbankCount: sourceArr.length,
-                qbankHash: hash
-            }, { merge: true });
-        }
-        // Only mark synced once BOTH the blob and its metadata landed — otherwise a
-        // failed metadata write would leave peers unable to discover the new blob.
+        const chunkCount = await uploadQbankChunks(userDocRef, compressed, prevChunks);
+        await userDocRef.set({
+            qbankUpdatedAt: Date.now(),
+            qbankCount: sourceArr.length,
+            qbankHash: hash,
+            qbankChunks: chunkCount
+        }, { merge: true });
+        // Only mark synced once BOTH the chunks and their metadata landed — otherwise a
+        // failed metadata write would leave peers unable to discover the new chunks.
         KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, hash);
     }
 
     // One-time migration cleanup: an account whose Firestore doc still holds an inline
-    // customQuestions field (flagged in hydrateQbankFromStorage) gets that field
-    // deleted after the merged bank has been offloaded to Storage. Idempotent.
+    // customQuestions field (flagged in hydrateQbankFromChunks) gets that field
+    // deleted after the merged bank has been offloaded to the qbank subcollection. Idempotent.
     async function deleteLegacyQbankField(uid, docRef, cloudData) {
         if (!uid || !docRef || !cloudData || !cloudData.__qbankLegacyInline) return;
         try {

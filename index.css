@@ -1512,6 +1512,17 @@ button, a, input, select, textarea {
     }
 }
 
+/* Bottom-nav clearance for the TABLET range (768–1023px).
+   #mobile-bottom-nav is `lg:hidden`, so the floating nav is visible on ALL widths
+   below 1024px — but the clearance rule above only covered ≤767px, leaving tablets
+   with no bottom padding, so the nav overlapped the last content. This closes the gap.
+   (≥1024px is handled by the desktop block below, where the nav is hidden.) */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .page {
+        padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 12px)) !important;
+    }
+}
+
 /* ==================== DESKTOP HYBRID MASTER-DETAIL LAYOUT RULES ==================== */
 @media (min-width: 1024px) {
     /* 1. Limit infinite stretching on pages for optimized readability */

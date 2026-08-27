@@ -2395,7 +2395,6 @@ aside {
 #mcq-card-container,
 #result-card-container,
 #home-nepal-globe-card,
-#hybrid-exams-shortcut-card,
 #page-practice .grid > div {
     background: var(--card) !important;
     border-color: var(--border) !important;
@@ -2763,42 +2762,8 @@ div[id^="creator-panel-"]:not(.hidden), div[id^="settings-tab-"]:not(.hidden), d
     box-shadow: 0 0 6px rgba(52, 211, 153, 0.35);
 }
 
-/* ── Home segmented control (Daily Tasks / Mock Exams) ────────────────
-   Styled here rather than in the markup because switchHybridDashboardTab()
-   reassigns both buttons' class attribute on every switch, which would wipe
-   any utility classes added in index.html. Selectors are id-scoped so they
-   out-rank the utilities that function writes. */
-#hybrid-dashboard-segmented {
-    gap: 4px;
-    padding: 4px;
-    border-radius: 14px;
-    background: rgba(15, 23, 42, 0.045);
-    border: 1px solid var(--hairline);
-    box-shadow: none;
-}
-.dark #hybrid-dashboard-segmented {
-    background: rgba(255, 255, 255, 0.045);
-}
-#hybrid-dashboard-segmented > button {
-    padding: 9px 8px;
-    border-radius: 10px;
-    font-size: 12px;
-    font-weight: var(--w-semibold) !important;
-    letter-spacing: 0.004em;
-    box-shadow: none;
-}
-#hybrid-dashboard-segmented > button:not(.bg-white) {
-    color: var(--text-secondary);
-}
-/* .bg-white is the active marker the tab switcher writes on the selected tab. */
-#hybrid-dashboard-segmented > button.bg-white {
-    background: var(--card);
-    font-weight: var(--w-bold) !important;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10), 0 1px 3px rgba(15, 23, 42, 0.06);
-}
-.dark #hybrid-dashboard-segmented > button.bg-white {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
-}
+/* Home "Daily Tasks / Mock Exams" segmented control removed — its styling
+   (#hybrid-dashboard-segmented) was deleted with the markup. */
 
 /* ── Mobile header icon buttons ───────────────────────────────────────
    The tap targets were already 48px but had no resting surface, so the

@@ -5213,40 +5213,13 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     };
 
     window.switchHybridDashboardTab = function(tabId) {
-        let btnTasks = document.getElementById('hybrid-dash-tab-tasks');
-        let btnExams = document.getElementById('hybrid-dash-tab-exams');
-        
-        if (tabId === 'tasks') {
-            if (btnTasks) btnTasks.className = "flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer";
-            if (btnExams) btnExams.className = "flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer";
-            
-            // Show daily active profile and normal widgets
-            let targetCard = document.getElementById('home-active-profile-card');
-            if (targetCard) targetCard.classList.remove('hidden');
-            let widgetsContainer = document.getElementById('home-widgets-container');
-            if (widgetsContainer) widgetsContainer.classList.remove('hidden');
-            
-            // Hide exams shortcut card
-            let mockGroup = document.getElementById('hybrid-exams-shortcut-card');
-            if (mockGroup) mockGroup.classList.add('hidden');
-        } else {
-            if (btnTasks) btnTasks.className = "flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer";
-            if (btnExams) btnExams.className = "flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer";
-            
-            // Hide daily target cards and daily widgets
-            let targetCard = document.getElementById('home-active-profile-card');
-            if (targetCard) targetCard.classList.add('hidden');
-            let widgetsContainer = document.getElementById('home-widgets-container');
-            if (widgetsContainer) widgetsContainer.classList.add('hidden');
-            
-            // Show exams shortcut card
-            let mockGroup = document.getElementById('hybrid-exams-shortcut-card');
-            if (mockGroup) mockGroup.classList.remove('hidden');
-        }
-        
-        if (typeof triggerHaptic === 'function') {
-            triggerHaptic('click');
-        }
+        // Home "Daily Tasks / Mock Exams" segmented control was removed; the home
+        // dashboard now always shows the tasks view (active target card + widgets).
+        // Kept as a guarded no-op so any stray reference stays harmless.
+        let targetCard = document.getElementById('home-active-profile-card');
+        if (targetCard) targetCard.classList.remove('hidden');
+        let widgetsContainer = document.getElementById('home-widgets-container');
+        if (widgetsContainer) widgetsContainer.classList.remove('hidden');
     };
 
     function syncPerfSoundToggle() {
@@ -11641,9 +11614,9 @@ document.querySelectorAll('button').forEach(btn => {
     function openHomeCustomizerModal() {
         let modal = document.getElementById('home-customizer-modal');
         if (!modal) return;
-        
+
         switchCustomizerTab('profiles');
-        
+
         let inner = document.getElementById('home-customizer-inner');
         modal.classList.remove('hidden');
         setTimeout(() => {
@@ -11654,6 +11627,23 @@ document.querySelectorAll('button').forEach(btn => {
         }, 10);
         playSound('click');
     }
+
+    // "Manage" on the ACTIVE EXAM TARGET card: open the customizer straight to the
+    // Profiles tab AND pre-open the edit form for the currently active profile, so the
+    // user lands directly on the exam date / daily target / name fields the card shows —
+    // instead of the old jump to the whole Study Planner page.
+    window.manageActiveExamTarget = function() {
+        openHomeCustomizerModal(); // opens modal + switches to Profiles tab
+        let active = (typeof getActiveProfile === 'function') ? getActiveProfile() : null;
+        // Wait for the modal/profiles pane to mount before populating the edit form.
+        setTimeout(() => {
+            if (active && active.id && typeof editProfileDirectly === 'function') {
+                editProfileDirectly(active.id);
+            } else if (typeof showNewProfileForm === 'function') {
+                showNewProfileForm();
+            }
+        }, 60);
+    };
 
     function closeHomeCustomizerModal() {
         // Revert live appearance settings back to saved state when closing without saving
@@ -12762,13 +12752,43 @@ document.querySelectorAll('button').forEach(btn => {
                                    : 'text-slate-500 dark:text-slate-400'));
             }
 
-            // Merged chips (streak / solved / daily target) — previously in the red widget.
+            // Merged chips (streak / solved) — previously in the red widget.
             let hprofileStreakChip = document.getElementById('hprofile-streak-chip');
             if (hprofileStreakChip) hprofileStreakChip.textContent = `🔥 ${getStreakCount()} Day Streak`;
             let hprofileSolvedChip = document.getElementById('hprofile-solved-chip');
             if (hprofileSolvedChip) hprofileSolvedChip.textContent = `📝 ${localData.stats.totalSolved} Solved`;
-            let hprofileAimingChip = document.getElementById('hprofile-aiming-chip');
-            if (hprofileAimingChip) hprofileAimingChip.textContent = `🎯 Aiming ${sPlanner.dailyTarget || 50} Daily`;
+
+            // Live daily pace chip: today's solved vs the active daily target.
+            let hprofilePaceChip = document.getElementById('hprofile-pace-chip');
+            if (hprofilePaceChip) {
+                let dailyT = sPlanner.dailyTarget || getDailyTarget() || 50;
+                let todayKey = (typeof getLocalDateString === 'function') ? getLocalDateString() : new Date().toISOString().slice(0, 10);
+                let solvedToday = (localData.streak && localData.streak[todayKey] && localData.streak[todayKey].solved) || 0;
+                let met = solvedToday >= dailyT;
+                let remain = Math.max(0, dailyT - solvedToday);
+                hprofilePaceChip.textContent = met ? `✅ ${solvedToday}/${dailyT} done today` : `🎯 ${remain} left today`;
+                hprofilePaceChip.className = 'px-2 py-0.5 rounded-full ' + (met
+                    ? 'bg-emerald-100/70 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-amber-100/70 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400');
+            }
+
+            // Mini readiness ring on the card (reuses getExamReadinessScore()).
+            let hprofileArc = document.getElementById('hprofile-readiness-arc');
+            let hprofilePct = document.getElementById('hprofile-readiness-pct');
+            if (hprofileArc || hprofilePct) {
+                let readiness = (typeof getExamReadinessScore === 'function') ? getExamReadinessScore() : 0;
+                let ringColor = readiness < 45 ? 'text-rose-500' : (readiness < 75 ? 'text-amber-500' : 'text-emerald-500');
+                let pctColor = readiness < 45 ? 'text-rose-600 dark:text-rose-400' : (readiness < 75 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400');
+                const CIRC = 113; // 2πr, r=18
+                if (hprofileArc) {
+                    hprofileArc.setAttribute('stroke-dashoffset', String(CIRC - (CIRC * readiness / 100)));
+                    hprofileArc.setAttribute('class', ringColor + ' transition-all duration-500');
+                }
+                if (hprofilePct) {
+                    hprofilePct.textContent = `${readiness}%`;
+                    hprofilePct.className = 'font-black text-[10px] tabular-nums ' + pctColor;
+                }
+            }
 
             let greetingEl = document.getElementById('home-greeting');
             let sidebarGreeting = document.getElementById('sidebar-greeting');

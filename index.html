@@ -77,7 +77,7 @@
     <script src="./js/libs/qrcode.min.js"></script>
     <script src="./js/libs/html5-qrcode.min.js"></script>
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=fxujrwu" rel="stylesheet">
+    <link href="./index.css?v=xj639ee" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -366,18 +366,9 @@
                 </div>
             </div>
 
-            <!-- Premium Hybrid Dashboard Segmented Control -->
-            <!-- Appearance (container + both tabs) is defined in index.css under
-                 "Home segmented control", because switchHybridDashboardTab()
-                 rewrites the tab buttons' class attribute on every switch. -->
-            <div id="hybrid-dashboard-segmented" class="premium-hybrid-show flex">
-                <button onclick="switchHybridDashboardTab('tasks')" id="hybrid-dash-tab-tasks" class="flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 bg-white dark:bg-slate-800 shadow-sm text-emerald-600 dark:text-emerald-400 cursor-pointer">
-                    🌾 Daily Tasks
-                </button>
-                <button onclick="switchHybridDashboardTab('exams')" id="hybrid-dash-tab-exams" class="flex-1 text-center py-2 text-[10px] font-black rounded-lg transition-all duration-300 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer">
-                    📝 Mock Exams
-                </button>
-            </div>
+            <!-- Home "Daily Tasks / Mock Exams" segmented control removed per request.
+                 Home now always shows the tasks dashboard (active target card + widgets).
+                 Mock exams remain available from the Exams page and the mockTest widget. -->
 
             <!-- Goal Achievement Floating Badge Banner (Hidden mostly, show on streak updates) -->
             <div id="streak-floating-banner" class="home-card hidden transform transition duration-500 scale-95 p-4 border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900 text-amber-800 dark:text-amber-200 flex items-center gap-3">
@@ -400,24 +391,24 @@
                     <div class="flex flex-wrap gap-1.5 mt-2 text-[9.5px] font-bold tabular-nums">
                         <span id="hprofile-streak-chip" class="px-2 py-0.5 rounded-full bg-emerald-100/70 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">🔥 0 Day Streak</span>
                         <span id="hprofile-solved-chip" class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">📝 0 Solved</span>
-                        <span id="hprofile-aiming-chip" class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">🎯 Aiming 50 Daily</span>
+                        <span id="hprofile-pace-chip" class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">🎯 0 / 50 today</span>
                     </div>
                 </div>
-                <button onclick="navigate('page-study-planner'); event.stopPropagation();" class="flex-shrink-0 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] rounded-xl shadow-xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
+                <div class="flex-shrink-0 flex flex-col items-center gap-2">
+                    <div class="relative w-12 h-12 flex items-center justify-center" title="Exam readiness score">
+                        <svg class="absolute transform -rotate-90 w-12 h-12">
+                            <circle cx="24" cy="24" r="18" stroke="var(--border)" stroke-width="4" fill="transparent"></circle>
+                            <circle id="hprofile-readiness-arc" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="4" fill="transparent" class="text-emerald-500 transition-all duration-500" stroke-dasharray="113" stroke-dashoffset="113" stroke-linecap="round"></circle>
+                        </svg>
+                        <span id="hprofile-readiness-pct" class="font-black text-[10px] text-emerald-600 dark:text-emerald-400 tabular-nums">0%</span>
+                    </div>
+                    <button onclick="manageActiveExamTarget(); event.stopPropagation();" class="px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-150 dark:border-slate-700 hover:border-emerald-350 dark:hover:border-emerald-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] rounded-xl shadow-xs transition duration-150 cursor-pointer hover:scale-105 active:scale-95">Manage</button>
+                </div>
             </div>
 
 
-            <!-- Premium Hybrid Exams Shortcuts (shown in Exams tab) -->
-            <div id="hybrid-exams-shortcut-card" class="home-card hidden p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 space-y-3">
-                <div>
-                    <span class="home-eyebrow text-emerald-600 dark:text-emerald-450 block">📝 EXAM HUB SHORTCUTS</span>
-                    <p class="text-[11.5px] font-medium text-slate-500 dark:text-slate-400 mt-1">Launch standard civil service mock examinations instantly.</p>
-                </div>
-                <div class="grid grid-cols-1 gap-2.5">
-                    <button onclick="startMockTest(50,60)" class="w-full p-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-2xl font-bold shadow-sm text-[12.5px] cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">📝 Start Full Mock (50 Qs, 60m)</button>
-                    <button onclick="startMockTest(25,30)" class="w-full p-3.5 bg-gradient-to-r from-teal-600 to-teal-500 text-white rounded-2xl font-bold shadow-sm text-[12.5px] cursor-pointer active:scale-95 transition-all text-center flex justify-center items-center gap-1.5">⚡ Start Quick Mock (25 Qs, 30m)</button>
-                </div>
-            </div>
+            <!-- Premium Hybrid Exams Shortcuts removed with the segmented control.
+                 Mock tests are launched from the Exams page / mockTest widget. -->
 
             <!-- Dynamic Widgets Destination -->
             <div id="home-widgets-container" class="space-y-4">
@@ -2655,7 +2646,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v198-fxujrwu (202608271144)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v199-xj639ee (202608271203)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3880,14 +3871,14 @@
     <script src="./js/libs/lottie.min.js" defer></script>
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=fxujrwu" defer></script>
-    <script src="./js/elite_3d_engine.js?v=fxujrwu" defer></script>
-    <script src="./js/canvas_charts.js?v=fxujrwu" defer></script>
+    <script src="./js/elite_animations_controller.js?v=xj639ee" defer></script>
+    <script src="./js/elite_3d_engine.js?v=xj639ee" defer></script>
+    <script src="./js/canvas_charts.js?v=xj639ee" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=fxujrwu" defer></script>
-    <script src="./js/sqlite_db.js?v=fxujrwu" defer></script>
-    <script src="./js/krishi_idb.js?v=fxujrwu"></script>
-    <script src="./js/app.js?v=fxujrwu" defer></script>
+    <script src="./js/pwa_helpers.js?v=xj639ee" defer></script>
+    <script src="./js/sqlite_db.js?v=xj639ee" defer></script>
+    <script src="./js/krishi_idb.js?v=xj639ee"></script>
+    <script src="./js/app.js?v=xj639ee" defer></script>
 
 
     <!--
@@ -3915,8 +3906,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=fxujrwu" defer></script>
-    <script src="./js/voice_assistant.js?v=fxujrwu" defer></script>
+<script src="./js/data_safety.js?v=xj639ee" defer></script>
+    <script src="./js/voice_assistant.js?v=xj639ee" defer></script>
 </body>
 </html>
 

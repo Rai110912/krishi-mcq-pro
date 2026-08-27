@@ -17681,96 +17681,15 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     window.updateActiveSeasonIndex = function(idx) {
         activeSeasonIdx = idx;
     };
-    var seasonsData = [
-        { name: "वर्षा (Kharif)", angle: 0, crops: "धान, मकै, कोदो, भटमास", tip: "यो मौसममा सिंचाइ र ढुसीजन्य रोगको बढी सम्भावना हुन्छ। सिंचाइ र वनस्पति रोगको पाठ्यक्रम दोहोर्‍याउनुहोस्।" },
-        { name: "शरद (Autumn)", angle: 120, crops: "तोरी, आलु, सागपात, तोरी", tip: "यो माटोमा मल र नाइट्रोजनको मात्रा मिलाउन आवश्यक समय हो। माटो विज्ञान र मलको राम्रो अध्ययन गर्नुहोस्।" },
-        { name: "वसन्त (Winter)", angle: 240, crops: "गहुँ, प्याज, गोलभेडा, चना", tip: "कीट नियन्त्रण (IPM) र हरितगृह व्यवस्थापनको परीक्षा प्रश्नहरूमा बढी ध्यान दिनुहोस्।" }
-    ];
-
+    // Nepal Seasonal Crop Wheel widget removed per request.
+    // NOTE: activeSeasonIdx + window.updateActiveSeasonIndex (declared above) are
+    // intentionally kept — the weather-particle background reads activeSeasonIdx
+    // (see the `season` lookup elsewhere), so deleting them would affect that.
+    // setup3DSeasonalWheel now only strips any previously-inserted wheel node so
+    // nothing lingers in the planner; it no longer creates or renders the widget.
     function setup3DSeasonalWheel() {
-        var plannerPage = document.getElementById('page-study-planner');
-        if (!plannerPage) return;
-
-        var wheelCard = document.getElementById('3d-crop-wheel-widget');
-        if (!wheelCard) {
-            wheelCard = document.createElement('div');
-            wheelCard.id = '3d-crop-wheel-widget';
-            wheelCard.className = 'seasonal-crop-wheel-card';
-            
-            // स्टडी प्लानरको अन्त्यमा थप्ने
-            plannerPage.appendChild(wheelCard);
-        }
-
-        renderCropWheel();
-    }
-
-    function renderCropWheel() {
-        var widget = document.getElementById('3d-crop-wheel-widget');
-        if (!widget) return;
-
-        // Reset and trigger dynamic organic glow pulse animations
-        widget.classList.remove('pulse-glow-kharif', 'pulse-glow-autumn', 'pulse-glow-winter');
-        let pulseClasses = ['pulse-glow-kharif', 'pulse-glow-autumn', 'pulse-glow-winter'];
-        let activePulseClass = pulseClasses[activeSeasonIdx];
-        if (activePulseClass) {
-            void widget.offsetWidth; // Force hardware reflow to restart CSS keyframes
-            widget.classList.add(activePulseClass);
-        }
-
-        var current = seasonsData[activeSeasonIdx];
-        let isElite = KrishiStorage.getItem('krishi_elite_animations') !== 'false';
-
-        if (isElite) {
-            widget.innerHTML = `
-                <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
-                <div class="crop-wheel-3d-wrapper" style="width: 100%; height: 100px;">
-                    <canvas id="carousel-3d-canvas" class="w-full h-[100px] cursor-pointer"></canvas>
-                </div>
-                <div class="text-center space-y-1">
-                    <p class="text-xs font-black text-slate-850 dark:text-slate-100">🌾 सिफारिस बाली: <span id="carousel-3d-crops" class="text-emerald-500">${current.crops}</span></p>
-                    <p id="carousel-3d-tip" class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
-                </div>
-                <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
-                    अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
-                </button>
-            `;
-
-            if (typeof window.init3DSeasonalCarousel === 'function') {
-                window.init3DSeasonalCarousel(document.getElementById('carousel-3d-canvas'));
-            }
-
-            widget.querySelector('#btn-rotate-wheel').onclick = function() {
-                if (typeof window.rotateSeasonal3DCarousel === 'function') {
-                    window.rotateSeasonal3DCarousel();
-                } else {
-                    window.triggerHaptic('click');
-                    activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
-                    renderCropWheel();
-                }
-            };
-        } else {
-            widget.innerHTML = `
-                <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider block text-center">📅 ३डी ऋतु चक्र र बाली सिफारिस (Nepal Seasonal Crop Wheel)</span>
-                <div class="crop-wheel-3d-wrapper">
-                    <div class="crop-wheel-circle" style="--crop-angle: ${current.angle}deg;">
-                        <div style="transform: rotateZ(${-current.angle}deg);">${current.name}</div>
-                    </div>
-                </div>
-                <div class="text-center space-y-1">
-                    <p class="text-xs font-black text-slate-800 dark:text-slate-100">🌾 सिफारिस बाली: <span class="text-emerald-500">${current.crops}</span></p>
-                    <p class="text-[10px] text-slate-400 leading-relaxed px-4">${current.tip}</p>
-                </div>
-                <button id="btn-rotate-wheel" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg cursor-pointer transition">
-                    अर्को ऋतु परिवर्तन गर्नुहोस् 🔄
-                </button>
-            `;
-
-            widget.querySelector('#btn-rotate-wheel').onclick = function() {
-                window.triggerHaptic('click');
-                activeSeasonIdx = (activeSeasonIdx + 1) % seasonsData.length;
-                renderCropWheel();
-            };
-        }
+        var existing = document.getElementById('3d-crop-wheel-widget');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
     }
 
     console.log('[Spec 2026 Enhanced Animations] Activated smoothly!');

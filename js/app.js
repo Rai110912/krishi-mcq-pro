@@ -2804,24 +2804,14 @@ function loadData(){
                     }
                 }
                 if (!nativeSuccess) {
-                    showToast('🔄 Opening Web Google Sign-In...');
-                    try {
-                        await krishiLinkIfAnonymousOrSignIn(auth, { provider: provider });
-                    } catch(popupErr) {
-                        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/popup-closed-by-user') {
-                            if (auth.currentUser && auth.currentUser.isAnonymous) {
-                                await auth.currentUser.linkWithRedirect(provider);
-                            } else {
-                                await auth.signInWithRedirect(provider);
-                            }
-                            return;
-                        }
-                        throw popupErr;
-                    }
-                    showToast('✅ Logged in successfully with Google!');
-                    try {
-                        if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
-                    } catch(e) {}
+                    // Stay IN-APP: deliberately NO web popup / signInWithRedirect fallback
+                    // here. In the Android WebView the redirect flow bounces to the
+                    // firebaseapp.com auth handler (a storage-partitioned origin) and fails
+                    // with "missing initial state". Native GoogleAuth is the only in-app path,
+                    // so on failure surface a clear, actionable error instead of leaving the app.
+                    console.warn('[Google Auth Native] Native sign-in did not complete; not falling back to browser (in-app only).');
+                    showToast('❌ Google Sign-in could not open in the app. Make sure Google Play Services is available and you are signed in on the device, then try again.', 8000);
+                    return;
                 }
             } else {
                 // Clear One Tap suppression flag on manual login attempt!

@@ -1233,12 +1233,16 @@ async function loadStaticQuestions() {
 
     // Resume session logic - only trigger on startup if we are actively on the practice page
     setTimeout(() => {
-        // Check updates on load
-        window.addEventListener('load', () => {
+        // Check updates on load. This body runs 1000ms into a setTimeout, so `load` has
+        // already fired and a listener for it would never run — the same latent bug as
+        // the service-worker registration further down. Call it directly instead.
+        const runUpdateCheck = () => {
             if (typeof checkForUpdates === 'function') {
                 checkForUpdates(false);
             }
-        });
+        };
+        if (document.readyState === 'complete') runUpdateCheck();
+        else window.addEventListener('load', runUpdateCheck, { once: true });
 
         // Anti-Cheat & Save Data Mechanism
         function saveSpacedRepetitionProgress() {
@@ -1264,9 +1268,17 @@ async function loadStaticQuestions() {
         }
     }, 1000);
 
-        // Register Service Worker for PWA (Progressive Web App) offline support
+        // Register Service Worker for PWA (Progressive Web App) offline support.
+        //
+        // This code sits inside the DOMContentLoaded async function that already
+        // suspended on `await loadStaticQuestions()` (~L469), so execution only reaches
+        // here in a later task — by which time the window `load` event has long since
+        // fired. Registering from inside a `load` listener therefore never ran at all:
+        // the app had NO service worker, nothing was ever cached, and offline startup
+        // failed no matter how correct sw.js was. Register immediately when the document
+        // is already complete, and only fall back to waiting for `load` if it is not.
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
+            const registerServiceWorker = () => {
                 navigator.serviceWorker.register('./sw.js')
                     .then(reg => {
                         console.log('Service Worker registered successfully!', reg.scope);
@@ -1313,7 +1325,10 @@ async function loadStaticQuestions() {
                         });
                     })
                     .catch(err => console.warn('Service Worker registration failed:', err));
-            });
+            };
+
+            if (document.readyState === 'complete') registerServiceWorker();
+            else window.addEventListener('load', registerServiceWorker, { once: true });
 
             let refreshing = false;
             navigator.serviceWorker.addEventListener('controllerchange', () => {

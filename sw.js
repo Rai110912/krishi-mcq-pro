@@ -1,43 +1,85 @@
-const CACHE_NAME = 'krishi-mcq-v209-k70odl4';
+const CACHE_NAME = 'krishi-mcq-v210-9vwsv3z';
+
+// Core offline shell. The app must be able to boot from these alone, with no network.
+// Kept as data (not 30 hand-written fetch calls) so install() can treat each entry
+// independently — see precacheOne().
+const PRECACHE_URLS = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icon.svg',
+  './index.css?v=9vwsv3z',
+  './questions.json',
+  './js/libs/tailwindcss.js',
+  './js/libs/lucide.js',
+  './js/canvas_charts.js?v=9vwsv3z',
+  './js/pwa_helpers.js?v=9vwsv3z',
+  './js/app.js?v=9vwsv3z',
+  './js/elite_animations_controller.js?v=9vwsv3z',
+  './js/elite_3d_engine.js?v=9vwsv3z',
+  './js/firebase-app-compat.js',
+  './js/firebase-auth-compat.js',
+  './js/firebase-firestore-compat.js',
+  './js/sqlite_db.js?v=9vwsv3z',
+  './js/krishi_idb.js?v=9vwsv3z',
+  './js/krishi_worker.js?v=9vwsv3z',
+  './js/lottie_adapter.js',
+  './js/animation_orchestrator.js',
+  './js/libs/lottie.min.js',
+  './js/voice_assistant.js?v=9vwsv3z',
+  './js/ambient_player.js',
+  './js/data_safety.js?v=9vwsv3z',
+  './js/libs/qrcode.min.js',
+  './js/libs/html5-qrcode.min.js',
+  './js/libs/lz-string.min.js'
+];
+
+// Third-party CDN extras: large, optional, and the most likely to be slow or blocked.
+// Cached best-effort AFTER install resolves, so they can never gate offline support.
+const OPTIONAL_PRECACHE_URLS = [
+  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
+];
+
+// Last-resort offline page, inlined on purpose: a cached offline.html could itself be
+// the asset that failed to cache, and this has to render with zero dependencies.
+const OFFLINE_FALLBACK_HTML = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<title>Offline - Krishi MCQ Pro</title><style>' +
+  'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+  'background:#0f172a;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}' +
+  '.c{text-align:center;max-width:320px}.i{font-size:44px;margin-bottom:14px}' +
+  'h1{font-size:17px;margin:0 0 8px}p{font-size:13px;line-height:1.6;color:#93a2b8;margin:0 0 20px}' +
+  'button{background:#4f46e5;color:#fff;border:0;padding:11px 22px;border-radius:10px;' +
+  'font-size:13px;font-weight:700;cursor:pointer}</style></head><body><div class="c">' +
+  '<div class="i">📡</div><h1>You are offline</h1>' +
+  '<p>Krishi MCQ Pro needs an internet connection once to finish setting up offline mode. ' +
+  'Connect and reload - after that the app works without internet.</p>' +
+  '<button onclick="location.reload()">Try again</button></div></body></html>';
+
+// Caches one URL and NEVER rejects. install() previously wrapped ~30 bare fetches in
+// Promise.all(), so a single unreachable asset (typically the jsdelivr CDN entry)
+// rejected the whole batch, install() failed, the worker never activated and the cache
+// stayed EMPTY — the real reason offline startup died. Anything skipped here is picked
+// up later by the runtime cache-first handler or the periodic sync.
+function precacheOne(cache, url) {
+  return fetch(url, { cache: 'reload' })
+    .then(res => (res && res.ok) ? cache.put(url, res) : null)
+    .catch(err => {
+      console.warn('[Service Worker] Precache skipped:', url, (err && err.message) || err);
+    });
+}
 
 // Install Event: Pre-cache core shell resources with cache-busting reload
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Pre-caching minimal offline shell assets, local libraries, and modular code...');
-        return Promise.all([
-          fetch('./', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./', r); }),
-          fetch('./index.html', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.html', r); }),
-          fetch('./manifest.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./manifest.json', r); }),
-          fetch('./icon.svg', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./icon.svg', r); }),
-          fetch('./index.css?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./index.css?v=k70odl4', r); }),
-          fetch('./questions.json', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./questions.json', r); }),
-          fetch('./js/libs/tailwindcss.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/tailwindcss.js', r); }),
-          fetch('./js/libs/lucide.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lucide.js', r); }),
-          fetch('./js/canvas_charts.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/canvas_charts.js?v=k70odl4', r); }),
-
-          fetch('./js/pwa_helpers.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/pwa_helpers.js?v=k70odl4', r); }),
-          fetch('./js/app.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/app.js?v=k70odl4', r); }),
-          fetch('./js/elite_animations_controller.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_animations_controller.js?v=k70odl4', r); }),
-          fetch('./js/elite_3d_engine.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/elite_3d_engine.js?v=k70odl4', r); }),
-          fetch('./js/firebase-app-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-app-compat.js', r); }),
-          fetch('./js/firebase-auth-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-auth-compat.js', r); }),
-          fetch('./js/sqlite_db.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/sqlite_db.js?v=k70odl4', r); }),
-          fetch('./js/krishi_idb.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/krishi_idb.js?v=k70odl4', r); }),
-          fetch('./js/krishi_worker.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/krishi_worker.js?v=k70odl4', r); }),
-          fetch('./js/lottie_adapter.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/lottie_adapter.js', r); }),
-          fetch('./js/animation_orchestrator.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/animation_orchestrator.js', r); }),
-          fetch('./js/libs/lottie.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lottie.min.js', r); }),
-          fetch('./js/voice_assistant.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/voice_assistant.js?v=k70odl4', r); }),
-          fetch('./js/ambient_player.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/ambient_player.js', r); }),
-fetch('./js/data_safety.js?v=k70odl4', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/data_safety.js?v=k70odl4', r); }),
-          fetch('./js/firebase-firestore-compat.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/firebase-firestore-compat.js', r); }),
-          fetch('./js/libs/qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/qrcode.min.js', r); }),
-          fetch('./js/libs/html5-qrcode.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/html5-qrcode.min.js', r); }),
-          fetch('./js/libs/lz-string.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('./js/libs/lz-string.min.js', r); }),
-          fetch('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js', { cache: 'reload' }).then(r => { if (r.ok) cache.put('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js', r); })
-        ]);
+        console.log('[Service Worker] Pre-caching offline shell (' + PRECACHE_URLS.length + ' core assets)...');
+        return Promise.allSettled(PRECACHE_URLS.map(url => precacheOne(cache, url)))
+          .then(() => {
+            // Deliberately not awaited: a slow CDN must not delay activation.
+            OPTIONAL_PRECACHE_URLS.forEach(url => precacheOne(cache, url));
+          });
       })
       .then(() => self.skipWaiting())
   );
@@ -83,15 +125,16 @@ self.addEventListener('fetch', event => {
           return networkResponse;
         })
         .catch(() => {
+          // Walk the fallbacks in order of fidelity. The last step synthesises a page
+          // so respondWith() can never resolve to undefined — that is what turned a
+          // first-launch-while-offline into a blank white screen with no explanation.
           return caches.match(event.request)
-            .then(cachedResponse => {
-              if (cachedResponse) return cachedResponse;
-              return caches.match('./')
-                .then(rootResponse => {
-                  if (rootResponse) return rootResponse;
-                  return caches.match('./index.html');
-                });
-            });
+            .then(hit => hit || caches.match('./'))
+            .then(hit => hit || caches.match('./index.html'))
+            .then(hit => hit || new Response(OFFLINE_FALLBACK_HTML, {
+              status: 200,
+              headers: { 'Content-Type': 'text/html; charset=utf-8' }
+            }));
         })
     );
     return;

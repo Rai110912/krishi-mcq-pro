@@ -2766,10 +2766,61 @@ function loadData(){
         } catch (e) {}
     })();
 
+    // ── Google button micro-interactions ────────────────────────────────────
+    // Instead of a burst of progress toasts ("Opening…", "Exchanging…"), the
+    // sign-in button itself carries the state: an inline spinner while busy, a
+    // drawn green checkmark on success, then it restores its original label.
+    function ensureGoogleBtnStyles() {
+        if (document.getElementById('krishi-google-btn-styles')) return;
+        const st = document.createElement('style');
+        st.id = 'krishi-google-btn-styles';
+        st.textContent =
+            '@keyframes krishiCheckDraw{to{stroke-dashoffset:0;}}' +
+            '@keyframes krishiGSpin{to{transform:rotate(360deg);}}' +
+            '@keyframes krishiPop{0%{transform:scale(.6);opacity:0;}60%{transform:scale(1.12);}100%{transform:scale(1);opacity:1;}}' +
+            '.krishi-gbtn-spin{width:1rem;height:1rem;display:inline-block;border-radius:9999px;' +
+            'border:2px solid currentColor;border-top-color:transparent;animation:krishiGSpin .7s linear infinite;}' +
+            '.krishi-gbtn-check{display:inline-flex;animation:krishiPop .35s ease both;}' +
+            '.krishi-gbtn-check path{stroke-dasharray:24;stroke-dashoffset:24;animation:krishiCheckDraw .45s .1s ease forwards;}';
+        (document.head || document.documentElement).appendChild(st);
+    }
+    function resetGoogleBtn() {
+        const btn = document.getElementById('google-login-btn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor = '';
+        if (btn.dataset.originalHtml != null) btn.innerHTML = btn.dataset.originalHtml;
+    }
+    function setGoogleBtnState(state) {
+        const btn = document.getElementById('google-login-btn');
+        if (!btn) return;
+        ensureGoogleBtnStyles();
+        if (btn.dataset.originalHtml == null) btn.dataset.originalHtml = btn.innerHTML;
+        if (state === 'loading') {
+            btn.disabled = true;
+            btn.style.opacity = '0.9';
+            btn.style.cursor = 'wait';
+            btn.innerHTML = '<span class="krishi-gbtn-spin" aria-hidden="true"></span>' +
+                            '<span class="text-[10px]">Signing in…</span>';
+        } else if (state === 'success') {
+            btn.disabled = true;
+            btn.style.opacity = '1';
+            btn.style.cursor = 'default';
+            btn.innerHTML = '<span class="krishi-gbtn-check" aria-hidden="true">' +
+                '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="#34A853" stroke-width="3" ' +
+                'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>' +
+                '<span class="text-[10px]" style="color:#34A853;">Signed in!</span>';
+            setTimeout(resetGoogleBtn, 2200);
+        } else {
+            resetGoogleBtn();
+        }
+    }
+
     async function handleGoogleLogin() {
         try {
-            showToast('⏳ Opening Google Sign-in...');
-            
+            setGoogleBtnState('loading');
+
             // Initialize auth synchronously to preserve browser user gesture context (PC Fallback)
             const auth = getSafeFirebaseApp().auth();
             const provider = new firebase.auth.GoogleAuthProvider();
@@ -2781,7 +2832,6 @@ function loadData(){
                 const GoogleAuthPlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GoogleAuth;
                 let nativeSuccess = false;
                 if (GoogleAuthPlugin) {
-                    showToast('🔄 Opening Native Google Sign-In...');
                     try {
                         await GoogleAuthPlugin.initialize();
                     } catch (initErr) {
@@ -2790,10 +2840,9 @@ function loadData(){
                     try {
                         const result = await GoogleAuthPlugin.signIn();
                         if (result && result.idToken) {
-                            showToast('🔐 Exchanging tokens with server...');
                             const credential = firebase.auth.GoogleAuthProvider.credential(result.idToken);
                             await krishiLinkIfAnonymousOrSignIn(auth, { credential: credential });
-                            showToast('✅ Logged in successfully with Google!');
+                            setGoogleBtnState('success');
                             nativeSuccess = true;
                             try {
                                 if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
@@ -2810,6 +2859,7 @@ function loadData(){
                     // with "missing initial state". Native GoogleAuth is the only in-app path,
                     // so on failure surface a clear, actionable error instead of leaving the app.
                     console.warn('[Google Auth Native] Native sign-in did not complete; not falling back to browser (in-app only).');
+                    resetGoogleBtn();
                     showToast('❌ Google Sign-in could not open in the app. Make sure Google Play Services is available and you are signed in on the device, then try again.', 8000);
                     return;
                 }
@@ -2818,13 +2868,14 @@ function loadData(){
                 KrishiStorage.removeItem('krishi_one_tap_disabled');
                 // Trigger popup instantly on Web / PWA
                 await krishiLinkIfAnonymousOrSignIn(auth, { provider: provider });
-                showToast('✅ Logged in successfully with Google!');
+                setGoogleBtnState('success');
                 try {
                     if (typeof triggerBackgroundSync === 'function') triggerBackgroundSync();
                 } catch(e) {}
             }
         } catch (error) {
             console.error("Google login error:", error);
+            resetGoogleBtn();
             showToast('❌ Google Sign-in failed: ' + (error.message || error));
         }
     }

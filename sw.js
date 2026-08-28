@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v211-1gl3dck';
+const CACHE_NAME = 'krishi-mcq-v212-2ywvgsf';
 
 // Core offline shell. The app must be able to boot from these alone, with no network.
 // Kept as data (not 30 hand-written fetch calls) so install() can treat each entry
@@ -8,27 +8,27 @@ const PRECACHE_URLS = [
   './index.html',
   './manifest.json',
   './icon.svg',
-  './index.css?v=1gl3dck',
+  './index.css?v=2ywvgsf',
   './questions.json',
   './js/libs/tailwindcss.js',
   './js/libs/lucide.js',
-  './js/canvas_charts.js?v=1gl3dck',
-  './js/pwa_helpers.js?v=1gl3dck',
-  './js/app.js?v=1gl3dck',
-  './js/elite_animations_controller.js?v=1gl3dck',
-  './js/elite_3d_engine.js?v=1gl3dck',
+  './js/canvas_charts.js?v=2ywvgsf',
+  './js/pwa_helpers.js?v=2ywvgsf',
+  './js/app.js?v=2ywvgsf',
+  './js/elite_animations_controller.js?v=2ywvgsf',
+  './js/elite_3d_engine.js?v=2ywvgsf',
   './js/firebase-app-compat.js',
   './js/firebase-auth-compat.js',
   './js/firebase-firestore-compat.js',
-  './js/sqlite_db.js?v=1gl3dck',
-  './js/krishi_idb.js?v=1gl3dck',
-  './js/krishi_worker.js?v=1gl3dck',
+  './js/sqlite_db.js?v=2ywvgsf',
+  './js/krishi_idb.js?v=2ywvgsf',
+  './js/krishi_worker.js?v=2ywvgsf',
   './js/lottie_adapter.js',
   './js/animation_orchestrator.js',
   './js/libs/lottie.min.js',
-  './js/voice_assistant.js?v=1gl3dck',
+  './js/voice_assistant.js?v=2ywvgsf',
   './js/ambient_player.js',
-  './js/data_safety.js?v=1gl3dck',
+  './js/data_safety.js?v=2ywvgsf',
   './js/libs/qrcode.min.js',
   './js/libs/html5-qrcode.min.js',
   './js/libs/lz-string.min.js'
@@ -36,9 +36,31 @@ const PRECACHE_URLS = [
 
 // Third-party CDN extras: large, optional, and the most likely to be slow or blocked.
 // Cached best-effort AFTER install resolves, so they can never gate offline support.
+// Only prefetched on connections that can afford it — see shouldPrefetchOptional().
 const OPTIONAL_PRECACHE_URLS = [
   'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
 ];
+
+// The OCR bundle is multiple megabytes and most users never open OCR at all, so
+// downloading it on every fresh install burned real mobile data and congested the
+// install just when the assets that actually matter were being fetched. Skip it on
+// metered/slow links; the runtime cache-first handler still stores it the first time
+// OCR is genuinely used, so offline OCR keeps working for anyone who uses OCR.
+function shouldPrefetchOptional() {
+  const c = self.navigator && self.navigator.connection;
+  if (!c) return true; // No Network Information API: keep the old behaviour.
+  if (c.saveData) return false;
+  return !/(^|-)2g$/.test(c.effectiveType || '') && c.effectiveType !== 'slow-2g';
+}
+
+// Versioned URLs (`?v=2ywvgsf`) are immutable, so the copy the page just downloaded is
+// byte-identical and reusing it costs nothing. Only the HTML is fetched with 'reload',
+// because it is the version pointer and must never be stale. Using 'reload' for
+// everything re-downloaded the whole ~1.5MB shell a second time, which is what made
+// registering the worker early compete with the first paint.
+function precacheMode(url) {
+  return (url === './' || url === './index.html') ? 'reload' : 'default';
+}
 
 // Last-resort offline page, inlined on purpose: a cached offline.html could itself be
 // the asset that failed to cache, and this has to render with zero dependencies.
@@ -62,7 +84,7 @@ const OFFLINE_FALLBACK_HTML = '<!DOCTYPE html><html lang="en"><head><meta charse
 // stayed EMPTY — the real reason offline startup died. Anything skipped here is picked
 // up later by the runtime cache-first handler or the periodic sync.
 function precacheOne(cache, url) {
-  return fetch(url, { cache: 'reload' })
+  return fetch(url, { cache: precacheMode(url) })
     .then(res => (res && res.ok) ? cache.put(url, res) : null)
     .catch(err => {
       console.warn('[Service Worker] Precache skipped:', url, (err && err.message) || err);
@@ -78,7 +100,11 @@ self.addEventListener('install', event => {
         return Promise.allSettled(PRECACHE_URLS.map(url => precacheOne(cache, url)))
           .then(() => {
             // Deliberately not awaited: a slow CDN must not delay activation.
-            OPTIONAL_PRECACHE_URLS.forEach(url => precacheOne(cache, url));
+            if (shouldPrefetchOptional()) {
+              OPTIONAL_PRECACHE_URLS.forEach(url => precacheOne(cache, url));
+            } else {
+              console.log('[Service Worker] Metered/slow connection - skipping optional OCR prefetch.');
+            }
           });
       })
       .then(() => self.skipWaiting())
@@ -101,41 +127,59 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Fetch Event: Network-First falling back to Cache strategy with cache-busting on navigations
+// Walks the cached-shell candidates in order of fidelity. Shared by both the
+// stale-while-revalidate hit path and the offline fallback path.
+function matchCachedShell(request) {
+  return caches.match(request)
+    .then(hit => hit || caches.match('./'))
+    .then(hit => hit || caches.match('./index.html'));
+}
+
+// Fetches the shell from the network and refreshes both shell cache keys. Never
+// rejects — resolves to null instead, so callers can treat "no network" uniformly.
+function revalidateShell(request) {
+  return fetch(request, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
+    .then(networkResponse => {
+      if (networkResponse && networkResponse.status === 200 && request.url.startsWith('http')) {
+        const copy = networkResponse.clone();
+        caches.open(CACHE_NAME).then(cache => {
+          cache.put('./index.html', copy.clone());
+          cache.put('./', copy);
+        });
+      }
+      return networkResponse;
+    })
+    .catch(() => null);
+}
+
+// Fetch Event: stale-while-revalidate for navigations, cache-first for static assets
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
 
-  const isNavigation = event.request.mode === 'navigate' || 
-                       event.request.url.endsWith('/') || 
+  const isNavigation = event.request.mode === 'navigate' ||
+                       event.request.url.endsWith('/') ||
                        event.request.url.endsWith('index.html');
 
   if (isNavigation) {
+    // Stale-while-revalidate. This used to be network-first, which meant every single
+    // cold start of the Android APK blocked on a round trip to the hosting origin — the
+    // APK is a thin WebView on server.url, so launching the app IS a navigation. On a
+    // slow link that stalled the splash for seconds, and offline it had to time out
+    // before the cache was even consulted. Now the cached shell answers instantly and
+    // the fresh copy lands in the cache for the next launch; the page's own
+    // checkForUpdates()/SKIP_WAITING flow is what tells the user a new version is ready.
     event.respondWith(
-      fetch(event.request, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
-        .then(networkResponse => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then(cache => {
-              if (event.request.url.startsWith('http')) {
-                cache.put(event.request, responseClone.clone());
-                cache.put('./', responseClone);
-              }
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          // Walk the fallbacks in order of fidelity. The last step synthesises a page
-          // so respondWith() can never resolve to undefined — that is what turned a
-          // first-launch-while-offline into a blank white screen with no explanation.
-          return caches.match(event.request)
-            .then(hit => hit || caches.match('./'))
-            .then(hit => hit || caches.match('./index.html'))
-            .then(hit => hit || new Response(OFFLINE_FALLBACK_HTML, {
-              status: 200,
-              headers: { 'Content-Type': 'text/html; charset=utf-8' }
-            }));
-        })
+      matchCachedShell(event.request).then(cached => {
+        if (cached) {
+          event.waitUntil(revalidateShell(event.request));
+          return cached;
+        }
+        // Nothing cached yet (very first launch): the network is the only option.
+        return revalidateShell(event.request).then(res => res || new Response(OFFLINE_FALLBACK_HTML, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        }));
+      })
     );
     return;
   }
@@ -261,6 +305,20 @@ self.addEventListener('periodicsync', event => {
 self.addEventListener('message', event => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+
+  // Explicit opt-in for the OCR bundle that install() now skips on metered/slow links.
+  // Lets a "Download OCR for offline use" control fetch it on the user's own terms.
+  if (event.data && event.data.type === 'CACHE_OPTIONAL_ASSETS') {
+    event.waitUntil(
+      caches.open(CACHE_NAME)
+        .then(cache => Promise.allSettled(OPTIONAL_PRECACHE_URLS.map(url => precacheOne(cache, url))))
+        .then(() => {
+          if (event.source) {
+            event.source.postMessage({ type: 'OPTIONAL_ASSETS_CACHED' });
+          }
+        })
+    );
   }
 });
 

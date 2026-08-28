@@ -465,6 +465,27 @@ async function loadStaticQuestions() {
     })();
 
     document.addEventListener("DOMContentLoaded", async function() {
+        // Kick the service worker off BEFORE the awaits below. Registration itself is
+        // cheap and needs nothing from storage or the question bank, but it used to sit
+        // ~800 lines further down, behind `await loadStaticQuestions()` — so offline
+        // setup did not even begin until a ~358KB JSON payload had been fetched and
+        // parsed. A user who closed the app during that window got no offline support at
+        // all. Starting here lets the worker install in parallel with question loading.
+        // (install() fetches the versioned shell with the HTTP cache, so this does not
+        // re-download the app and compete with the first paint — see precacheMode().)
+        let swRegistrationPromise = null;
+        if ('serviceWorker' in navigator) {
+            swRegistrationPromise = navigator.serviceWorker.register('./sw.js')
+                .then(reg => {
+                    console.log('Service Worker registered successfully!', reg.scope);
+                    return reg;
+                })
+                .catch(err => {
+                    console.warn('Service Worker registration failed:', err);
+                    return null;
+                });
+        }
+
         if (typeof KrishiStorage !== 'undefined') await KrishiStorage.init();
         await loadStaticQuestions();
 
@@ -1268,21 +1289,18 @@ async function loadStaticQuestions() {
         }
     }, 1000);
 
-        // Register Service Worker for PWA (Progressive Web App) offline support.
-        //
-        // This code sits inside the DOMContentLoaded async function that already
-        // suspended on `await loadStaticQuestions()` (~L469), so execution only reaches
-        // here in a later task — by which time the window `load` event has long since
-        // fired. Registering from inside a `load` listener therefore never ran at all:
-        // the app had NO service worker, nothing was ever cached, and offline startup
-        // failed no matter how correct sw.js was. Register immediately when the document
-        // is already complete, and only fall back to waiting for `load` if it is not.
-        if ('serviceWorker' in navigator) {
-            const registerServiceWorker = () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => {
-                        console.log('Service Worker registered successfully!', reg.scope);
-                        
+        // Wire up the service worker that was already registered at the very top of this
+        // handler (see swRegistrationPromise). Registration is deliberately NOT repeated
+        // here: this point is reached only after `await loadStaticQuestions()`, and the
+        // original code registered from inside a `load` listener attached at that late
+        // moment — long after `load` had fired — so the app shipped with NO service
+        // worker at all. Nothing was ever cached and offline startup could not work no
+        // matter how correct sw.js was. Everything below only decorates the existing
+        // registration, so it is safe to run late.
+        if (swRegistrationPromise) {
+            swRegistrationPromise.then(reg => {
+                    if (!reg) return;
+
                         // Force check for updates immediately on load
                         try {
                             reg.update();
@@ -1323,12 +1341,7 @@ async function loadStaticQuestions() {
                                 });
                             }
                         });
-                    })
-                    .catch(err => console.warn('Service Worker registration failed:', err));
-            };
-
-            if (document.readyState === 'complete') registerServiceWorker();
-            else window.addEventListener('load', registerServiceWorker, { once: true });
+            });
 
             let refreshing = false;
             navigator.serviceWorker.addEventListener('controllerchange', () => {

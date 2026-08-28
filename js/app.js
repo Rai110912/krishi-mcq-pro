@@ -474,6 +474,12 @@ async function loadStaticQuestions() {
         // (install() fetches the versioned shell with the HTTP cache, so this does not
         // re-download the app and compete with the first paint — see precacheMode().)
         let swRegistrationPromise = null;
+        // Whether a worker was ALREADY controlling this page before we registered. Must be
+        // sampled here, before register(), because the `controllerchange` handler far below
+        // runs after activation and would always see a controller by then. It decides
+        // whether a controller change is a genuine update (reload to pick up new code) or
+        // just the very first activation (nothing stale — do NOT reload).
+        const swHadControllerAtBoot = ('serviceWorker' in navigator) && !!navigator.serviceWorker.controller;
         if ('serviceWorker' in navigator) {
             swRegistrationPromise = navigator.serviceWorker.register('./sw.js')
                 .then(reg => {
@@ -1346,6 +1352,31 @@ async function loadStaticQuestions() {
             let refreshing = false;
             navigator.serviceWorker.addEventListener('controllerchange', () => {
                 if (refreshing) return;
+
+                // A controller change on a page that never had one is the FIRST activation,
+                // not an update: the worker just cached the very code this page is already
+                // running, so there is nothing stale and nothing to gain from reloading.
+                // Reloading here is actively harmful — it broke Google sign-in. Since
+                // registration was hoisted to the top of this handler, install+skipWaiting
+                // +clients.claim() now complete a few seconds after first paint, which is
+                // exactly when a user taps "Sign in with Google". The reload tore down the
+                // opener page mid-flight, so signInWithPopup()'s promise died with it and
+                // the popup was orphaned — the sign-in never resolved. It also killed
+                // Google One Tap's in-flight FedCM prompt. Before the hoist this fired
+                // ~800 lines later (or never, when no worker was registered at all), so the
+                // collision was invisible.
+                if (!swHadControllerAtBoot) {
+                    console.log('[PWA Update] First service worker activation - no reload needed.');
+                    return;
+                }
+
+                // A real update, but never yank the page out from under an auth handshake:
+                // signInWithPopup()/linkWithPopup() only resolve while their opener lives.
+                if (window.__krishiAuthInFlight__) {
+                    console.log('[PWA Update] Controller changed during sign-in - deferring reload.');
+                    return;
+                }
+
                 refreshing = true;
                 console.log('[PWA Update] Controller changed. Reloading app safely...');
                 saveUIStateForRestore(); // Save state before reloading!
@@ -2846,6 +2877,10 @@ function loadData(){
     }
 
     async function handleGoogleLogin() {
+        // Tells the service-worker `controllerchange` handler not to reload the page while
+        // this is running: signInWithPopup()/linkWithPopup() resolve through the opener, so
+        // a reload mid-handshake orphans the popup and the sign-in never completes.
+        window.__krishiAuthInFlight__ = true;
         try {
             setGoogleBtnState('loading');
 
@@ -2905,6 +2940,8 @@ function loadData(){
             console.error("Google login error:", error);
             resetGoogleBtn();
             showToast('❌ Google Sign-in failed: ' + (error.message || error));
+        } finally {
+            window.__krishiAuthInFlight__ = false;
         }
     }
 

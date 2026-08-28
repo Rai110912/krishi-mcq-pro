@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v212-2ywvgsf';
+const CACHE_NAME = 'krishi-mcq-v213-pz9vqgr';
 
 // Core offline shell. The app must be able to boot from these alone, with no network.
 // Kept as data (not 30 hand-written fetch calls) so install() can treat each entry
@@ -8,27 +8,27 @@ const PRECACHE_URLS = [
   './index.html',
   './manifest.json',
   './icon.svg',
-  './index.css?v=2ywvgsf',
+  './index.css?v=pz9vqgr',
   './questions.json',
   './js/libs/tailwindcss.js',
   './js/libs/lucide.js',
-  './js/canvas_charts.js?v=2ywvgsf',
-  './js/pwa_helpers.js?v=2ywvgsf',
-  './js/app.js?v=2ywvgsf',
-  './js/elite_animations_controller.js?v=2ywvgsf',
-  './js/elite_3d_engine.js?v=2ywvgsf',
+  './js/canvas_charts.js?v=pz9vqgr',
+  './js/pwa_helpers.js?v=pz9vqgr',
+  './js/app.js?v=pz9vqgr',
+  './js/elite_animations_controller.js?v=pz9vqgr',
+  './js/elite_3d_engine.js?v=pz9vqgr',
   './js/firebase-app-compat.js',
   './js/firebase-auth-compat.js',
   './js/firebase-firestore-compat.js',
-  './js/sqlite_db.js?v=2ywvgsf',
-  './js/krishi_idb.js?v=2ywvgsf',
-  './js/krishi_worker.js?v=2ywvgsf',
+  './js/sqlite_db.js?v=pz9vqgr',
+  './js/krishi_idb.js?v=pz9vqgr',
+  './js/krishi_worker.js?v=pz9vqgr',
   './js/lottie_adapter.js',
   './js/animation_orchestrator.js',
   './js/libs/lottie.min.js',
-  './js/voice_assistant.js?v=2ywvgsf',
+  './js/voice_assistant.js?v=pz9vqgr',
   './js/ambient_player.js',
-  './js/data_safety.js?v=2ywvgsf',
+  './js/data_safety.js?v=pz9vqgr',
   './js/libs/qrcode.min.js',
   './js/libs/html5-qrcode.min.js',
   './js/libs/lz-string.min.js'
@@ -53,7 +53,7 @@ function shouldPrefetchOptional() {
   return !/(^|-)2g$/.test(c.effectiveType || '') && c.effectiveType !== 'slow-2g';
 }
 
-// Versioned URLs (`?v=2ywvgsf`) are immutable, so the copy the page just downloaded is
+// Versioned URLs (`?v=pz9vqgr`) are immutable, so the copy the page just downloaded is
 // byte-identical and reusing it costs nothing. Only the HTML is fetched with 'reload',
 // because it is the version pointer and must never be stale. Using 'reload' for
 // everything re-downloaded the whole ~1.5MB shell a second time, which is what made
@@ -152,6 +152,18 @@ function revalidateShell(request) {
     .catch(() => null);
 }
 
+// True only for the app shell itself. Deliberately narrow: the stale-while-revalidate
+// branch below answers out of the shell cache, so anything that is NOT the shell must
+// never reach it. `login-helper.html` is same-origin and its own OAuth redirectUri, so
+// serving it the cached index.html would hand Google's redirect the wrong document and
+// silently break sign-in. Same for the `/__/auth/` handler paths Firebase can host.
+function isAppShellUrl(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl, self.location.href); } catch (e) { return false; }
+  if (url.origin !== self.location.origin) return false;
+  return url.pathname === '/' || /(^|\/)index\.html$/.test(url.pathname);
+}
+
 // Fetch Event: stale-while-revalidate for navigations, cache-first for static assets
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
@@ -160,7 +172,7 @@ self.addEventListener('fetch', event => {
                        event.request.url.endsWith('/') ||
                        event.request.url.endsWith('index.html');
 
-  if (isNavigation) {
+  if (isNavigation && isAppShellUrl(event.request.url)) {
     // Stale-while-revalidate. This used to be network-first, which meant every single
     // cold start of the Android APK blocked on a round trip to the hosting origin — the
     // APK is a thin WebView on server.url, so launching the app IS a navigation. On a
@@ -180,6 +192,24 @@ self.addEventListener('fetch', event => {
           headers: { 'Content-Type': 'text/html; charset=utf-8' }
         }));
       })
+    );
+    return;
+  }
+
+  // Same-origin navigation that is NOT the shell — e.g. login-helper.html (the OAuth
+  // redirectUri) or a deep link that firebase.json's `** -> /index.html` rewrite would
+  // resolve to the shell. Network FIRST here, because the requested document must win
+  // whenever it exists; only when the network is genuinely gone do we fall back to the
+  // cached shell so offline deep links still open the app instead of a bare 503.
+  if (isNavigation) {
+    event.respondWith(
+      fetch(event.request)
+        .catch(() => null)
+        .then(res => res || matchCachedShell(event.request))
+        .then(res => res || new Response(OFFLINE_FALLBACK_HTML, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        }))
     );
     return;
   }

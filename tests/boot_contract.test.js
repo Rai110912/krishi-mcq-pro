@@ -166,6 +166,7 @@ function createSwHarness({ unreachable = [], offline = false, cacheSeed = {}, co
         skipWaiting: () => { skipWaitingCalled = true; return Promise.resolve(); },
         clients: clientsMock,
         registration: { showNotification: () => Promise.resolve() },
+        location: new URL(BASE),
         navigator: connection ? { connection } : {}
     };
 
@@ -272,4 +273,74 @@ test('a cached shell wins over a dead network', async () => {
 
     assert.strictEqual(await res.text(), 'CACHED-SHELL',
         'offline navigation must fall through to the cached shell, not the synthesised fallback');
+});
+
+// ── login-helper.html must never be answered with the app shell ─────────────────
+
+test('a same-origin non-shell navigation is not served the cached app shell', async () => {
+    // login-helper.html is its own OAuth redirectUri (see login-helper.html:239). The
+    // stale-while-revalidate branch answers out of the shell cache and matchCachedShell()
+    // falls through to caches.match('./'), so before isAppShellUrl() gated it, Google's
+    // redirect landed on the cached index.html instead of the helper page and sign-in
+    // silently failed.
+    const sw = createSwHarness({ cacheSeed: { './': 'CACHED-SHELL', './index.html': 'CACHED-SHELL' } });
+    const { res } = await sw.navigate(BASE + 'login-helper.html');
+
+    assert.strictEqual(await res.text(), 'network-body',
+        'login-helper.html was answered from the shell cache. Non-shell navigations must go ' +
+        'to the network first, or the OAuth redirect target is replaced by the app shell.');
+    assert.ok(
+        sw.fetchCalls.some(c => c.url === abs('./login-helper.html')),
+        'no network request was made for login-helper.html at all'
+    );
+});
+
+test('the app shell still answers from cache when a non-shell page is also cached', async () => {
+    // Guards the opposite direction: narrowing the SWR branch must not accidentally push
+    // the shell itself onto the network-first path, which is the cold-start regression
+    // stale-while-revalidate existed to fix.
+    const sw = createSwHarness({ cacheSeed: { './': 'CACHED-SHELL' } });
+    const { res } = await sw.navigate(BASE + 'index.html');
+    assert.strictEqual(await res.text(), 'CACHED-SHELL', 'index.html must stay cache-first');
+});
+
+// ── controllerchange must not reload on first activation (js/app.js) ────────────
+
+test('the first service worker activation does not reload the page', () => {
+    // Registration was hoisted above the boot awaits, so install -> skipWaiting ->
+    // clients.claim -> controllerchange now completes a few seconds after first paint —
+    // exactly when a user taps "Sign in with Google". An unconditional reload there tore
+    // down the opener, so signInWithPopup()'s promise died and the popup was orphaned.
+    const handler = APP_JS.slice(APP_JS.indexOf("addEventListener('controllerchange'"));
+    const body = handler.slice(0, handler.indexOf('location.reload()'));
+
+    assert.match(body, /!swHadControllerAtBoot/,
+        'the controllerchange handler reloads without checking whether a controller existed ' +
+        'at boot. A first activation is not an update - there is nothing stale to refresh.');
+    assert.match(body, /__krishiAuthInFlight__/,
+        'the reload is not suppressed during an auth handshake');
+});
+
+test('swHadControllerAtBoot is sampled before register(), not after activation', () => {
+    const sample = findLine(/const swHadControllerAtBoot =/, 'swHadControllerAtBoot assignment');
+    const register = findLine(/navigator\.serviceWorker\.register\(/, 'serviceWorker.register() call');
+    assert.ok(
+        sample < register,
+        'swHadControllerAtBoot is read at line ' + sample + ', after register() at line ' +
+        register + '. By then a controller may already be claimed, so the flag would always ' +
+        'be true and the first-activation reload would come back.'
+    );
+});
+
+test('handleGoogleLogin clears the auth-in-flight flag on every exit path', () => {
+    const start = APP_JS.indexOf('async function handleGoogleLogin()');
+    assert.ok(start > 0, 'handleGoogleLogin not found');
+    const fn = APP_JS.slice(start, APP_JS.indexOf('function initGoogleOneTap()', start));
+
+    assert.match(fn, /__krishiAuthInFlight__\s*=\s*true/, 'the flag is never set');
+    assert.match(fn, /finally\s*\{[\s\S]*?__krishiAuthInFlight__\s*=\s*false/,
+        'the flag must be cleared in a `finally`. handleGoogleLogin has an early `return` in ' +
+        'the native-failure path, so clearing it only after the happy path would leave the ' +
+        'flag stuck true and permanently suppress genuine update reloads.'
+    );
 });

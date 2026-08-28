@@ -1878,7 +1878,7 @@ function loadData(){
                 const payload = collectAllAppData();
                 const stamp = Date.now();
                 payload.updatedAt = stamp;
-                assertPayloadFits(payload, 'Restore push');
+                prepareCloudPayload(payload, 'Restore push');
                 await ref.set(payload, { merge: true });
                 KrishiStorage.setItem('krishi_last_updated_at', String(stamp));
                 KrishiStorage.removeItem('krishi_sync_pending');
@@ -3925,6 +3925,10 @@ function loadData(){
                             const now = firebase.firestore.FieldValue.serverTimestamp();
                             mergedPayload.updatedAt = Date.now();
                             KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
+                            // Same treatment as the performCloudSync() delta write. Without
+                            // this, timingLog/mockScores went up raw and unchecked from the
+                            // realtime path, which is the path that runs most often.
+                            prepareCloudPayload(delta, 'Realtime sync delta');
                             firestore.collection('users').doc(uid).set({ ...delta, updatedAt: now }, { merge: true })
                                 .then(() => console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud'))
                                 .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
@@ -4357,6 +4361,7 @@ scheduleMidnightCloudVault();
                                 // conflicting collections wins, not that every cloud field the
                                 // payload happens to omit (a disabled sync toggle, a newer
                                 // schema key) gets deleted.
+                                prepareCloudPayload(localDataPayload, 'Conflict keep-local push');
                                 await docRef.set(localDataPayload, { merge: true });
 KrishiStorage.setItem('krishi_last_updated_at', now);
 KrishiStorage.removeItem('krishi_sync_pending');
@@ -4433,7 +4438,15 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
 
     window.addEventListener('online', () => {
-        if (getCloudUID()) {
+        // Only a FULL re-init when the realtime listener is genuinely missing (the first
+        // load happened offline, or initCloudSync() threw). The Firestore SDK reconnects
+        // its own listeners on its own, so re-running initCloudSync() on every network
+        // flap only tore down and re-attached four onSnapshot listeners, re-read the whole
+        // user document, re-fetched device location and rewrote presence — and mobile
+        // links flap constantly. The actual data catch-up is handled by the second
+        // 'online' listener further down, which calls scheduleCloudSync() when a write is
+        // pending.
+        if (getCloudUID() && !window.syncListenerUnsubscribe) {
             initCloudSync();
         }
     });
@@ -16666,6 +16679,8 @@ ${text}`;
     }
 
     let syncDebounceTimer = null;
+    // Coalesces a sync request that arrives while another cycle already holds the lock.
+    let syncRerunTimer = null;
 
     function scheduleCloudSync(reason = "") {
         const key = getSyncKey();
@@ -16719,6 +16734,36 @@ ${text}`;
         const kb = m ? m[1] : '?';
         KrishiStorage.setItem('krishi_sync_payload_too_big', kb);
         showToast('⚠️ Backup paused: data (~' + kb + ' KB) crosses the 900 KB cloud-document limit. Delete old custom MCQs to resume backup.', 9000);
+    }
+
+    // Single place where an outgoing users/{uid} payload is made write-safe: compress the
+    // two unbounded arrays, then assert the result fits. Every write path must go through
+    // this. It exists because compression and the size check were applied per-call-site and
+    // three of the five writers had drifted: the realtime snapshot write-back and the
+    // conflict-modal "keep local" push shipped `timingLog`/`mockScores` RAW and skipped
+    // assertPayloadFits() entirely, so the 900 KB guard — the thing that turns "backup is
+    // silently broken" into an actionable toast — simply did not exist on those paths. A
+    // heavy user's realtime sync would fail on Firestore's 1 MiB hard limit with nothing
+    // but a console line.
+    //
+    // Decompression is driven off the field's actual type in mergeCloudAndLocalData(), not
+    // off `isCompressed`, so a doc written by an older build (raw arrays, no flag) still
+    // reads back correctly.
+    function prepareCloudPayload(payload, label) {
+        if (!payload) return payload;
+        if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
+            if (payload.timingLog !== undefined && typeof payload.timingLog !== 'string') {
+                payload.timingLog = LZString.compressToUTF16(JSON.stringify(payload.timingLog));
+            }
+            if (payload.mockScores !== undefined && typeof payload.mockScores !== 'string') {
+                payload.mockScores = LZString.compressToUTF16(JSON.stringify(payload.mockScores));
+            }
+            if (payload.timingLog !== undefined || payload.mockScores !== undefined) {
+                payload.isCompressed = true;
+            }
+        }
+        assertPayloadFits(payload, label);
+        return payload;
     }
 
     // ── Manual backup export / import ─────────────────────────────────────────
@@ -16775,6 +16820,21 @@ ${text}`;
         const uid = getCloudUID();
         if (!uid) return;
 
+        // `syncInProgress` was only ever *set* here and *checked* in the snapshot listener,
+        // so nothing stopped two cycles from overlapping — and they do: saveData() schedules
+        // a sync on every answer, while one cycle takes seconds (server read + CRDT merge +
+        // qbank chunk uploads). Two concurrent runs both call syncQbankToChunks() against
+        // the same users/{uid}/qbank/chunk_N docs, so the bank can end up torn — chunk_0
+        // from one run, chunk_1 from the other — which decompresses to garbage on the next
+        // hydrate. Coalesce instead: one pending retry, re-armed until the lock frees.
+        if (syncInProgress) {
+            if (!syncRerunTimer) {
+                syncRerunTimer = setTimeout(() => { syncRerunTimer = null; performCloudSync(); }, 1200);
+            }
+            console.log('[Cloud Sync] A sync cycle is already running - coalescing this request.');
+            return;
+        }
+
         if (!navigator.onLine) {
             setSyncStatus('Offline');
             return;
@@ -16830,12 +16890,7 @@ ${text}`;
                 // of the delta (a question-only change produces no delta key). Writes only when changed.
                 await syncQbankToChunks(uid, docRef, mergedPayload.customQuestions, delta, (currentCloudData.qbankChunks || 0));
                 if (delta && Object.keys(delta).length > 0) {
-                    if (typeof LZString !== 'undefined') {
-                        if (delta.timingLog) delta.timingLog = LZString.compressToUTF16(JSON.stringify(delta.timingLog));
-                        if (delta.mockScores) delta.mockScores = LZString.compressToUTF16(JSON.stringify(delta.mockScores));
-                        delta.isCompressed = true;
-                    }
-                    assertPayloadFits(delta, 'Sync delta');
+                    prepareCloudPayload(delta, 'Sync delta');
                     const now = firebase.firestore.FieldValue.serverTimestamp();
                     mergedPayload.updatedAt = Date.now();
                     KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
@@ -16894,12 +16949,7 @@ if (typeof updateSyncUI === 'function') updateSyncUI();
 
                 const now = firebase.firestore.FieldValue.serverTimestamp();
                 await syncQbankToChunks(uid, docRef, localDataPayload.customQuestions, localDataPayload, 0);
-                if (typeof LZString !== 'undefined') {
-                    if (localDataPayload.timingLog) localDataPayload.timingLog = LZString.compressToUTF16(JSON.stringify(localDataPayload.timingLog));
-                    if (localDataPayload.mockScores) localDataPayload.mockScores = LZString.compressToUTF16(JSON.stringify(localDataPayload.mockScores));
-                    localDataPayload.isCompressed = true;
-                }
-                assertPayloadFits(localDataPayload, 'Initial full sync payload');
+                prepareCloudPayload(localDataPayload, 'Initial full sync payload');
                 localDataPayload.updatedAt = now;
                 KrishiStorage.setItem('krishi_last_updated_at', Date.now());
                 // merge:true even here — a concurrent writer between the get() above and

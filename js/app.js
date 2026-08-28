@@ -3008,7 +3008,16 @@ function loadData(){
             'krishi_gemini_key',
             'krishi_gemini_model',
             'krishi_gemini_temp',
-            'krishi_prev_real_uid'
+            'krishi_prev_real_uid',
+            // Sync bookkeeping markers MUST die with the data they describe.
+            // krishi_qbank_synced_hash surviving a wipe was a real data-restore bug:
+            // hydrateQbankFromChunks() skips the chunk download when the marker still
+            // equals the cloud's qbankHash, so logging back in with the SAME account
+            // left the question bank empty on this device (the cloud copy was fine).
+            'krishi_qbank_synced_hash',
+            // Stale per-setting write clocks would otherwise out-rank the cloud's
+            // settings on the first merge after a wipe.
+            'krishi_setting_stamps'
         ];
 
         // Tear the sync engine down BEFORE wiping anything. While the users/{uid}
@@ -16060,6 +16069,9 @@ ${text}`;
         // customQuestionsChanged is tracked separately: the IndexedDB write below is a
         // clear-then-rewrite and must never fire just because an unrelated field changed.
         let customQuestionsChanged = false;
+        // Tracks whether the IndexedDB write below was actually dispatched, so a bank
+        // downloaded this cycle but never persisted can release its provisional hash.
+        let qbankPersistScheduled = false;
         if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarked, localData.bookmarked, 'bookmarked')) { localData.bookmarked = data.bookmarked; changed = true; }
         if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarkedLog, localData.bookmarkedLog, 'bookmarkedLog') && !Array.isArray(data.bookmarkedLog)) { localData.bookmarkedLog = data.bookmarkedLog; changed = true; }
         if (syncSelectiveErrors && isSafeIncomingCollection(data.wrong, localData.wrong, 'wrong')) { localData.wrong = data.wrong; changed = true; }
@@ -16119,11 +16131,23 @@ ${text}`;
             // saveAll() clears the store first, so firing it on an unrelated bookmark
             // change used to rewrite the whole bank from possibly-stale memory.
             if (syncSelectiveCustom && customQuestionsChanged && customQuestionsHydrated && Array.isArray(localData.customQuestions)) {
+                qbankPersistScheduled = true;
                 KrishiDB.saveAll(localData.customQuestions)
-                    .then(() => console.log('[IndexedDB] Custom questions saved successfully.'))
-                    .catch(err => console.error('[IndexedDB] Custom questions save failed:', err));
+                    .then(() => {
+                        console.log('[IndexedDB] Custom questions saved successfully.');
+                        noteQbankPersistOutcome(true);
+                    })
+                    .catch(err => {
+                        console.error('[IndexedDB] Custom questions save failed:', err);
+                        noteQbankPersistOutcome(false);
+                    });
             }
         }
+
+        // A bank downloaded from the chunks this cycle but never handed to IndexedDB
+        // (question bank locked read-only, selective sync off, nothing changed) must not
+        // leave the provisional synced-hash standing. No-op when nothing is awaiting.
+        if (!qbankPersistScheduled) noteQbankPersistOutcome(false);
         
         if (syncSelectiveLogs) {
             // Save extra config lists
@@ -16850,6 +16874,26 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     // 3 bytes in UTF-8, so 300k chars ≈ 900KB — safely under Firestore's ~1MB doc cap.
     const QBANK_CHUNK_CHARS = 300000;
 
+    // Hash written optimistically by hydrateQbankFromChunks() and not yet confirmed to
+    // have reached IndexedDB. The marker has to go down at download time so the upload
+    // path in the same sync cycle can dedup against it, but a downloaded bank is only
+    // genuinely "synced" once it is persisted locally.
+    let qbankHashAwaitingPersist = null;
+
+    // Settles that optimistic marker. On failure it is taken back down, so the next sync
+    // re-downloads the chunks instead of skipping them and leaving the bank missing on
+    // this device while the cloud copy looks fine.
+    function noteQbankPersistOutcome(ok) {
+        if (!qbankHashAwaitingPersist) return;
+        const provisional = qbankHashAwaitingPersist;
+        qbankHashAwaitingPersist = null;
+        if (ok) return;
+        if (KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) === provisional) {
+            KrishiStorage.removeItem(QBANK_SYNCED_HASH_KEY);
+            console.warn('[Qbank] Downloaded bank did not persist locally; synced-hash cleared so the next sync re-downloads it.');
+        }
+    }
+
     function qbankChunkRef(userDocRef, i) {
         return userDocRef.collection('qbank').doc('chunk_' + i);
     }
@@ -16924,6 +16968,9 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // Detect a legacy doc still carrying an inline customQuestions field with no
         // metadata — recorded before merge mutates the object.
         cloudData.__qbankLegacyInline = (('customQuestions' in cloudData) && !cloudData.qbankUpdatedAt);
+        // Selective sync off for questions: applyAllAppData() would discard the download
+        // anyway, and pulling it would only churn the provisional synced-hash.
+        if (!syncSelectiveCustom) return;
         if (!cloudData.qbankUpdatedAt) return; // legacy or no bank → merge uses inline/local
         const localSyncedHash = KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '';
         if (cloudData.qbankHash && cloudData.qbankHash === localSyncedHash) {
@@ -16934,7 +16981,12 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             const compressed = await downloadQbankChunks(userDocRef, cloudData.qbankChunks);
             if (compressed) {
                 cloudData.customQuestions = compressed; // merge decompresses strings
-                if (cloudData.qbankHash) KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, cloudData.qbankHash);
+                if (cloudData.qbankHash) {
+                    // Provisional: settled by noteQbankPersistOutcome() once applyAllAppData
+                    // has (or has not) written the bank into IndexedDB.
+                    KrishiStorage.setItem(QBANK_SYNCED_HASH_KEY, cloudData.qbankHash);
+                    qbankHashAwaitingPersist = cloudData.qbankHash;
+                }
             }
         } catch (e) {
             // Download failure must not blank the bank: drop the field so the union
@@ -16952,6 +17004,9 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     // Throws on write failure so the caller's catch keeps the sync pending (offline-safe).
     async function syncQbankToChunks(uid, userDocRef, sourceArr, payloadObj, prevChunks) {
         if (payloadObj && 'customQuestions' in payloadObj) delete payloadObj.customQuestions;
+        // The strip above is unconditional (the field must never reach the users doc);
+        // the upload itself honours the user's selective-sync choice.
+        if (!syncSelectiveCustom) return;
         if (!uid || !userDocRef || !Array.isArray(sourceArr) || sourceArr.length === 0) return;
         const hash = computeQbankHash(sourceArr);
         if (hash === (KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '')) return; // unchanged

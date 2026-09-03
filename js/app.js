@@ -2180,12 +2180,62 @@ function loadData(){
         }
     }
 
+    // Loads a script exactly once and resolves when it is ready. The promise is cached per
+    // URL so N concurrent callers share a single <script> tag and a single download. A
+    // FAILED load is deliberately not cached, so a retry after the network returns can
+    // still succeed.
+    //
+    // This exists so the two QR libraries can stop being downloaded on boot. They were
+    // plain <script> tags in index.html with no `defer`, so every launch blocked the HTML
+    // parser on ~387 KB (html5-qrcode 367 KB + qrcode 20 KB) that only the Sync screen
+    // ever touches.
+    const scriptLoadPromises = {};
+    function loadScriptOnce(src) {
+        if (scriptLoadPromises[src]) return scriptLoadPromises[src];
+        scriptLoadPromises[src] = new Promise((resolve, reject) => {
+            const el = document.createElement('script');
+            el.src = src;
+            el.async = true;
+            el.onload = () => resolve();
+            el.onerror = () => {
+                delete scriptLoadPromises[src];
+                el.remove();
+                reject(new Error('Failed to load ' + src));
+            };
+            document.head.appendChild(el);
+        });
+        return scriptLoadPromises[src];
+    }
+
     let html5QrScanner = null;
+    // Latched only when the file loaded but did not define the global - a permanent
+    // condition. A network failure is NOT latched, because that is retryable.
+    let qrScannerLibUnavailable = false;
 
     function openQRScanner() {
+        // Fetched on first use. The old guard re-called openQRScanner() every 500ms hoping
+        // some other <script> would eventually define Html5Qrcode, which spun forever
+        // whenever the file failed to load - and would spin forever unconditionally now
+        // that the eager tag is gone.
         if (typeof Html5Qrcode === 'undefined') {
-            showToast('⏳ Loading camera scanner library...');
-            setTimeout(openQRScanner, 500);
+            if (qrScannerLibUnavailable) {
+                showToast('❌ Camera scanner is unavailable.');
+                return;
+            }
+            showToast('⏳ Loading camera scanner...');
+            loadScriptOnce('./js/libs/html5-qrcode.min.js')
+                .then(() => {
+                    if (typeof Html5Qrcode === 'undefined') {
+                        qrScannerLibUnavailable = true;
+                        showToast('❌ Camera scanner is unavailable.');
+                        return;
+                    }
+                    openQRScanner();
+                })
+                .catch(err => {
+                    console.error('[QR Scanner] Library load failed:', err);
+                    showToast('❌ Could not load the camera scanner. Check your connection.');
+                });
             return;
         }
 
@@ -2333,41 +2383,34 @@ function loadData(){
                 if (credCard) credCard.classList.add('hidden');
             }
 
-            // Guard: If QRCode library is not loaded yet, retry — but capped,
-            // otherwise a permanently missing lib means a 300ms self-repaint loop.
-            if (typeof QRCode === 'undefined') {
-                window.__krishiQrRetries = (window.__krishiQrRetries || 0) + 1;
-                if (window.__krishiQrRetries <= 5) {
-                    console.warn('[QR Generator] QRCode library not loaded yet. Retrying...');
-                    setTimeout(updateSyncUI, 300);
-                } else {
-                    console.warn('[QR Generator] Giving up after 5 retries; QR disabled this session.');
-                }
-                return;
-            }
-            window.__krishiQrRetries = 0;
-
-            // Generate and update QR code dynamically client-side (offline safe) - deferred to let layout pass complete
+            // The QR *generator* is fetched on demand as well. A
+            // `typeof QRCode === 'undefined'` gate used to sit here and `return` out of
+            // updateSyncUI() completely, so a QR library that had not arrived yet also
+            // blanked the statistics dashboard and every status badge further down - none
+            // of the rest of this function ran. The dependency belongs at the point of use.
             setTimeout(() => {
                 const qrContainer = document.getElementById('sync-qrcode-container');
-                if (qrContainer) {
-                    if (!qrContainer.hasChildNodes() || qrContainer.getAttribute('data-key') !== key) {
-                        qrContainer.innerHTML = '';
-                        qrContainer.setAttribute('data-key', key);
-                        try {
-                            new QRCode(qrContainer, {
-                                text: key,
-                                width: 120,
-                                height: 120,
-                                colorDark: "#047857",
-                                colorLight: "#ffffff"
-                            });
-                        } catch(e) {
-                            console.error('[QR Generator] Offline draw failed:', e);
-                            qrContainer.innerHTML = `<span class="text-[8px] text-rose-500 font-mono break-all">Error: ${e.message}</span>`;
-                        }
-                    }
-                }
+                if (!qrContainer) return;
+                if (qrContainer.hasChildNodes() && qrContainer.getAttribute('data-key') === key) return;
+                qrContainer.innerHTML = '';
+                qrContainer.setAttribute('data-key', key);
+                loadScriptOnce('./js/libs/qrcode.min.js')
+                    .then(() => {
+                        new QRCode(qrContainer, {
+                            text: key,
+                            width: 120,
+                            height: 120,
+                            colorDark: "#047857",
+                            colorLight: "#ffffff"
+                        });
+                    })
+                    .catch(e => {
+                        console.error('[QR Generator] Draw failed:', e);
+                        // Drop the marker so the next updateSyncUI() retries instead of
+                        // treating the failed attempt as already rendered.
+                        qrContainer.removeAttribute('data-key');
+                        qrContainer.innerHTML = '<span class="text-[8px] text-rose-500 font-mono">QR unavailable</span>';
+                    });
             }, 60);
 
             // Populate Statistics Dashboard

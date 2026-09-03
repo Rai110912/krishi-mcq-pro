@@ -25,8 +25,13 @@ const ROOT = path.join(__dirname, '..');
 const APP_JS = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
 const SW_JS = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
 const INDEX_HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+const LOTTIE_ADAPTER = fs.readFileSync(path.join(ROOT, 'js', 'lottie_adapter.js'), 'utf8');
 
 const APP_LINES = APP_JS.split('\n');
+// Source with `//` comment lines removed. Contract regexes that search for a *code* shape
+// must run against this: the comments explaining a removed bug quote the very code they
+// replaced, so searching raw source makes a test pass or fail on comment length.
+const APP_CODE = APP_LINES.filter(l => !l.trim().startsWith('//')).join('\n');
 
 /** 1-based line number of the first line matching `re`, ignoring `//` comment lines. */
 function findLine(re, what) {
@@ -190,6 +195,14 @@ function createSwHarness({ unreachable = [], offline = false, cacheSeed = {}, co
             const waits = [];
             listeners.fetch({ request, respondWith: p => { responded = p; }, waitUntil: p => waits.push(p) });
             return Promise.resolve(responded).then(res => ({ res, waits }));
+        },
+        /** A plain sub-resource GET (script/image/etc), i.e. NOT a navigation. */
+        request(url) {
+            const request = { method: 'GET', mode: 'no-cors', url: abs(url) };
+            let responded;
+            const waits = [];
+            listeners.fetch({ request, respondWith: p => { responded = p; }, waitUntil: p => waits.push(p) });
+            return Promise.resolve(responded).then(res => ({ res, waits }));
         }
     };
 }
@@ -342,5 +355,151 @@ test('handleGoogleLogin clears the auth-in-flight flag on every exit path', () =
         'the flag must be cleared in a `finally`. handleGoogleLogin has an early `return` in ' +
         'the native-failure path, so clearing it only after the happy path would leave the ' +
         'flag stuck true and permanently suppress genuine update reloads.'
+    );
+});
+
+// ── Heavy libraries are fetched on demand, not on boot ──────────────────────────
+
+// 685 KB of vendor code that only two screens ever touch. qrcode.min.js and
+// html5-qrcode.min.js were plain <script> tags with no `defer`, so they blocked the HTML
+// parser on EVERY launch; lottie.min.js was deferred but still downloaded and parsed on
+// every launch, then usually discarded by the adapter's own accessibility checks.
+const LAZY_LIBS = ['qrcode.min.js', 'html5-qrcode.min.js', 'lottie.min.js'];
+
+test('the on-demand libraries are not <script> tags in index.html any more', () => {
+    const eager = LAZY_LIBS.filter(lib => {
+        const re = new RegExp('<script[^>]+src=["\'][^"\']*' + lib.replace('.', '\\.'));
+        return re.test(INDEX_HTML);
+    });
+    assert.deepStrictEqual(
+        eager, [],
+        'these libraries are loaded eagerly again: ' + eager.join(', ') + '. Together they ' +
+        'are ~685 KB on a cold start for features most launches never open. They must be ' +
+        'fetched at the point of use - loadScriptOnce() in js/app.js, loadLottieEngine() ' +
+        'in js/lottie_adapter.js.'
+    );
+});
+
+test('every on-demand library is still cached by the service worker', () => {
+    // Dropping the <script> tag without keeping the file in a precache list would silently
+    // break offline QR scanning and offline reward animations.
+    const optional = SW_JS.match(/const OPTIONAL_PRECACHE_URLS = \[([\s\S]*?)\];/);
+    assert.ok(optional, 'OPTIONAL_PRECACHE_URLS not found in sw.js');
+    const missing = LAZY_LIBS.filter(lib => !optional[1].includes(lib));
+    assert.deepStrictEqual(
+        missing, [],
+        'not reachable offline any more: ' + missing.join(', ') + '. A lazily loaded file ' +
+        'still has to be in OPTIONAL_PRECACHE_URLS, or the first use offline fails.'
+    );
+    assert.ok(
+        !precacheList().some(u => LAZY_LIBS.some(lib => u.includes(lib))),
+        'an on-demand library is back in the blocking PRECACHE_URLS list - install() would ' +
+        'download it on every fresh install, which is the mobile data this change saved.'
+    );
+});
+
+test('loadScriptOnce() does not cache a failed load', () => {
+    const i = APP_JS.indexOf('function loadScriptOnce(');
+    assert.ok(i > 0, 'loadScriptOnce() not found in js/app.js');
+    const fn = APP_JS.slice(i, APP_JS.indexOf('\n    }', i));
+
+    assert.match(fn, /onerror[\s\S]{0,120}?delete scriptLoadPromises\[src\]/,
+        'a rejected promise stays cached, so every later attempt re-rejects instantly. ' +
+        'A user who opened the QR screen while offline could then never open it again this ' +
+        'session, even after reconnecting.'
+    );
+    assert.match(fn, /if\s*\(\s*scriptLoadPromises\[src\]\s*\)\s*return/,
+        'concurrent callers must share one <script> tag and one download'
+    );
+});
+
+test('openQRScanner() cannot spin forever when the library never defines its global', () => {
+    const i = APP_JS.indexOf('function openQRScanner()');
+    assert.ok(i > 0, 'openQRScanner() not found');
+    const guard = APP_JS.slice(i, APP_JS.indexOf('// Native Capacitor Camera', i));
+
+    assert.ok(
+        !/setTimeout\(\s*openQRScanner/.test(guard),
+        'the old blind `setTimeout(openQRScanner, 500)` retry is back. With no eager ' +
+        '<script> tag there is nothing to wait for, so it loops forever showing a toast.'
+    );
+    assert.match(guard, /loadScriptOnce\(\s*'\.\/js\/libs\/html5-qrcode\.min\.js'\s*\)/,
+        'the guard must actually fetch the scanner library'
+    );
+    assert.match(guard, /qrScannerLibUnavailable/,
+        'openQRScanner() re-calls itself after the load resolves. Without a latch for ' +
+        '"loaded but the global is still missing" that recursion never terminates, because ' +
+        'loadScriptOnce() resolves instantly from cache on every subsequent pass.'
+    );
+});
+
+test('a missing QR library no longer aborts the rest of updateSyncUI()', () => {
+    assert.ok(
+        !/typeof QRCode === 'undefined'[\s\S]{0,400}?return;/.test(APP_CODE),
+        "the `typeof QRCode === 'undefined'` gate is back in updateSyncUI(). It `return`s " +
+        'out of the whole function, so a QR library that has not arrived yet also leaves ' +
+        'the statistics dashboard and every sync status badge below it unpopulated. Load ' +
+        'the library where it is used instead.'
+    );
+});
+
+test('the Lottie engine is fetched only after the cheap bail-outs have passed', () => {
+    const perf = LOTTIE_ADAPTER.indexOf('getPerfSettings');
+    const validate = LOTTIE_ADAPTER.indexOf("fetch(path, { cache: 'force-cache' })");
+    const engine = LOTTIE_ADAPTER.indexOf('await loadLottieEngine()');
+
+    assert.ok(perf > 0 && validate > 0 && engine > 0,
+        'js/lottie_adapter.js no longer has the perf check / asset validation / engine load ' +
+        'trio this test tracks - update tests/boot_contract.test.js');
+    assert.ok(
+        perf < engine && validate < engine,
+        'lottie-web (298 KB) is downloaded before the accessibility, performance and asset ' +
+        'checks that decide whether anything will be rendered at all. A battery-mode or ' +
+        'reduce-motion user must never pay for it.'
+    );
+});
+
+test('loadLottieEngine() reports failure instead of rejecting, and retries later', () => {
+    const i = LOTTIE_ADAPTER.indexOf('function loadLottieEngine()');
+    assert.ok(i > 0, 'loadLottieEngine() not found in js/lottie_adapter.js');
+    const fn = LOTTIE_ADAPTER.slice(i, LOTTIE_ADAPTER.indexOf('\n    }', i));
+
+    assert.ok(
+        !/reject/.test(fn),
+        'loadLottieEngine() rejects. Every caller already treats "no Lottie" as "run the ' +
+        'fallback", so a rejection here turns a graceful downgrade into an unhandled ' +
+        'rejection inside play().'
+    );
+    assert.match(fn, /onerror[\s\S]{0,120}?lottieEnginePromise = null/,
+        'a failed engine load stays cached, so reward animations are dead for the whole ' +
+        'session after one flaky fetch'
+    );
+});
+
+test('an on-demand library is served cache-first once it has been fetched', async () => {
+    // Closes the gap the optional precache leaves on metered links: shouldPrefetchOptional()
+    // skips these files there, so the very first genuine use is the only chance to store
+    // them. Cache-first also means no revalidation round trip on every later use.
+    const sw = createSwHarness({ cacheSeed: { './js/libs/html5-qrcode.min.js': 'CACHED-LIB' } });
+    const { res } = await sw.request('./js/libs/html5-qrcode.min.js');
+
+    assert.strictEqual(await res.text(), 'CACHED-LIB',
+        '/js/libs/ is not on the cache-first path, so every on-demand load hits the network ' +
+        'first and a metered user who was skipped by the optional precache has no offline ' +
+        'copy of the QR scanner or the Lottie engine.');
+    assert.ok(
+        !sw.fetchCalls.some(c => c.url.includes('html5-qrcode')),
+        'a cached vendor library must not be re-requested from the network'
+    );
+});
+
+test('an uncached on-demand library is fetched and then stored', async () => {
+    const sw = createSwHarness();
+    const { res } = await sw.request('./js/libs/lottie.min.js');
+    assert.strictEqual(await res.text(), 'network-body');
+    assert.ok(
+        sw.store.has(abs('./js/libs/lottie.min.js')),
+        'the first on-demand load did not populate the cache, so offline playback stays ' +
+        'broken no matter how many times the feature is used online'
     );
 });

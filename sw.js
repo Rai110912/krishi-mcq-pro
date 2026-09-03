@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v216-fzfq9c3';
+const CACHE_NAME = 'krishi-mcq-v218-r8sdv8n';
 
 // Core offline shell. The app must be able to boot from these alone, with no network.
 // Kept as data (not 30 hand-written fetch calls) so install() can treat each entry
@@ -8,37 +8,44 @@ const PRECACHE_URLS = [
   './index.html',
   './manifest.json',
   './icon.svg',
-  './index.css?v=fzfq9c3',
+  './index.css?v=r8sdv8n',
   './questions.json',
   './js/libs/tailwindcss.js',
   './js/libs/lucide.js',
-  './js/canvas_charts.js?v=fzfq9c3',
-  './js/pwa_helpers.js?v=fzfq9c3',
-  './js/app.js?v=fzfq9c3',
-  './js/elite_animations_controller.js?v=fzfq9c3',
-  './js/elite_3d_engine.js?v=fzfq9c3',
+  './js/canvas_charts.js?v=r8sdv8n',
+  './js/pwa_helpers.js?v=r8sdv8n',
+  './js/app.js?v=r8sdv8n',
+  './js/elite_animations_controller.js?v=r8sdv8n',
+  './js/elite_3d_engine.js?v=r8sdv8n',
   './js/firebase-app-compat.js',
   './js/firebase-auth-compat.js',
   './js/firebase-firestore-compat.js',
-  './js/sqlite_db.js?v=fzfq9c3',
-  './js/krishi_idb.js?v=fzfq9c3',
-  './js/krishi_worker.js?v=fzfq9c3',
+  './js/sqlite_db.js?v=r8sdv8n',
+  './js/krishi_idb.js?v=r8sdv8n',
+  './js/krishi_worker.js?v=r8sdv8n',
   './js/lottie_adapter.js',
   './js/animation_orchestrator.js',
-  './js/libs/lottie.min.js',
-  './js/voice_assistant.js?v=fzfq9c3',
+  './js/voice_assistant.js?v=r8sdv8n',
   './js/ambient_player.js',
-  './js/data_safety.js?v=fzfq9c3',
-  './js/libs/qrcode.min.js',
-  './js/libs/html5-qrcode.min.js',
+  './js/data_safety.js?v=r8sdv8n',
   './js/libs/lz-string.min.js'
 ];
 
-// Third-party CDN extras: large, optional, and the most likely to be slow or blocked.
-// Cached best-effort AFTER install resolves, so they can never gate offline support.
+// Third-party CDN extras plus the libraries index.html no longer loads eagerly: large,
+// optional, and the most likely to be slow or blocked. Cached best-effort AFTER install
+// resolves, so they can never gate offline support.
 // Only prefetched on connections that can afford it — see shouldPrefetchOptional().
+//
+// qrcode / html5-qrcode / lottie moved here from PRECACHE_URLS when they became lazy —
+// 685 KB combined that most launches never touch. They are still precached on any
+// connection that can afford it, so offline QR scanning and offline reward animations keep
+// working. On a metered link they are skipped, and the cache-first runtime handler stores
+// them the first time the feature is genuinely used.
 const OPTIONAL_PRECACHE_URLS = [
-  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
+  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',
+  './js/libs/qrcode.min.js',
+  './js/libs/html5-qrcode.min.js',
+  './js/libs/lottie.min.js'
 ];
 
 // The OCR bundle is multiple megabytes and most users never open OCR at all, so
@@ -53,7 +60,7 @@ function shouldPrefetchOptional() {
   return !/(^|-)2g$/.test(c.effectiveType || '') && c.effectiveType !== 'slow-2g';
 }
 
-// Versioned URLs (`?v=fzfq9c3`) are immutable, so the copy the page just downloaded is
+// Versioned URLs (`?v=r8sdv8n`) are immutable, so the copy the page just downloaded is
 // byte-identical and reusing it costs nothing. Only the HTML is fetched with 'reload',
 // because it is the version pointer and must never be stale. Using 'reload' for
 // everything re-downloaded the whole ~1.5MB shell a second time, which is what made
@@ -215,12 +222,21 @@ self.addEventListener('fetch', event => {
   }
 
   // Cache-first for static assets like icons, fonts, local scripts, and external libraries
-  const isStaticAsset = event.request.url.includes('icon.svg') || 
+  const isStaticAsset = event.request.url.includes('icon.svg') ||
                         event.request.url.includes('manifest.json') ||
                         event.request.url.includes('fonts.googleapis.com') ||
                         event.request.url.includes('fonts.gstatic.com') ||
                         event.request.url.includes('/js/firebase-') ||
                         event.request.url.includes('/js/elite_') ||
+                        // Unversioned vendor bundles, including the ones now fetched on
+                        // demand (qrcode, html5-qrcode, lottie). Cache-first means the very
+                        // first on-demand load is also the last network trip for them, so a
+                        // metered user who was skipped by the optional precache still gets
+                        // offline QR and offline animations after using the feature once.
+                        // Safe to pin: activate() wipes every cache whose name is not the
+                        // current CACHE_NAME, and bump_version.js changes CACHE_NAME on
+                        // every build, so a vendor upgrade is still picked up on deploy.
+                        event.request.url.includes('/js/libs/') ||
                         event.request.url.includes('unpkg.com') ||
                         event.request.url.includes('tesseract.js') ||
                         event.request.url.includes('tessdata') ||

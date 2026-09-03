@@ -30,19 +30,43 @@ window.LottieAdapter = (function() {
         document.body.appendChild(container);
     }
 
+    // lottie-web is 298 KB and was pulled in by a <script> tag on every launch, even
+    // though it is only ever needed when a reward animation actually plays. Fetched on
+    // first genuine playback now. The promise is cached; a failed load is not, so a later
+    // attempt can retry. Resolves to a boolean rather than rejecting, because every caller
+    // already treats "no Lottie" as "run the fallback".
+    let lottieEnginePromise = null;
+    function loadLottieEngine() {
+        if (typeof lottie !== 'undefined') return Promise.resolve(true);
+        if (lottieEnginePromise) return lottieEnginePromise;
+        lottieEnginePromise = new Promise(resolve => {
+            const el = document.createElement('script');
+            el.src = './js/libs/lottie.min.js';
+            el.async = true;
+            el.onload = () => resolve(typeof lottie !== 'undefined');
+            el.onerror = () => {
+                lottieEnginePromise = null;
+                el.remove();
+                resolve(false);
+            };
+            document.head.appendChild(el);
+        });
+        return lottieEnginePromise;
+    }
+
     // Play an animation and return a Promise that resolves to true if Lottie successfully takes over.
     // Resolves to false if Lottie is unavailable or invalid, forcing the caller to run its fallback.
+    //
+    // Order matters: every cheap reason to bail out is checked BEFORE the engine is
+    // fetched, so a battery-mode / reduce-motion user or a missing animation asset never
+    // downloads lottie-web at all. It used to be downloaded on boot and then thrown away
+    // by these very checks.
     async function play(assetId) {
-        if (typeof lottie === 'undefined') {
-            console.warn('[LottieAdapter] lottie-web not loaded. Falling back.');
-            return false;
-        }
-
         // 1. Accessibility & Performance Check
         const ps = window.getPerfSettings ? window.getPerfSettings() : {};
         if (ps.perfMode === 'battery' || ps.reduceMotion || ps.animIntensity === 'off') {
             console.log('[LottieAdapter] Skipped due to accessibility/performance settings. Using fallback.');
-            return false; 
+            return false;
         }
 
         let path = assets[assetId];
@@ -68,7 +92,14 @@ window.LottieAdapter = (function() {
                 return false;
             }
 
-            // 3. Prevent duplicate overlapping renders (cleanup previous)
+            // 3. Engine, fetched only now that we know there is something worth rendering
+            const engineReady = await loadLottieEngine();
+            if (!engineReady) {
+                console.warn('[LottieAdapter] lottie-web could not be loaded. Falling back.');
+                return false;
+            }
+
+            // 4. Prevent duplicate overlapping renders (cleanup previous)
             if (currentAnim) {
                 currentAnim.destroy();
                 currentAnim = null;

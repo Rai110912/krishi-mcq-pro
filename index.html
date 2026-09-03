@@ -81,7 +81,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=r8sdv8n" rel="stylesheet">
+    <link href="./index.css?v=5fkfa9s" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2651,7 +2651,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v218-r8sdv8n (202609031051)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v219-5fkfa9s (202609031303)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3328,12 +3328,19 @@
                         <div id="cr-preview-opts" class="space-y-0.5 mt-1"></div>
                         <p id="cr-preview-ans" class="text-emerald-600 font-bold mt-1"></p>
                     </div>
+                    <div id="cr-validation" class="hidden p-2.5 rounded-lg border text-[11px] leading-relaxed"></div>
                     <div class="flex gap-2">
                         <button onclick="addSingleQuestion()" class="flex-1 bg-emerald-600 text-white py-2.5 rounded-lg font-bold text-xs">Save Question</button>
                         <button onclick="addToTempBatch()" class="flex-1 bg-violet-600 text-white py-2.5 rounded-lg font-bold text-xs">Add to batch list</button>
                     </div>
+                    <p class="text-[10px] text-center opacity-50">Ctrl+Enter = save &middot; Ctrl+Shift+Enter = add to batch &middot; Tab = next field</p>
+                    <p class="text-[10px] text-center" id="cr-draft-status"></p>
                     <p class="text-[10px] text-center" id="batch-info">📦 Batch counts: <span id="batch-count">0</span></p>
                     <button id="save-batch-btn" onclick="saveBatchQuestions()" class="hidden w-full bg-amber-500 text-white py-2.5 rounded-lg text-xs font-bold">Save compiled batch list (<span id="batch-count-btn">0</span>)</button>
+                    <div id="batch-list-wrap" class="hidden space-y-1.5">
+                        <button id="batch-list-toggle" onclick="toggleBatchList()" class="w-full py-1.5 rounded-lg border text-[10px] font-bold">▸ Show staged items (0)</button>
+                        <div id="batch-list" class="hidden space-y-1.5"></div>
+                    </div>
                 </div>
             </div>
 
@@ -3880,14 +3887,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=r8sdv8n" defer></script>
-    <script src="./js/elite_3d_engine.js?v=r8sdv8n" defer></script>
-    <script src="./js/canvas_charts.js?v=r8sdv8n" defer></script>
+    <script src="./js/elite_animations_controller.js?v=5fkfa9s" defer></script>
+    <script src="./js/elite_3d_engine.js?v=5fkfa9s" defer></script>
+    <script src="./js/canvas_charts.js?v=5fkfa9s" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=r8sdv8n" defer></script>
-    <script src="./js/sqlite_db.js?v=r8sdv8n" defer></script>
-    <script src="./js/krishi_idb.js?v=r8sdv8n"></script>
-    <script src="./js/app.js?v=r8sdv8n" defer></script>
+    <script src="./js/pwa_helpers.js?v=5fkfa9s" defer></script>
+    <script src="./js/sqlite_db.js?v=5fkfa9s" defer></script>
+    <script src="./js/krishi_idb.js?v=5fkfa9s"></script>
+    <script src="./js/app.js?v=5fkfa9s" defer></script>
 
 
     <!--
@@ -3915,8 +3922,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=r8sdv8n" defer></script>
-    <script src="./js/voice_assistant.js?v=r8sdv8n" defer></script>
+<script src="./js/data_safety.js?v=5fkfa9s" defer></script>
+    <script src="./js/voice_assistant.js?v=5fkfa9s" defer></script>
 </body>
 </html>
 

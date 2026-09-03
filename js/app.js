@@ -4494,7 +4494,16 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         }
     });
 
-    function getAllQuestions(){ return [...defaultQuestions, ...(localData.customQuestions || []).filter(q => !q.deleted)]; }
+    // 'draft' means "not finished yet" and 'revision' is what saveData() stamps on a
+    // question that failed validation - neither belongs in a quiz. Only `deleted` was
+    // filtered here, so the Creator's Published/Draft/Revision selector had no effect at
+    // all: a half-written draft was served during practice exactly like a published one.
+    // Manage/Import/export deliberately keep using localData.customQuestions directly, so
+    // they still see and can repair these.
+    function getAllQuestions(){
+        return [...defaultQuestions, ...(localData.customQuestions || []).filter(q =>
+            !q.deleted && q.status !== 'draft' && q.status !== 'revision')];
+    }
     function getCustomQuestions(){ return (localData.customQuestions || []).filter(q => !q.deleted); }
     function getValidWrongCount() {
         if (!localData || !localData.wrong) return 0;
@@ -7514,6 +7523,7 @@ if (state.isMock) {
 
     // ==================== MANUAL MCQ CREATOR ====================
     let quillQ; let quillExpl;
+    let creatorBatchRestored = false;
     async function initCreatorPage(){
         let subjects = getAllSubjects();
         let addSel = document.getElementById('cr-sub');
@@ -7529,6 +7539,14 @@ if (state.isMock) {
         // Admin categories select init
         populateAdminSubjects();
 
+        // Recover a batch list left behind by a previous session. Done here rather than at
+        // boot so the toast only appears when the user actually opens the Creator, and so
+        // updateBatchUI() has its DOM.
+        if(!creatorBatchRestored){
+            creatorBatchRestored = true;
+            restoreTempBatch();
+        }
+
         if(!quillQ){
             try {
                 await LazyLibs.ensureQuill();
@@ -7542,10 +7560,22 @@ if (state.isMock) {
             quillQ.on('text-change', () => {
                 document.getElementById('cr-q').value = quillQ.root.innerHTML;
                 updateCreatorPreview();
+                validateCreatorLive();
+                scheduleCreatorDraftSave();
             });
-            quillExpl.on('text-change', () => { document.getElementById('cr-expl').value = quillExpl.root.innerHTML; });
+            quillExpl.on('text-change', () => {
+                document.getElementById('cr-expl').value = quillExpl.root.innerHTML;
+                scheduleCreatorDraftSave();
+            });
         }
         updateOptionCount();
+
+        // After Quill exists, so the saved rich text can go back into the editors. Once per
+        // session: re-running it on every visit would resurrect a draft the user just discarded.
+        if(!creatorDraftRestored){
+            creatorDraftRestored = true;
+            restoreCreatorDraft();
+        }
     }
 
     function switchCreatorTab(tab){
@@ -7568,9 +7598,13 @@ if (state.isMock) {
         for (let i = 0; i < 5; i++) {
             let el = document.getElementById('cr-o' + i);
             if (el) {
-                let wrapper = el.parentElement;
-                if (i < count) wrapper.classList.remove('hidden');
-                else wrapper.classList.add('hidden');
+                // cr-o0..cr-o3 are direct children of the shared #cr-options-container, so
+                // toggling el.parentElement hid the WHOLE container the moment count < 4 -
+                // every option box vanished and only 4/5 happened to work by luck. Only cr-o4
+                // has its own #cr-opt-e wrapper. Toggle the input itself; o4 toggles its wrapper.
+                let target = (i === 4) ? (document.getElementById('cr-opt-e') || el) : el;
+                if (i < count) target.classList.remove('hidden');
+                else target.classList.add('hidden');
             }
         }
         let ansSelect = document.getElementById('cr-ans');
@@ -7602,10 +7636,9 @@ if (state.isMock) {
         document.getElementById('cr-preview-ans').textContent = '✅ Correct Answer: ' + String.fromCharCode(65+ansIdx);
     }
 
-    // Attach preview event listeners
-    ['cr-o0', 'cr-o1', 'cr-o2', 'cr-o3', 'cr-o4', 'cr-ans', 'cr-opt-count'].forEach(id => {
-        let el = document.getElementById(id); if(el) el.addEventListener('input', updateCreatorPreview);
-    });
+    // (Input listeners for these fields are attached in wireCreatorInputs() below, which also
+    // drives live validation and draft autosave - a second 'input' -> updateCreatorPreview
+    // binding here would just run the same render twice per keystroke.)
 
     function collectFormQuestion(){
         let count = parseInt(document.getElementById('cr-opt-count').value)||4;
@@ -7627,46 +7660,254 @@ if (state.isMock) {
         };
     }
 
-    function validateQuestion(q){
-        if(!q.q || q.q.length < 5) return {valid:false, error:"Question details is too short!"};
-        if(q.opts.some(o=>!o)) return {valid:false, error:"Please fill in all available options!"};
-        return {valid:true};
+    // The single gate for anything the Add panel produces. The panel used to call
+    // validateQuestion(), which only checked "text >= 5 chars" and "no blank option" - it
+    // happily accepted an answer index pointing past the last option, or at an empty one.
+    // saveData() then re-validated with validateImportQuestion() and silently stamped the
+    // question `status:'revision'`, so a broken question looked saved and vanished from the
+    // usable bank with no message. Import already used the strong validator; now Add and
+    // Batch use the same one, so what passes here is what saveData() accepts.
+    //
+    // Duplicate detection is folded in for the same reason: detectDuplicatesAndErrors()
+    // already existed and Import already warned about duplicates, but Add/Batch let you
+    // save the same question text unlimited times without a word.
+    // Quill never yields a truly empty string - an untouched editor is "<p><br></p>", and a
+    // cleared one keeps its wrapper tags. Every "is there anything here?" test in the Creator
+    // has to go through the tags first.
+    function creatorPlainText(html){
+        return String(html || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function validateCreatorEntry(q, opts) {
+        // validateImportQuestion() only rejects text that is empty after trim, and
+        // "<p><br></p>" is 11 characters - so an untouched editor sailed through both the old
+        // weak validator and the strong one. Import feeds plain strings and is unaffected, so
+        // the tag-aware check belongs here rather than in the shared validator.
+        const errors = [];
+        if (creatorPlainText(q.q).length < 5) {
+            errors.push('Question text is too short (needs at least 5 characters).');
+        }
+        validateImportQuestion(q).forEach(e => {
+            if (e === 'Missing question text.') return; // already covered, more precisely
+            errors.push(e);
+        });
+        if (errors.length) return { valid: false, error: errors[0], errors: errors };
+
+        const norm = getNormalizedText(q.q);
+        if (norm) {
+            const clash = getAllQuestions().find(eq => !eq.deleted && getNormalizedText(eq.q) === norm);
+            if (clash) {
+                return { valid: false, duplicate: true,
+                    error: clash.sub ? `Already exists in '${clash.sub}'.` : 'This question already exists.' };
+            }
+            const pending = (opts && opts.skipBatchScan) ? -1 : tempBatch.findIndex(b => getNormalizedText(b.q) === norm);
+            if (pending !== -1) {
+                return { valid: false, duplicate: true,
+                    error: `Already item #${pending + 1} in the current batch list.` };
+            }
+        }
+        return { valid: true };
     }
 
     function addSingleQuestion(){
         let q = collectFormQuestion();
-        let val = validateQuestion(q);
-        if(!val.valid) { showToast('⚠️ ' + val.error); return; }
-        
+        let val = validateCreatorEntry(q);
+        if(!val.valid) { showToast('⚠️ ' + val.error); validateCreatorLive(); return; }
+
         localData.customQuestions.push(q);
         saveData();
         showToast('✅ Saved successfully!');
+        clearCreatorDraft();
         resetCreatorForm(!document.getElementById('cr-keep-subject').checked);
     }
 
     function addToTempBatch(){
         let q = collectFormQuestion();
-        let val = validateQuestion(q);
-        if(!val.valid) { showToast('⚠️ ' + val.error); return; }
-        
+        let val = validateCreatorEntry(q);
+        if(!val.valid) { showToast('⚠️ ' + val.error); validateCreatorLive(); return; }
+
         tempBatch.push(q);
+        persistTempBatch();
         showToast(`📦 Question added to current batch list! (${tempBatch.length})`);
+        clearCreatorDraft();
         resetCreatorForm(!document.getElementById('cr-keep-subject').checked);
         updateBatchUI();
     }
 
     function saveBatchQuestions(){
-        localData.customQuestions = localData.customQuestions.concat(tempBatch);
-        saveData();
-        showToast(`Saved complete ${tempBatch.length} items to database!`);
-        tempBatch = [];
+        // Re-checked at commit time, not just at add time. The bank can have grown since
+        // (a cloud sync, an import, a manual save), so an item that was unique when it
+        // entered the batch may collide by now. skipBatchScan avoids each item matching
+        // itself inside tempBatch.
+        const accepted = [];
+        const rejected = [];
+        tempBatch.forEach((q, i) => {
+            const val = validateCreatorEntry(q, { skipBatchScan: true });
+            if (val.valid) accepted.push(q);
+            else rejected.push(`#${i + 1}: ${val.error}`);
+        });
+
+        if (accepted.length) {
+            localData.customQuestions = localData.customQuestions.concat(accepted);
+            saveData();
+        }
+        // Only the accepted items leave the batch. Rejected ones stay so the user can
+        // still open them - dropping them here would destroy typed work silently.
+        tempBatch = tempBatch.filter(q => !accepted.includes(q));
+        persistTempBatch();
         updateBatchUI();
+
+        if (rejected.length) {
+            showToast(`⚠️ Saved ${accepted.length}, kept ${rejected.length} in batch: ${rejected[0]}`, 6000);
+            console.warn('[Creator] Batch items not saved:\n' + rejected.join('\n'));
+        } else {
+            showToast(`Saved complete ${accepted.length} items to database!`);
+        }
+    }
+
+    // tempBatch was an in-memory array only, so a reload, a tab switch that the OS
+    // reclaimed, or Android killing the WebView threw away every question staged in it -
+    // with no warning and no recovery. It is the largest amount of unsaved typed work the
+    // app can hold, so it is written through to storage on every change.
+    const TEMP_BATCH_KEY = 'krishi_creator_temp_batch';
+
+    function persistTempBatch(){
+        // immediate: Storage batches writes behind requestIdleCallback (800ms timeout), and
+        // the whole point of this key is to survive an abrupt kill - a reload or an OS
+        // WebView teardown inside that window would drop exactly the work we are trying to
+        // protect. Verified: without immediate, two staged questions came back as [].
+        try { Storage.setJSON(TEMP_BATCH_KEY, tempBatch, { immediate: true }); }
+        catch(e){ console.warn('[Creator] Could not persist batch list:', e); }
+    }
+
+    function restoreTempBatch(){
+        try {
+            const saved = Storage.getJSON(TEMP_BATCH_KEY, null);
+            if (Array.isArray(saved) && saved.length) {
+                tempBatch = saved;
+                updateBatchUI();
+                showToast(`📦 Restored ${saved.length} unsaved question(s) in your batch list.`);
+            }
+        } catch(e){ console.warn('[Creator] Could not restore batch list:', e); }
     }
 
     function updateBatchUI(){
         document.getElementById('batch-count').textContent = tempBatch.length;
         document.getElementById('batch-count-btn').textContent = tempBatch.length;
         document.getElementById('save-batch-btn').classList.toggle('hidden', tempBatch.length===0);
+        // #batch-info was static text; show what is actually staged.
+        const info = document.getElementById('batch-info');
+        if (info) {
+            info.innerHTML = tempBatch.length
+                ? `📦 Batch counts: <span id="batch-count">${tempBatch.length}</span> &middot; saved locally, survives reload`
+                : `📦 Batch counts: <span id="batch-count">0</span>`;
+        }
+        renderBatchList();
+    }
+
+    // The batch list was write-only: a counter went up and that was the entire feedback.
+    // There was no way to see what was staged, fix a typo in item #7, or drop one bad entry -
+    // the only escape was to commit all of them and then hunt the question down in Manage.
+    function renderBatchList(){
+        const wrap = document.getElementById('batch-list-wrap');
+        const list = document.getElementById('batch-list');
+        const btn  = document.getElementById('batch-list-toggle');
+        if(!wrap || !list) return;
+
+        wrap.classList.toggle('hidden', tempBatch.length === 0);
+        if(btn){
+            const collapsed = list.classList.contains('hidden');
+            btn.textContent = `${collapsed ? '▸ Show' : '▾ Hide'} staged items (${tempBatch.length})`;
+        }
+        if(!tempBatch.length){ list.innerHTML = ''; list.classList.add('hidden'); return; }
+
+        list.innerHTML = tempBatch.map((q, i) => {
+            let txt = creatorPlainText(q.q);
+            if(txt.length > 90) txt = txt.slice(0, 90) + '…';
+            const realOpts = (q.opts || []).filter(o => o && String(o).trim());
+            const ansLetter = String.fromCharCode(65 + (parseInt(q.ans) || 0));
+            return `<div class="p-2 rounded-lg border flex gap-2 items-start text-[11px]">
+                <span class="font-bold text-violet-600 shrink-0">#${i + 1}</span>
+                <div class="flex-1 min-w-0">
+                    <p class="font-medium break-words">${escapeCreatorHtml(txt) || '<span class="text-rose-500">(no question text)</span>'}</p>
+                    <p class="opacity-60 mt-0.5">${escapeCreatorHtml(q.sub || '-')} &middot; ${realOpts.length} opts &middot; Ans ${ansLetter} &middot; ${escapeCreatorHtml(q.difficulty || '-')} &middot; ${escapeCreatorHtml(q.status || '-')}</p>
+                </div>
+                <button onclick="editBatchItem(${i})" title="Edit in form" class="shrink-0 px-1.5 py-1 rounded border">✏️</button>
+                <button onclick="removeBatchItem(${i})" title="Remove from batch" class="shrink-0 px-1.5 py-1 rounded border">🗑️</button>
+            </div>`;
+        }).join('');
+    }
+
+    function escapeCreatorHtml(s){
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function toggleBatchList(){
+        const list = document.getElementById('batch-list');
+        if(!list) return;
+        list.classList.toggle('hidden');
+        renderBatchList();
+    }
+
+    function removeBatchItem(i){
+        if(!(i >= 0 && i < tempBatch.length)) return;
+        tempBatch.splice(i, 1);
+        persistTempBatch();
+        updateBatchUI();
+        showToast('🗑️ Removed from batch list.');
+    }
+
+    function editBatchItem(i){
+        // The item is pulled out of tempBatch rather than left in place, for two reasons: the
+        // duplicate check in validateCreatorEntry() would otherwise flag it against itself the
+        // moment it is re-added, and leaving it would silently create a second copy. Nothing
+        // is lost if the user wanders off mid-edit - the draft autosave holds the form.
+        if(!(i >= 0 && i < tempBatch.length)) return;
+        const q = tempBatch[i];
+        loadQuestionIntoCreatorForm(q);
+        tempBatch.splice(i, 1);
+        persistTempBatch();
+        updateBatchUI();
+        showToast('✏️ Item #' + (i + 1) + ' moved into the form — press "Add to batch list" when done.', 5000);
+        const ed = document.getElementById('cr-q-editor');
+        if(ed && ed.scrollIntoView) ed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function loadQuestionIntoCreatorForm(q){
+        if(!q) return;
+        const opts = q.opts || [];
+        // Option count first: it rebuilds #cr-ans, so setting the answer before this would be
+        // thrown away.
+        const countEl = document.getElementById('cr-opt-count');
+        if(countEl){
+            const want = String(Math.min(5, Math.max(2, opts.length || 4)));
+            if([...countEl.options].some(o => o.value === want)) countEl.value = want;
+            updateOptionCount();
+        }
+        for(let i = 0; i < 5; i++){
+            const el = document.getElementById('cr-o' + i);
+            if(el) el.value = opts[i] != null ? opts[i] : '';
+        }
+        const setVal = (id, v) => { const el = document.getElementById(id); if(el && v != null) el.value = v; };
+        setVal('cr-ans', String(parseInt(q.ans) || 0));
+        setVal('cr-sub', q.sub);
+        setVal('cr-topic', q.topic || '');
+        setVal('cr-difficulty', q.difficulty);
+        setVal('cr-marks', q.marks || 1);
+        setVal('cr-status', q.status || 'published');
+        const qEl = document.getElementById('cr-q'); if(qEl) qEl.value = q.q || '';
+        const eEl = document.getElementById('cr-expl'); if(eEl) eEl.value = q.expl || '';
+        if(quillQ) quillQ.root.innerHTML = q.q || '';
+        if(quillExpl) quillExpl.root.innerHTML = q.expl || '';
+        updateCreatorPreview();
+        validateCreatorLive();
     }
 
     function resetCreatorForm(clearTopic){
@@ -7680,7 +7921,252 @@ if (state.isMock) {
             document.getElementById('cr-topic').value = '';
         }
         document.getElementById('cr-preview').classList.add('hidden');
+        validateCreatorLive();
     }
+
+    // ==================== CREATOR: DRAFT AUTOSAVE (E) ====================
+    // Everything typed into the Add panel lived only in the DOM. Navigating to another page,
+    // a reload, or Android reclaiming the WebView wiped a half-written question - including a
+    // long explanation - with no warning. This mirrors the form into storage on a debounce and
+    // offers it back when the Creator is next opened.
+    const CREATOR_DRAFT_KEY = 'krishi_creator_draft';
+    const CREATOR_DRAFT_FIELDS = ['cr-o0','cr-o1','cr-o2','cr-o3','cr-o4','cr-ans','cr-opt-count',
+                                  'cr-sub','cr-topic','cr-difficulty','cr-marks','cr-status'];
+    let creatorDraftTimer = null;
+    let creatorDraftBusy = false;   // suppresses autosave while we are the ones writing the form
+    let creatorDraftRestored = false;
+
+    function collectCreatorDraft(){
+        const d = { q: '', expl: '', fields: {} };
+        const qEl = document.getElementById('cr-q');    if(qEl) d.q = qEl.value;
+        const eEl = document.getElementById('cr-expl'); if(eEl) d.expl = eEl.value;
+        CREATOR_DRAFT_FIELDS.forEach(id => {
+            const el = document.getElementById(id);
+            if(el) d.fields[id] = el.value;
+        });
+        return d;
+    }
+
+    function creatorDraftIsEmpty(d){
+        if(!d) return true;
+        if(creatorPlainText(d.q)) return false;
+        if(creatorPlainText(d.expl)) return false;
+        // Topic/subject deliberately not counted as evidence of work: "Keep details on save"
+        // leaves them populated after every save, and a draft holding nothing but a leftover
+        // topic would announce "unsaved draft restored" on the next visit for no reason.
+        const f = d.fields || {};
+        return !['cr-o0','cr-o1','cr-o2','cr-o3','cr-o4']
+            .some(id => String(f[id] || '').trim());
+    }
+
+    function scheduleCreatorDraftSave(){
+        if(creatorDraftBusy) return;
+        if(creatorDraftTimer) clearTimeout(creatorDraftTimer);
+        creatorDraftTimer = setTimeout(saveCreatorDraft, 1200);
+    }
+
+    function saveCreatorDraft(){
+        creatorDraftTimer = null;
+        const status = document.getElementById('cr-draft-status');
+        try {
+            const d = collectCreatorDraft();
+            if(creatorDraftIsEmpty(d)){
+                // Storage has no delete; an empty string reads back as falsy, so getJSON
+                // returns the fallback - same effect without touching the wrapper.
+                Storage.setRaw(CREATOR_DRAFT_KEY, '', { immediate: true });
+                if(status) status.textContent = '';
+                return;
+            }
+            d.savedAt = Date.now();
+            // immediate, for the same reason as the batch list: Storage defers writes behind
+            // requestIdleCallback(800ms) and the whole point of this key is to survive an
+            // abrupt kill, which is exactly what lands inside that window.
+            Storage.setJSON(CREATOR_DRAFT_KEY, d, { immediate: true });
+            if(status){
+                status.style.color = 'var(--text-secondary)';
+                status.textContent = '💾 Draft saved ' + new Date(d.savedAt).toLocaleTimeString();
+            }
+        } catch(e){ console.warn('[Creator] Draft autosave failed:', e); }
+    }
+
+    function clearCreatorDraft(){
+        if(creatorDraftTimer){ clearTimeout(creatorDraftTimer); creatorDraftTimer = null; }
+        try { Storage.setRaw(CREATOR_DRAFT_KEY, '', { immediate: true }); }
+        catch(e){ console.warn('[Creator] Could not clear draft:', e); }
+        const status = document.getElementById('cr-draft-status');
+        if(status) status.textContent = '';
+    }
+
+    function restoreCreatorDraft(){
+        let d = null;
+        try { d = Storage.getJSON(CREATOR_DRAFT_KEY, null); } catch(e){ return; }
+        if(!d || typeof d !== 'object' || creatorDraftIsEmpty(d)) return;
+
+        creatorDraftBusy = true;
+        try {
+            const f = d.fields || {};
+            // cr-opt-count first: updateOptionCount() rebuilds #cr-ans from scratch, so a
+            // restored answer index set before this would be discarded.
+            const countEl = document.getElementById('cr-opt-count');
+            if(countEl && f['cr-opt-count']){
+                countEl.value = f['cr-opt-count'];
+                updateOptionCount();
+            }
+            CREATOR_DRAFT_FIELDS.forEach(id => {
+                if(id === 'cr-opt-count') return;
+                const el = document.getElementById(id);
+                if(el && f[id] !== undefined) el.value = f[id];
+            });
+            const qEl = document.getElementById('cr-q');    if(qEl) qEl.value = d.q || '';
+            const eEl = document.getElementById('cr-expl'); if(eEl) eEl.value = d.expl || '';
+            if(quillQ)    quillQ.root.innerHTML    = d.q    || '';
+            if(quillExpl) quillExpl.root.innerHTML = d.expl || '';
+        } finally {
+            // Not released synchronously: Quill delivers text-change through a MutationObserver,
+            // so writing root.innerHTML above echoes back a text-change one microtask after this
+            // function has returned. With the guard already down that echo scheduled an autosave
+            // which overwrote the "draft restored" notice with "draft saved" 1.2s later - the
+            // user never saw that anything had been recovered.
+            setTimeout(() => {
+                if(creatorDraftTimer){ clearTimeout(creatorDraftTimer); creatorDraftTimer = null; }
+                creatorDraftBusy = false;
+            }, 500);
+        }
+
+        updateCreatorPreview();
+        validateCreatorLive();
+        const status = document.getElementById('cr-draft-status');
+        if(status){
+            const when = d.savedAt ? new Date(d.savedAt).toLocaleString() : 'earlier';
+            status.style.color = 'var(--text-secondary)';
+            status.innerHTML = `♻️ Unsaved draft from ${escapeCreatorHtml(when)} restored. ` +
+                `<button onclick="discardCreatorDraft()" class="underline font-bold">Discard it</button>`;
+        }
+    }
+
+    function discardCreatorDraft(){
+        clearCreatorDraft();
+        resetCreatorForm(true);
+        showToast('🧹 Draft discarded.');
+    }
+
+    // ==================== CREATOR: LIVE VALIDATION (G) ====================
+    // Validation used to speak only through a toast fired after the Save button was pressed -
+    // one message at a time, gone in a few seconds, with no indication of which field was at
+    // fault. validateCreatorEntry() already returns the full error list, so run it as the user
+    // types and point at the offending inputs.
+    function setCreatorFieldInvalid(el, bad){
+        if(!el) return;
+        // Inline styles, not a class: the option inputs carry Tailwind `border` utilities and a
+        // shared stylesheet, and inline wins over both without needing !important anywhere.
+        if(bad){ el.style.borderColor = '#e11d48'; el.style.borderWidth = '2px'; }
+        else { el.style.borderColor = ''; el.style.borderWidth = ''; }
+    }
+
+    function validateCreatorLive(){
+        const box = document.getElementById('cr-validation');
+        const editorEl = document.getElementById('cr-q-editor');
+        const optEls = [0,1,2,3,4].map(i => document.getElementById('cr-o' + i));
+        const ansEl = document.getElementById('cr-ans');
+
+        setCreatorFieldInvalid(editorEl, false);
+        optEls.forEach(el => setCreatorFieldInvalid(el, false));
+        setCreatorFieldInvalid(ansEl, false);
+        if(!box) return;
+
+        const count = parseInt(document.getElementById('cr-opt-count')?.value) || 4;
+        const q = collectFormQuestion();
+        const typedAnything = creatorPlainText(q.q) || (q.opts || []).some(o => o && o.trim());
+        if(!typedAnything){ box.classList.add('hidden'); box.innerHTML = ''; return; }
+
+        const val = validateCreatorEntry(q);
+        box.classList.remove('hidden');
+        if(val.valid){
+            box.className = 'p-2.5 rounded-lg border text-[11px] leading-relaxed border-emerald-500 ' +
+                            'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400';
+            box.innerHTML = '✅ Looks good — ready to save.';
+            return;
+        }
+
+        box.className = 'p-2.5 rounded-lg border text-[11px] leading-relaxed border-rose-500 ' +
+                        'bg-rose-50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-400';
+        const msgs = (val.errors && val.errors.length) ? val.errors : [val.error];
+        box.innerHTML = msgs.map(m => `<p>⚠️ ${escapeCreatorHtml(m)}</p>`).join('');
+
+        // Derived from the form, not by parsing the messages - the wording can change without
+        // breaking which field lights up.
+        if(creatorPlainText(q.q).length < 5) setCreatorFieldInvalid(editorEl, true);
+        for(let i = 0; i < count; i++){
+            if(!String(optEls[i] && optEls[i].value || '').trim()) setCreatorFieldInvalid(optEls[i], true);
+        }
+        const ansIdx = parseInt(q.ans);
+        if(isNaN(ansIdx) || ansIdx >= (q.opts || []).length || !String(q.opts[ansIdx] || '').trim()){
+            setCreatorFieldInvalid(ansEl, true);
+        }
+    }
+
+    // ==================== CREATOR: INPUT WIRING + SHORTCUTS (E/G/H) ====================
+    (function wireCreatorInputs(){
+        const react = () => { updateCreatorPreview(); validateCreatorLive(); scheduleCreatorDraftSave(); };
+        CREATOR_DRAFT_FIELDS.forEach(id => {
+            const el = document.getElementById(id);
+            if(!el) return;
+            el.addEventListener('input', react);
+            el.addEventListener('change', react);
+        });
+
+        function addPanelIsOpen(){
+            const page = document.getElementById('page-mcq-creator');
+            const panel = document.getElementById('creator-panel-add');
+            return !!(page && page.classList.contains('active') &&
+                      panel && !panel.classList.contains('hidden'));
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if(!(e.ctrlKey || e.metaKey) || e.altKey) return;
+            if(!addPanelIsOpen()) return;
+            const k = (e.key || '').toLowerCase();
+            if(k === 'enter'){
+                e.preventDefault();
+                if(e.shiftKey) addToTempBatch(); else addSingleQuestion();
+            } else if(k === 'b'){
+                // Ctrl+B is bold inside a Quill editor and that binding is worth more than a
+                // shortcut alias, so this only fires outside the rich-text areas. Ctrl+Shift+
+                // Enter is the one that always works.
+                if(e.target && e.target.closest && e.target.closest('.ql-editor')) return;
+                e.preventDefault();
+                addToTempBatch();
+            }
+        });
+
+        // Tab out of the question editor into Option A. Quill binds Tab to indent, so this has
+        // to run in the capture phase on the container - by the time a bubbling listener sees
+        // the event Quill has already inserted the indent.
+        const qEditor = document.getElementById('cr-q-editor');
+        if(qEditor){
+            qEditor.addEventListener('keydown', (e) => {
+                if(e.key !== 'Tab' || e.shiftKey) return;
+                e.preventDefault(); e.stopPropagation();
+                const first = document.getElementById('cr-o0');
+                if(first) first.focus();
+            }, true);
+        }
+
+        // Enter inside an option jumps to the next visible option instead of doing nothing, so
+        // a whole question can be typed without leaving the keyboard.
+        [0,1,2,3,4].forEach(i => {
+            const el = document.getElementById('cr-o' + i);
+            if(!el) return;
+            el.addEventListener('keydown', (e) => {
+                if(e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                e.preventDefault();
+                const count = parseInt(document.getElementById('cr-opt-count')?.value) || 4;
+                const next = (i + 1 < count) ? document.getElementById('cr-o' + (i + 1))
+                                             : document.getElementById('cr-ans');
+                if(next) next.focus();
+            });
+        });
+    })();
 
     // ==================== CREATOR FILE HANDLERS (IO) ====================
     function parseCSV(text) {
@@ -8856,9 +9342,14 @@ function openEditImportModal(idx) {
     
    function handleRestoreFile(event){
         let fileInput = event.target;
-        let file = fileInput.files ? fileInput.files[0] : null; 
+        let file = fileInput.files ? fileInput.files[0] : null;
         if(!file) return;
-        
+
+        // #restore-status was a permanently empty <p>: restore only spoke through toasts,
+        // which vanish. Mirror the outcome into the inline status line so it persists.
+        let statusEl = document.getElementById('restore-status');
+        if(statusEl){ statusEl.style.color = 'var(--text-secondary)'; statusEl.textContent = '⏳ Reading backup file...'; }
+
         let reader = new FileReader();
         reader.onload = function(e){
             try {
@@ -8981,10 +9472,12 @@ function openEditImportModal(idx) {
                 
                 saveTimingData(); // थपिएको: timingLog र mockTestScores स्थानीय स्टोरमा सेभ गर्ने
                 saveData();
+                if(statusEl){ statusEl.style.color = '#059669'; statusEl.textContent = `✅ Restored ${staged.customQuestions.length} custom questions + progress.`; }
                 showToast('✅ App Backup restored successfully!');
                 navigate('page-home');
             } catch(err){
                 console.error('[PWA Backup] Safe restore aborted:', err);
+                if(statusEl){ statusEl.style.color = '#e11d48'; statusEl.textContent = `❌ ${err.message}`; }
                 showToast(`❌ Invalid or corrupted backup file: ${err.message}`, 6000);
             } finally {
                 // 4. इनपुट खाली गर्ने
@@ -9073,14 +9566,32 @@ function openEditImportModal(idx) {
             }
         });
         if(current) parsed.push(current);
-        
+
+        // Flag questions the parser could not fully understand. #bulk-errors was a
+        // permanently empty div and this `errors` list was collected but never rendered,
+        // so a malformed block (too few options, an Answer: letter past the last option)
+        // saved silently as a broken question. Report them now; they still save
+        // (saveData routes invalid ones to 'revision'), but the user sees which to fix.
+        parsed.forEach((p, idx) => {
+            let realOpts = (p.opts || []).filter(o => o && o.trim());
+            if (realOpts.length < 2) {
+                errors.push(`Q${idx + 1}: needs at least 2 options (found ${realOpts.length}).`);
+            } else if (p.ans >= p.opts.length) {
+                errors.push(`Q${idx + 1}: Answer letter is outside the options listed.`);
+            }
+        });
+
         tempBulkParsed = parsed;
         let preview = document.getElementById('bulk-preview'); preview.innerHTML = '';
+        let errBox = document.getElementById('bulk-errors'); if(errBox) errBox.innerHTML = '';
         if(parsed.length > 0){
             preview.innerHTML = `<p class="text-xs text-emerald-600 font-bold">Successfully parsed ${parsed.length} questions!</p>`;
             document.getElementById('bulk-save-btn').classList.remove('hidden');
         } else {
             preview.innerHTML = `<p class="text-xs text-red-500">Failed to parse any valid questions. Follow specified templates.</p>`;
+        }
+        if(errBox && errors.length){
+            errBox.innerHTML = errors.map(e => `<p>⚠️ ${e}</p>`).join('');
         }
     }
 

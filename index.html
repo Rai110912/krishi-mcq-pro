@@ -81,7 +81,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=5fkfa9s" rel="stylesheet">
+    <link href="./index.css?v=ttepwna" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1533,7 +1533,16 @@
         <div id="page-smart-scan" class="page p-4 space-y-3">
             <h2 class="text-lg font-bold">Concept Scan to Quiz</h2>
             <textarea id="scan-input" class="w-full h-40 p-3 rounded-xl border text-xs" style="background:var(--card);border-color:var(--border);color:var(--text);" placeholder="अपनी कृषि टिप्पणीहरू यहाँ पेस्ट गर्नुहोस्..."></textarea>
+            <div class="flex items-center gap-2 text-xs">
+                <label class="text-[10px] font-bold shrink-0">Questions:</label>
+                <select id="scan-count" class="p-1.5 border rounded-lg text-[11px] flex-1">
+                    <option value="5" selected>5 questions</option>
+                    <option value="10">10 questions</option>
+                    <option value="15">15 questions</option>
+                </select>
+            </div>
             <button onclick="processScan()" class="w-full bg-violet-600 text-white py-3 rounded-xl font-bold text-xs">✨ Convert text to Questions</button>
+            <p class="text-[10px] leading-relaxed" style="color:var(--text-secondary);">Q:/A./Answer: format ko text bhaye sidhai parse hunchha. Sadhaa note bhaye fill-in-the-blank question banchha ra <b>Draft</b> maa basChha — Manage tab maa sudhaarera Published banaunu.</p>
             <button onclick="navigate('page-mcq-creator')" class="w-full text-center text-xs opacity-75">← Cancel</button>
         </div>
 
@@ -1541,11 +1550,29 @@
         <div id="page-file-scan" class="page p-4 space-y-4">
             <h2 class="text-lg font-bold">📂 File to MCQ converter</h2>
             <div class="p-4 rounded-xl border space-y-3" style="background:var(--card);border-color:var(--border);">
-                <label class="text-xs font-bold">फाइल छान्नुहोस् (.txt, .jpg, .png, .pdf)</label>
-                <input type="file" id="file-input" accept=".txt,.jpg,.jpeg,.png,.pdf" class="w-full p-2 border rounded-lg text-xs">
-                <button onclick="processFile()" class="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-bold text-xs">🔍 Convert File Content</button>
+                <label class="text-xs font-bold">फाइल छान्नुहोस् (.txt, .jpg, .png, .webp, .heic, .pdf)</label>
+                <input type="file" id="file-input" accept=".txt,.jpg,.jpeg,.png,.webp,.heic,.heif,.pdf" multiple class="w-full p-2 border rounded-lg text-xs">
+                <!-- A separate input for the camera: `capture` on the main picker would force the
+                     camera for every selection, including PDFs. -->
+                <input type="file" id="camera-input" accept="image/*" capture="environment" class="hidden">
+                <div class="flex gap-2">
+                    <button onclick="processFile()" class="flex-1 bg-emerald-600 text-white py-2.5 rounded-lg font-bold text-xs">🔍 Convert File Content</button>
+                    <button onclick="openCameraScan()" class="bg-violet-600 text-white px-3 py-2.5 rounded-lg font-bold text-xs" title="Take a photo">📷</button>
+                </div>
                 <div id="file-status" class="text-[10px] text-center" style="color:var(--text-secondary);"></div>
-                <textarea id="file-extracted-text" class="w-full h-32 p-3 border rounded-lg text-xs" readonly placeholder="निकालेको पाठ यहाँ देखिनेछ..."></textarea>
+                <button id="ocr-cancel-btn" onclick="cancelOcr()" class="hidden w-full bg-rose-600 text-white py-2 rounded-lg text-xs font-bold">✖ Cancel scan</button>
+                <button id="pdf-ocr-btn" onclick="ocrPdfPages()" class="hidden w-full bg-amber-500 text-white py-2.5 rounded-lg text-xs font-bold">📸 Run OCR on the PDF pages</button>
+                <textarea id="file-extracted-text" class="w-full h-32 p-3 border rounded-lg text-xs" placeholder="निकालेको पाठ यहाँ देखिनेछ... (सम्पादन गर्न सकिन्छ)"></textarea>
+                <p id="file-text-count" class="text-[10px] text-right" style="color:var(--text-secondary);"></p>
+                <div class="flex items-center gap-2 text-xs">
+                    <label class="text-[10px] font-bold shrink-0">Questions:</label>
+                    <select id="ai-count" class="p-1.5 border rounded-lg text-[11px] flex-1">
+                        <option value="3">3 questions</option>
+                        <option value="5" selected>5 questions</option>
+                        <option value="10">10 questions</option>
+                        <option value="20">20 questions</option>
+                    </select>
+                </div>
                 <button id="generate-simple-btn" onclick="generateFromFileText()" class="hidden w-full bg-violet-600 text-white py-2.5 rounded-lg font-bold text-xs">📝 Simple generator</button>
                 <button id="generate-ai-btn" onclick="generateAIQuestions()" class="hidden w-full bg-purple-700 text-white py-2.5 rounded-lg font-bold text-xs">✨ AI Gemini Generator</button>
                 <p id="ai-status" class="text-[10px] text-center hidden"></p>
@@ -2215,9 +2242,13 @@
                             <div class="space-y-1">
                                 <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">AI Model</label>
                                 <select id="gemini-model-select" onchange="saveGeminiSettings()" class="w-full p-2 border rounded-xl text-xs bg-slate-50 dark:bg-slate-900" style="border-color:var(--border); color:var(--text);">
-                                    <option value="gemini-1.5-flash" selected>Gemini 1.5 Flash (Fast & Free)</option>
-                                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep Analysis)</option>
-                                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (Next-Gen)</option>
+                                    <!-- Google shut down gemini-1.5-flash / 1.5-pro / 2.0-flash-exp, which were the only
+                                         three options here - so the AI generator was returning 404s for everyone. IDs
+                                         verified against ai.google.dev/gemini-api/docs/models. Keep this list stable
+                                         (no *-latest aliases: those get swapped under you on each Google release). -->
+                                    <option value="gemini-3.8-flash" selected>Gemini 3.8 Flash (Recommended)</option>
+                                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Fastest & Cheapest)</option>
+                                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Analysis)</option>
                                 </select>
                             </div>
                             <div class="space-y-1">
@@ -2651,7 +2682,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v219-5fkfa9s (202609031303)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v220-ttepwna (202609031527)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3276,7 +3307,7 @@
                             <h3 class="font-bold text-sm">📸 OCR Smart Scanner</h3>
                             <p class="text-[10px] opacity-90">Convert printed notes or PDFs directly into active tests</p>
                         </div>
-                        <span class="text-[9px] bg-purple-800 border border-purple-500/50 px-1.5 py-0.5 rounded font-black text-purple-200">AI Connected</span>
+                        <span id="ocr-ai-badge" class="text-[9px] bg-purple-800 border border-purple-500/50 px-1.5 py-0.5 rounded font-black text-purple-200">AI Connected</span>
                     </div>
                     <div class="flex gap-2">
                         <button onclick="navigate('page-smart-scan'); playSound('click');" class="flex-1 bg-white hover:bg-slate-50 text-purple-700 py-1.5 rounded-xl text-[10px] font-extrabold text-center active:scale-95 transition cursor-pointer">text scan input</button>
@@ -3887,14 +3918,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=5fkfa9s" defer></script>
-    <script src="./js/elite_3d_engine.js?v=5fkfa9s" defer></script>
-    <script src="./js/canvas_charts.js?v=5fkfa9s" defer></script>
+    <script src="./js/elite_animations_controller.js?v=ttepwna" defer></script>
+    <script src="./js/elite_3d_engine.js?v=ttepwna" defer></script>
+    <script src="./js/canvas_charts.js?v=ttepwna" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=5fkfa9s" defer></script>
-    <script src="./js/sqlite_db.js?v=5fkfa9s" defer></script>
-    <script src="./js/krishi_idb.js?v=5fkfa9s"></script>
-    <script src="./js/app.js?v=5fkfa9s" defer></script>
+    <script src="./js/pwa_helpers.js?v=ttepwna" defer></script>
+    <script src="./js/sqlite_db.js?v=ttepwna" defer></script>
+    <script src="./js/krishi_idb.js?v=ttepwna"></script>
+    <script src="./js/app.js?v=ttepwna" defer></script>
 
 
     <!--
@@ -3922,8 +3953,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=5fkfa9s" defer></script>
-    <script src="./js/voice_assistant.js?v=5fkfa9s" defer></script>
+<script src="./js/data_safety.js?v=ttepwna" defer></script>
+    <script src="./js/voice_assistant.js?v=ttepwna" defer></script>
 </body>
 </html>
 

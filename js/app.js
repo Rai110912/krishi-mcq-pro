@@ -7288,154 +7288,569 @@ if (state.isMock) {
     }
 
     // ==================== SCANNER / FILE CONVERSION ====================
-    function processScan(){
-        let text = document.getElementById('scan-input').value.trim();
-    if(!text) { showToast('Please insert text to scan!'); return; }
-    let sentences = text.split(/[.!?।]+/).filter(s=>s.trim().length > 15);
-        if(sentences.length === 0){ showToast('Notes sentences are too short to compile!'); return; }
-        
-        let parsed = [];
-        sentences.slice(0, 5).forEach((s, i)=>{
-            let firstWord = s.trim().split(' ')[0] || 'Term';
-            parsed.push({
-                id: Date.now() + i,
-                q: `What is directly linked with "${firstWord}" in: "${s.trim().substring(0, 50)}..."?`,
-                opts: [firstWord, "Alternative option B", "Alternative option C", "None of the above"],
-                ans: 0,
-                expl: `Sourced from scanned notes: ${s.trim()}`,
-                sub: "General"
-            });
-        });
-        state.tempGeneratedQuestions = parsed;
-        showEditMCQPage(parsed);
-        navigate('page-edit-mcq');
+    // Shared scan state. A single long-lived tesseract worker replaces the one-shot
+    // Tesseract.recognize() helper for one reason: recognize() hands back no handle, so a scan
+    // that had started could not be stopped - the user was pinned to a multi-minute
+    // recognition on a large photo with no way out. worker.terminate() is the only real
+    // cancel tesseract.js offers.
+    let ocrWorker = null;
+    let ocrWorkerLangs = '';
+    let ocrCancelled = false;
+    let ocrBusy = false;
+    let ocrProgressSink = null;    // set per recognition; the worker's logger is fixed at creation
+    let pdfOcrDoc = null;          // last opened PDF, kept alive so ocrPdfPages() can rasterize it
+    const OCR_PDF_PAGE_CAP = 20;   // a 300-page book would run for hours; cap it and say so
+
+    // terminate() does stop the recognition, but the recognize() promise it leaves behind NEVER
+    // settles - measured: cancel fired at 849 ms and the `await processFile(...)` was still
+    // pending 30 s later. So `ocrBusy` stayed true forever and every later scan was refused
+    // with "a scan is already running": cancel looked like it worked and quietly bricked the
+    // scanner until a reload. This signal is what actually unblocks the awaiting caller.
+    let ocrCancelSignal = null;
+
+    function beginOcrRun(){
+        ocrCancelled = false;
+        ocrBusy = true;
+        let rejectFn;
+        const promise = new Promise((_, reject) => { rejectFn = reject; });
+        promise.catch(() => {});   // pre-attached: a cancel with nothing racing must not surface
+        ocrCancelSignal = { promise: promise, reject: rejectFn };
     }
 
-    async function processFile(){
-        let input = document.getElementById('file-input'); let file = input.files[0];
-        if(!file) { showToast('Select backup or txt file!'); return; }
-        let status = document.getElementById('file-status');
-        let txt = document.getElementById('file-extracted-text');
-        
-        status.textContent = 'Processing...';
-        let name = file.name.toLowerCase();
-        
-        if(name.endsWith('.txt')){
-            let reader = new FileReader();
-            reader.onload = (e) => {
-                txt.value = e.target.result;
-                status.textContent = '✅ Read complete!';
-                document.getElementById('generate-simple-btn').classList.remove('hidden');
-                toggleAIButtonVisibility();
-            };
-            reader.readAsText(file);
-        } else if(name.endsWith('.pdf')){
-            try {
-                status.textContent = 'Loading PDF engine...';
-                await LazyLibs.ensurePdfjs();
-            } catch(e) {
-                status.textContent = '⚠️ PDF engine load failed (offline?)';
-                return;
+    function endOcrRun(){
+        ocrBusy = false;
+        ocrCancelSignal = null;
+        showOcrCancel(false);
+    }
+
+    function setFileStatus(msg){
+        const el = document.getElementById('file-status');
+        if(el) el.textContent = msg;
+    }
+
+    function showOcrCancel(show){
+        const btn = document.getElementById('ocr-cancel-btn');
+        if(btn) btn.classList.toggle('hidden', !show);
+    }
+
+    function revealGenerateButtons(){
+        const b = document.getElementById('generate-simple-btn');
+        if(b) b.classList.remove('hidden');
+        toggleAIButtonVisibility();
+    }
+
+    function hideGenerateButtons(){
+        const b = document.getElementById('generate-simple-btn');
+        if(b) b.classList.add('hidden');
+        const a = document.getElementById('generate-ai-btn');
+        if(a) a.classList.add('hidden');
+    }
+
+    // The extracted-text box is editable now (it used to be readonly, so an OCR misread was
+    // uncorrectable). A live count is the feedback that the correction landed, and it shows
+    // how much material the generator will actually get.
+    function updateExtractedTextCount(){
+        const ta = document.getElementById('file-extracted-text');
+        const out = document.getElementById('file-text-count');
+        if(!ta) return;
+        const v = ta.value || '';
+        const words = v.trim() ? v.trim().split(/\s+/).length : 0;
+        if(out) out.textContent = v.length ? `${v.length} characters · ${words} words` : '';
+        if(v.trim()) revealGenerateButtons();
+    }
+
+    function getSelectCount(id, fallback){
+        const el = document.getElementById(id);
+        const n = el ? parseInt(el.value) : NaN;
+        return (!isNaN(n) && n > 0) ? n : fallback;
+    }
+
+    (function wireExtractedTextBox(){
+        const ta = document.getElementById('file-extracted-text');
+        if(ta) ta.addEventListener('input', updateExtractedTextCount);
+    })();
+
+    function escapeRegExpLite(s){
+        return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    // ==================== OFFLINE QUESTION BUILDER (no AI) ====================
+    // The old "simple generator" emitted literal nonsense:
+    //     q:    'What is directly linked with "<firstWord>" in: "<first 50 chars>..."?'
+    //     opts: [firstWord, 'Alternative option B', 'Alternative option C', 'None of the above']
+    //     ans:  0   (always)
+    // Three of four options were placeholder strings, the answer was always A, and the question
+    // was unanswerable - worse than nothing, because it filled the bank with garbage that then
+    // showed up in real practice sets. This builds genuine cloze items instead: blank out a
+    // salient term and draw the three distractors from the SAME document, so they are in-domain
+    // and plausible rather than "Alternative option B".
+    const CLOZE_STOPWORDS = new Set(
+        ('the a an and or but if then than that this these those of in on at to for from with ' +
+         'without into over under about above below by as is are was were be been being has have ' +
+         'had do does did can could should would may might must not no nor so such very more most ' +
+         'some any each other which who whom whose what when where why how also there their them ' +
+         'they it its his her our your you we he she i one two used using also many much').split(' ')
+        .concat(['हो','हुन','छ','छन्','थियो','थिए','र','वा','तर','यो','त्यो','यी','ती','पनि','मा','लाई',
+                 'को','का','की','बाट','संग','सँग','गर्न','गरे','गर्ने','भएको','हुन्छ','हुन्छन्','नै','तथा',
+                 'भन्ने','जस्तै','अनि','कि','हुने','गरी','देखि','सक्छ','गर्नु','भन्दा'])
+    );
+
+    // Latin, Devanagari, hyphenated variety names ("Chaite-2") and bare numbers/percentages.
+    // Trailing punctuation is excluded so a term never carries a comma into an option, and the
+    // token must END on a letter or digit so "Chaite-" cannot be produced.
+    function clozeWords(s){
+        return String(s || '').match(/[A-Za-zऀ-ॿ][A-Za-zऀ-ॿ0-9'\-]*[A-Za-zऀ-ॿ0-9]|[A-Za-zऀ-ॿ]|\d+(?:\.\d+)?%?/g) || [];
+    }
+
+    function isClozeCandidate(w){
+        if(!w) return false;
+        if(/\d/.test(w)) return true;           // quantities and variety codes are ideal answers
+        if(w.length < 4) return false;
+        return !CLOZE_STOPWORDS.has(w.toLowerCase());
+    }
+
+    // What makes a good blank. Frequency alone picked whichever word happened to be rarest, which
+    // is often a bland verb ("maturing"); the facts worth testing are the numbers, the variety
+    // codes and the proper nouns.
+    function clozeScore(w, sentence, freq){
+        let score;
+        if(/^\d/.test(w)) score = 100;                                   // 4.5, 100, 60%
+        else if(/\d/.test(w)) score = 90;                                // Chaite-2, NPK20
+        else if(/^[A-Zऀ-ॿ]/.test(w) && sentence.indexOf(w) > 0) score = 70;  // proper noun mid-sentence
+        else score = 40;
+        return score * 1000 - (freq.get(w) || 0) * 10 + Math.min(w.length, 20);
+    }
+
+    // Numbers are the most valuable blanks in a set of notes, but a page of notes usually holds
+    // only two or three of them - so the same-kind distractor pool ran dry and exactly those
+    // items were being discarded. Derive the alternatives from the answer instead: scaled
+    // variants read as plausible yields or doses, and none of them can accidentally be right.
+    function numericDistractors(answer){
+        const suffix = /%$/.test(answer) ? '%' : '';
+        const base = parseFloat(answer);
+        if(!isFinite(base) || base === 0) return [];
+        const dec = (String(answer).replace('%', '').split('.')[1] || '').length;
+        const fmt = v => (dec ? v.toFixed(dec) : String(Math.round(v))) + suffix;
+        const out = [];
+        [0.5, 2, 1.5, 0.25, 3].forEach(f => {
+            const s = fmt(base * f);
+            if(s !== answer && out.indexOf(s) === -1) out.push(s);
+        });
+        return out.slice(0, 3);
+    }
+
+    function buildClozeQuestions(text, limit, subject){
+        // Split on Latin and Devanagari terminators plus newlines - OCR output is often a bare
+        // list with no punctuation at all, and one un-splittable blob would yield one question.
+        // A '.' only counts when it is NOT inside a decimal, or "yields 4.5 tonnes" would be torn
+        // into two fragments and the yield figure - the most testable fact in the line - lost.
+        const sentences = String(text || '').split(/(?:[!?।;|]|\n|\.(?!\d))+/)
+            .map(s => s.replace(/\s+/g, ' ').trim())
+            .filter(s => s.length >= 30 && s.length <= 300 && clozeWords(s).length >= 6);
+        if(!sentences.length) return [];
+
+        // Document-wide vocabulary with frequencies, so distractors are terms the material
+        // actually discusses.
+        const freq = new Map();
+        sentences.forEach(s => clozeWords(s).forEach(w => {
+            if(isClozeCandidate(w)) freq.set(w, (freq.get(w) || 0) + 1);
+        }));
+        const vocab = [...freq.keys()];
+        // Under four usable terms in the entire document means every item would reuse the same
+        // distractors. Refuse rather than ship filler - the caller reports it honestly.
+        if(vocab.length < 4) return [];
+        const numeric = vocab.filter(w => /^\d/.test(w));
+        const wordy = vocab.filter(w => !/^\d/.test(w));
+
+        const out = [];
+        const used = new Set();
+        for(let i = 0; i < sentences.length && out.length < limit; i++){
+            const s = sentences[i];
+            const cand = clozeWords(s).filter(isClozeCandidate).filter(w => !used.has(w.toLowerCase()));
+            if(!cand.length) continue;
+            // Highest-scoring term wins: numbers first, then variety codes and proper nouns, then
+            // rarer/longer ordinary words. Blanking "crop" out of an agronomy note tests nothing;
+            // blanking "4.5" or "Chaite-2" tests whether the line was actually read.
+            cand.sort((a, b) => clozeScore(b, s, freq) - clozeScore(a, s, freq));
+            const answer = cand[0];
+            // Same kind as the answer (number vs word), and never a term already visible in the
+            // sentence - that would be a giveaway.
+            const pool = (/^\d/.test(answer) ? numeric : wordy).filter(w =>
+                w.toLowerCase() !== answer.toLowerCase() &&
+                s.toLowerCase().indexOf(w.toLowerCase()) === -1);
+            const distract = [];
+            // Deterministic stride rather than Math.random(): re-scanning the same notes should
+            // produce the same paper, and a stride spreads picks across the frequency range.
+            for(let k = 0; k < pool.length && distract.length < 3; k++){
+                const w = pool[(k * 7 + i * 3) % pool.length];
+                if(w && distract.indexOf(w) === -1) distract.push(w);
             }
-            let reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    let data = new Uint8Array(e.target.result);
-                    const pdf = await pdfjsLib.getDocument({ data }).promise;
-                    const pagesText = [];
-                    for (let i = 1; i <= pdf.numPages; i++) {
-                        status.textContent = `Extracting PDF text... (${i}/${pdf.numPages})`;
-                        const page = await pdf.getPage(i);
-                        const tc = await page.getTextContent();
-                        pagesText.push(tc.items.map(it => it.str).join(' '));
-                        // Yield occasionally to keep UI responsive on large PDFs
-                        if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
-                    }
-                    txt.value = pagesText.join('\n');
-                    status.textContent = '✅ PDF Extracted!';
-                    document.getElementById('generate-simple-btn').classList.remove('hidden');
-                    toggleAIButtonVisibility();
-                } catch(err) {
-                    status.textContent = '⚠️ PDF read error!';
-                }
-            };
-            reader.readAsArrayBuffer(file);
-        } else if(name.indexOf('.png') > 0 || name.indexOf('.jpg') > 0 || name.indexOf('.jpeg') > 0) {
-       try {
-           status.textContent = 'Loading OCR engine...';
-           await LazyLibs.ensureTesseract();
-       } catch(e) {
-           if (e.message === "offline") {
-               status.textContent = '⚠️ अफलाइन! पहिलो पटक स्क्यान गर्न इन्टरनेट चाहिन्छ।';
-               showToast('📡 तपाईं अफलाइन हुनुहुन्छ! पहिलो पटक फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ। कृपया नोट पेस्ट गर्ने फिचर प्रयोग गर्नुहोस्।');
-           } else {
-               status.textContent = '⚠️ OCR engine load failed (offline?)';
-           }
-           return;
-       }
-            status.textContent = 'Sharpening handwriting image...';
-            preprocessImageForOCR(file).then(processedFile => {
-                status.textContent = 'Running OCR scanning...';
-                Tesseract.recognize(processedFile, 'nep+eng', { logger: m => status.textContent = 'OCR: ' + Math.round(m.progress * 100) + '%' })
-                  .then(r => {
-                      txt.value = r.data.text;
-                      status.textContent = '✅ OCR Finished!';
-                      document.getElementById('generate-simple-btn').classList.remove('hidden');
-                      toggleAIButtonVisibility();
-                  }).catch(ocrErr => {
-                      console.warn('[OCR] Recognition error:', ocrErr);
-                      if (!navigator.onLine) {
-                          status.textContent = '⚠️ अफलाइन! फोटो स्क्यानका लागि इन्टरनेट चाहिन्छ।';
-                          showToast('📡 अफलाइन हुनुहुन्छ! फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ।');
-                      } else {
-                          status.textContent = '⚠️ OCR process failed!';
-                      }
-                  });
-            }).catch(err => {
-                console.warn('[OCR Preprocessing] Preprocessor failed, trying original:', err);
-                status.textContent = 'Running OCR scanning...';
-                Tesseract.recognize(file, 'nep+eng', { logger: m => status.textContent = 'OCR: ' + Math.round(m.progress * 100) + '%' })
-                  .then(r => {
-                      txt.value = r.data.text;
-                      status.textContent = '✅ OCR Finished!';
-                      document.getElementById('generate-simple-btn').classList.remove('hidden');
-                      toggleAIButtonVisibility();
-                  }).catch(ocrErr => {
-                      console.warn('[OCR Fallback] Recognition error:', ocrErr);
-                      if (!navigator.onLine) {
-                          status.textContent = '⚠️ अफलाइन! फोटो स्क्यानका लागि इन्टरनेट चाहिन्छ।';
-                          showToast('📡 अफलाइन हुनुहुन्छ! फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ।');
-                      } else {
-                          status.textContent = '⚠️ OCR process failed!';
-                      }
-                  });
+            if(distract.length < 3 && /^\d/.test(answer)){
+                numericDistractors(answer).forEach(d => {
+                    if(distract.length < 3 && distract.indexOf(d) === -1) distract.push(d);
+                });
+            }
+            if(distract.length < 3) continue;   // cannot assemble a fair 4-option item
+            const blanked = s.replace(new RegExp('(^|[^A-Za-zऀ-ॿ0-9])' + escapeRegExpLite(answer) +
+                                                 '(?![A-Za-zऀ-ॿ0-9])'), '$1______');
+            if(blanked === s) continue;         // replacement did not take; skip instead of lying
+            const opts = [answer].concat(distract);
+            const ansIdx = (i + 1) % 4;         // spread the answer letter instead of always A
+            opts[0] = opts[ansIdx]; opts[ansIdx] = answer;
+            used.add(answer.toLowerCase());
+            out.push({
+                id: Date.now() + out.length,
+                q: 'Fill in the blank: ' + blanked,
+                opts: opts,
+                ans: ansIdx,
+                expl: 'Source line: ' + s,
+                sub: subject || 'General',
+                topic: 'Scanned notes',
+                difficulty: 'Medium',
+                marks: 1,
+                // A machine-made question is a starting point, not exam material.
+                // getAllQuestions() filters status:'draft', so these cannot reach a real quiz
+                // until a human reviews and publishes them in the Manage tab.
+                status: 'draft'
             });
+        }
+        return out;
+    }
+
+    function processScan(){
+        const ta = document.getElementById('scan-input');
+        const text = ta ? (ta.value || '').trim() : '';
+        if(!text) { showToast('Please insert text to scan!'); return; }
+        const want = getSelectCount('scan-count', 5);
+
+        // Structured notes win: if what was pasted already IS a question paper, parsing it keeps
+        // the real answers instead of inventing new ones.
+        let parsed = [];
+        try { parsed = parseTXTQuestions(text) || []; } catch(e){ parsed = []; }
+        const structured = parsed.length > 0;
+        if(structured){
+            if(parsed.length > want) parsed = parsed.slice(0, want);
         } else {
-            status.textContent = 'Unsupported format!';
+            parsed = buildClozeQuestions(text, want, 'General');
+        }
+        if(!parsed.length){
+            showToast('⚠️ Could not build questions from this text. Paste a few full sentences, or use "Q: … A) … Answer: b" format.', 6000);
+            return;
+        }
+        state.tempGeneratedQuestions = parsed.map(p => normalizeQuestion(p));
+        showEditMCQPage(state.tempGeneratedQuestions);
+        navigate('page-edit-mcq');
+        showToast(structured
+            ? `📋 Parsed ${parsed.length} structured questions — review and save.`
+            : `📝 Built ${parsed.length} fill-in-the-blank drafts — check each one before saving.`, 5000);
+    }
+
+    // ==================== FILE / IMAGE / PDF EXTRACTION ====================
+    // Accepts a FileList so the camera input can feed the same pipeline. The picker is
+    // `multiple` now: a two-page handout used to need two separate scans, and the second one
+    // silently replaced the first one's text.
+    async function processFile(fileList){
+        const input = document.getElementById('file-input');
+        const files = (fileList && fileList.length) ? Array.from(fileList)
+                                                    : (input ? Array.from(input.files || []) : []);
+        if(!files.length) { showToast('Select a .txt, image or .pdf file first!'); return; }
+        if(ocrBusy) { showToast('⏳ A scan is already running — cancel it first.'); return; }
+
+        const txt = document.getElementById('file-extracted-text');
+        const pdfBtn = document.getElementById('pdf-ocr-btn');
+        beginOcrRun();
+        hideGenerateButtons();
+        if(pdfBtn) pdfBtn.classList.add('hidden');
+        pdfOcrDoc = null;
+
+        const parts = [], failed = [];
+        try {
+            for(let i = 0; i < files.length; i++){
+                if(ocrCancelled) break;
+                const file = files[i];
+                const tag = files.length > 1 ? ` (file ${i+1}/${files.length})` : '';
+                try {
+                    const got = await extractFromOneFile(file, tag);
+                    if(got && got.trim()){
+                        parts.push(files.length > 1 ? `----- ${file.name} -----\n${got.trim()}` : got.trim());
+                    } else {
+                        failed.push(file.name + ' (no text found)');
+                    }
+                } catch(e){
+                    if(ocrCancelled) break;
+                    failed.push(file.name + ' — ' + ((e && e.message) || 'failed'));
+                }
+            }
+        } finally {
+            endOcrRun();
+        }
+
+        if(txt) txt.value = parts.join('\n\n');
+        updateExtractedTextCount();
+
+        if(ocrCancelled){
+            setFileStatus('✖ Scan cancelled' + (parts.length ? ' — kept what was already read.' : '.'));
+            if(!parts.length) hideGenerateButtons();
+            return;
+        }
+        if(!parts.length){
+            // An image-only ("scanned") PDF yields zero text, but this used to report
+            // '✅ PDF Extracted!' and reveal the generate buttons - so the user pressed Generate
+            // on an empty string and got a meaningless error. Name the problem, offer the fix.
+            if(pdfOcrDoc){
+                setFileStatus('⚠️ This PDF has no selectable text — it is a scan. Run OCR on the pages.');
+                if(pdfBtn) pdfBtn.classList.remove('hidden');
+                showToast('📸 Scanned PDF detected — press "Run OCR on the PDF pages".', 6000);
+            } else {
+                setFileStatus('⚠️ No text extracted' + (failed.length ? ': ' + failed[0] : '.'));
+            }
+            hideGenerateButtons();
+            return;
+        }
+
+        revealGenerateButtons();
+        let msg = files.length > 1
+            ? `✅ Extracted ${parts.length} of ${files.length} files.`
+            : '✅ Extracted successfully.';
+        if(failed.length) msg += ' Skipped: ' + failed.join('; ');
+        // A text layer that exists but is tiny is the other half of the scanned-PDF case: many
+        // scans carry a few stray characters, which is not enough to build anything from.
+        if(pdfOcrDoc && (txt ? txt.value : '').trim().length < 200){
+            if(pdfBtn) pdfBtn.classList.remove('hidden');
+            msg += ' Text layer looks thin — OCR the pages for a better result.';
+        }
+        setFileStatus(msg);
+    }
+
+    async function extractFromOneFile(file, tag){
+        const name = (file.name || '').toLowerCase();
+        if(name.endsWith('.txt') || file.type === 'text/plain'){
+            setFileStatus('Reading text file' + tag + '...');
+            return await readFileAsText(file);
+        }
+        if(name.endsWith('.pdf') || file.type === 'application/pdf'){
+            return await extractPdfText(file, tag);
+        }
+        if(/\.(png|jpe?g|webp|heic|heif|bmp|gif)$/.test(name) || /^image\//.test(file.type || '')){
+            return await ocrImage(file, tag);
+        }
+        throw new Error('unsupported format');
+    }
+
+    function readFileAsText(file){
+        return new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = e => resolve(String(e.target.result || ''));
+            r.onerror = () => reject(new Error('could not be read'));
+            r.readAsText(file);
+        });
+    }
+
+    function readFileAsArrayBuffer(file){
+        return new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = e => resolve(e.target.result);
+            r.onerror = () => reject(new Error('could not be read'));
+            r.readAsArrayBuffer(file);
+        });
+    }
+
+    async function extractPdfText(file, tag){
+        setFileStatus('Loading PDF engine' + tag + '...');
+        try { await LazyLibs.ensurePdfjs(); }
+        catch(e){
+            throw new Error(navigator.onLine ? 'PDF engine failed to load'
+                                             : 'offline — the PDF engine needs internet once');
+        }
+        const buf = await readFileAsArrayBuffer(file);
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+        // Held for ocrPdfPages(): the Uint8Array handed to getDocument() is transferred away, so
+        // re-reading would mean a second full parse. With several PDFs selected this keeps the
+        // last one, which is the one the page-OCR offer is about.
+        pdfOcrDoc = pdf;
+        const pagesText = [];
+        for(let i = 1; i <= pdf.numPages; i++){
+            if(ocrCancelled) break;
+            setFileStatus(`Extracting PDF text${tag}... (${i}/${pdf.numPages})`);
+            const page = await pdf.getPage(i);
+            const tc = await page.getTextContent();
+            pagesText.push(tc.items.map(it => it.str).join(' '));
+            if(i % 2 === 0) await new Promise(r => setTimeout(r, 0));   // keep the UI alive
+        }
+        return pagesText.join('\n');
+    }
+
+    // ==================== OCR ENGINE, PROGRESS AND CANCEL ====================
+    // tesseract.js progress arrives with a `status` string. Everything before 'recognizing text'
+    // is the engine and language data DOWNLOADING - roughly 15 MB on a first scan - and it was
+    // all reported as a single "OCR: 37%", so the percentage climbed twice and users assumed the
+    // scan had restarted or hung.
+    function ocrProgressLabel(m){
+        const st = String((m && m.status) || '');
+        const pct = Math.round(((m && m.progress) || 0) * 100);
+        if(/recogniz/i.test(st))            return `reading text ${pct}%`;
+        if(/language|traineddata/i.test(st)) return `downloading Nepali+English data ${pct}%`;
+        if(/core|wasm/i.test(st))            return `downloading OCR engine ${pct}%`;
+        if(/initializ|loading/i.test(st))    return `preparing engine ${pct}%`;
+        return st ? `${st} ${pct}%` : `working ${pct}%`;
+    }
+
+    async function getOcrWorker(){
+        await LazyLibs.ensureTesseract();
+        if(ocrWorker && ocrWorkerLangs === 'nep+eng') return ocrWorker;
+        setFileStatus('Preparing OCR engine...');
+        // createWorker() resolves an already-loaded, already-initialised worker and - unlike
+        // Tesseract.recognize() - hands back the object terminate() needs.
+        ocrWorker = await Tesseract.createWorker('nep+eng', 1, {
+            logger: m => { if(ocrProgressSink) ocrProgressSink(m); }
+        });
+        ocrWorkerLangs = 'nep+eng';
+        return ocrWorker;
+    }
+
+    async function ocrRecognize(image, label){
+        const worker = await getOcrWorker();
+        ocrProgressSink = m => setFileStatus(label + ocrProgressLabel(m));
+        try {
+            // Raced against the cancel signal, because a terminated worker's recognize() promise
+            // is left pending for good - see beginOcrRun(). Promise.race drops the loser, so the
+            // abandoned recognition costs nothing once the worker is gone.
+            const sig = ocrCancelSignal;
+            const r = sig ? await Promise.race([worker.recognize(image), sig.promise])
+                          : await worker.recognize(image);
+            return (r && r.data && r.data.text) || '';
+        } finally {
+            ocrProgressSink = null;
+        }
+    }
+
+    async function ocrImage(file, tag){
+        try { await LazyLibs.ensureTesseract(); }
+        catch(e){
+            if(e && e.message === 'offline'){
+                showToast('📡 तपाईं अफलाइन हुनुहुन्छ! पहिलो पटक फोटो स्क्यान गर्न इन्टरनेट चाहिन्छ।', 6000);
+                throw new Error('offline — OCR needs internet once');
+            }
+            throw new Error('OCR engine failed to load');
+        }
+        showOcrCancel(true);
+        setFileStatus('Sharpening image' + tag + '...');
+        let src = file;
+        try { src = await preprocessImageForOCR(file); }
+        catch(e){ console.warn('[OCR] Preprocessing failed, using the original:', e); src = file; }
+        try {
+            return await ocrRecognize(src, 'OCR' + tag + ': ');
+        } catch(e){
+            if(ocrCancelled) throw new Error('cancelled');
+            console.warn('[OCR] Recognition error:', e);
+            throw new Error(navigator.onLine ? 'OCR failed on this image'
+                                            : 'offline — OCR needs internet once');
+        }
+    }
+
+    // Real cancellation: terminate() kills the worker so the recognition stops burning CPU, and
+    // the cancel signal unblocks whoever was awaiting it (terminate() alone leaves that promise
+    // pending forever).
+    function cancelOcr(){
+        ocrCancelled = true;
+        showOcrCancel(false);
+        setFileStatus('✖ Cancelling...');
+        if(ocrCancelSignal) ocrCancelSignal.reject(new Error('cancelled'));
+        if(ocrWorker){
+            const w = ocrWorker;
+            ocrWorker = null; ocrWorkerLangs = '';
+            Promise.resolve().then(() => w.terminate()).catch(() => {});
+        }
+        showToast('✖ Scan cancelled.');
+    }
+
+    // The main picker cannot carry capture="environment" - that would force the camera even when
+    // the user wants to pick a PDF - so the camera gets its own hidden input.
+    function openCameraScan(){
+        const cam = document.getElementById('camera-input');
+        if(!cam){ showToast('Camera input is not available on this device.'); return; }
+        cam.value = '';
+        cam.onchange = () => { if(cam.files && cam.files.length) processFile(cam.files); };
+        cam.click();
+    }
+
+    // A scanned PDF has no text layer, so pdf.js returns nothing at all. Rasterize each page and
+    // push the bitmap through the same OCR path an uploaded photo takes.
+    async function ocrPdfPages(){
+        if(!pdfOcrDoc){ showToast('Load a PDF first.'); return; }
+        if(ocrBusy){ showToast('⏳ A scan is already running.'); return; }
+        const txt = document.getElementById('file-extracted-text');
+        const total = Math.min(pdfOcrDoc.numPages, OCR_PDF_PAGE_CAP);
+        beginOcrRun();
+        showOcrCancel(true);
+        hideGenerateButtons();
+        const out = [];
+        try {
+            for(let i = 1; i <= total; i++){
+                if(ocrCancelled) break;
+                setFileStatus(`Rendering page ${i}/${total}...`);
+                const page = await pdfOcrDoc.getPage(i);
+                // 2x is the sweet spot: 1x often falls below the x-height Tesseract can resolve
+                // on a 10pt scan, and 3x quadruples the work for no measurable accuracy gain.
+                const viewport = page.getViewport({ scale: 2 });
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(viewport.width);
+                canvas.height = Math.round(viewport.height);
+                await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+                let pageText = '';
+                try {
+                    pageText = await ocrRecognize(canvas, `Page ${i}/${total} — `);
+                } catch(e){
+                    if(ocrCancelled) break;
+                    console.warn('[PDF OCR] page ' + i + ' failed:', e);
+                }
+                if(pageText && pageText.trim()) out.push(`----- Page ${i} -----\n` + pageText.trim());
+                canvas.width = canvas.height = 0;    // release the bitmap before the next page
+                await new Promise(r => setTimeout(r, 0));
+            }
+        } catch(e){
+            console.warn('[PDF OCR] failed:', e);
+            setFileStatus('⚠️ PDF OCR failed: ' + ((e && e.message) || 'unknown error'));
+        } finally {
+            endOcrRun();
+        }
+        if(out.length && txt){
+            txt.value = out.join('\n\n');
+            updateExtractedTextCount();
+            revealGenerateButtons();
+            const capped = pdfOcrDoc.numPages > OCR_PDF_PAGE_CAP
+                ? ` (first ${OCR_PDF_PAGE_CAP} of ${pdfOcrDoc.numPages} pages)` : '';
+            setFileStatus(`✅ OCR read ${out.length} page${out.length > 1 ? 's' : ''}${capped}.` +
+                          (ocrCancelled ? ' Cancelled early.' : ''));
+        } else if(ocrCancelled){
+            setFileStatus('✖ Cancelled.');
+        } else {
+            setFileStatus('⚠️ OCR found no readable text in this PDF.');
         }
     }
 
     function generateFromFileText(){
-        let text = document.getElementById('file-extracted-text').value.trim();
+        const el = document.getElementById('file-extracted-text');
+        const text = el ? (el.value || '').trim() : '';
         if(!text) { showToast('Extracted text is empty!'); return; }
-        
-        let parsed = parseTXTQuestions(text);
-        if (parsed.length === 0) {
-            showToast('⚠️ No structured MCQs detected! Generating questions from raw sentences...');
-            let sentences = text.split(/[.!?\n]+/).filter(s=>s.trim().length > 15);
-            sentences.slice(0, 5).forEach((sentence, i)=>{
-                let wrd = sentence.trim().split(' ')[0] || 'Concept';
-                parsed.push({
-                    id: Date.now() + i,
-                    q: `Who or what relates to "${wrd}" in: "${sentence.trim().substring(0, 55)}..."?`,
-                    opts: [wrd, "Alternate statement B", "Alternate statement C", "No statement valid"],
-                    ans: 0,
-                    expl: `Based on text extract: ${sentence.trim()}`,
-                    sub: "General"
-                });
-            });
+        const want = getSelectCount('ai-count', 5);
+
+        let parsed = [];
+        try { parsed = parseTXTQuestions(text) || []; } catch(e){ parsed = []; }
+        if(parsed.length){
+            if(parsed.length > want) parsed = parsed.slice(0, want);
+        } else {
+            // Was: five copies of 'Who or what relates to "<firstWord>" in: "<55 chars>..."?' with
+            // two literal placeholder options and ans always 0. Now a real cloze build, or an
+            // honest refusal.
+            parsed = buildClozeQuestions(text, want, 'General');
+            if(!parsed.length){
+                showToast('⚠️ No Q/A format found, and this text has too few re-usable terms to build questions from. Fix the extracted text, or use the AI generator.', 7000);
+                return;
+            }
+            showToast('ℹ️ No Q/A format detected — built fill-in-the-blank drafts from the text instead.', 4000);
         }
-        
+
         let normalized = parsed.map(raw => normalizeQuestion(raw));
         importPreviewQuestions = detectDuplicatesAndErrors(normalized);
         
@@ -7463,62 +7878,131 @@ if (state.isMock) {
     }
 
     // ==================== EDIT AND REVIEW GENERATED LIST ====================
+    // Rewritten for three defects that all silently destroyed data on the OCR/AI path:
+    //  1. only q.q was escaped - options went into value="..." raw, so an option containing a
+    //     quote was truncated at that quote. Verified: '3.5 t/ha & "up"' saved as '3.5 t/ha & '.
+    //     OCR output and Gemini output are full of inch marks and quoted terms.
+    //  2. four option inputs and an A-D answer select were hardcoded. A 5-option item (the TXT
+    //     parser happily produces them) lost option E, and ans:4 fell back to 0 - the question
+    //     saved with the WRONG answer, no message.
+    //  3. it rendered whatever it was handed with no indication of which items were unusable.
     function showEditMCQPage(questions){
-        let container = document.getElementById('edit-mcq-list'); container.innerHTML = '';
-        let listHtml = '';
-        questions.forEach((q, i) => {
-            listHtml += `
-                <div class="p-3 border rounded-xl space-y-2 text-xs bg-white dark:bg-slate-800" data-idx="${i}">
-                    <label class="font-bold">Question ${i+1}</label>
-                    <input class="w-full p-2 border rounded" value="${q.q.replace(/"/g, '&quot;')}" id="ed-q-${i}">
-                    <input class="w-full p-2 border rounded" value="${(q.opts[0]||'')}" id="ed-o1-${i}">
-                    <input class="w-full p-2 border rounded" value="${(q.opts[1]||'')}" id="ed-o2-${i}">
-                    <input class="w-full p-2 border rounded" value="${(q.opts[2]||'')}" id="ed-o3-${i}">
-                    <input class="w-full p-2 border rounded" value="${(q.opts[3]||'')}" id="ed-o4-${i}">
-                    <div class="flex gap-2">
-                        <select class="p-2 border rounded" id="ed-sub-${i}">
-                            ${getAllSubjects().map(s=>`<option value="${s}" ${s===q.sub?'selected':''}>${s}</option>`).join('')}
-                        </select>
-                        <select class="p-2 border rounded" id="ed-ans-${i}">
-                            <option value="0" ${q.ans===0?'selected':''}>A</option>
-                            <option value="1" ${q.ans===1?'selected':''}>B</option>
-                            <option value="2" ${q.ans===2?'selected':''}>C</option>
-                            <option value="3" ${q.ans===3?'selected':''}>D</option>
-                        </select>
-                        <button onclick="removeGeneratedQ(${i})" class="text-red-500 font-bold ml-auto px-2">Delete</button>
-                    </div>
+        let container = document.getElementById('edit-mcq-list'); if(!container) return;
+        if(!questions || !questions.length){
+            container.innerHTML = '<p class="text-xs text-center opacity-60">Nothing to review.</p>';
+            return;
+        }
+        container.innerHTML = questions.map((q, i) => {
+            const opts = Array.isArray(q.opts) ? q.opts : [];
+            // Never fewer than 4 boxes (room to fill a thin OCR result in) and never so few that
+            // an existing option has nowhere to render.
+            const shown = Math.max(4, Math.min(5, opts.length));
+            const ansIdx = parseInt(q.ans);
+            let optHtml = '';
+            for(let k = 0; k < shown; k++){
+                optHtml += `<div class="flex items-center gap-1.5">
+                    <span class="text-[10px] font-bold w-3 shrink-0">${String.fromCharCode(65+k)}</span>
+                    <input class="w-full p-2 border rounded" id="ed-o${k}-${i}" value="${escapeCreatorHtml(opts[k] || '')}" placeholder="Option ${String.fromCharCode(65+k)}">
+                </div>`;
+            }
+            let ansHtml = '';
+            for(let k = 0; k < shown; k++){
+                ansHtml += `<option value="${k}" ${ansIdx===k?'selected':''}>${String.fromCharCode(65+k)}</option>`;
+            }
+            return `<div class="p-3 border rounded-xl space-y-2 text-xs" style="background:var(--card);border-color:var(--border);" data-idx="${i}">
+                <label class="font-bold">Question ${i+1}</label>
+                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(q.q || '')}" id="ed-q-${i}" placeholder="Question text">
+                ${optHtml}
+                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(q.expl || '')}" id="ed-expl-${i}" placeholder="Explanation (optional)">
+                <div class="flex gap-2 items-center flex-wrap">
+                    <select class="p-2 border rounded" id="ed-sub-${i}">
+                        ${getAllSubjects().map(s=>`<option value="${escapeCreatorHtml(s)}" ${s===q.sub?'selected':''}>${escapeCreatorHtml(s)}</option>`).join('')}
+                    </select>
+                    <select class="p-2 border rounded" id="ed-ans-${i}">${ansHtml}</select>
+                    <select class="p-2 border rounded" id="ed-diff-${i}">
+                        ${['Easy','Medium','Hard'].map(d=>`<option value="${d}" ${d===(q.difficulty||'Medium')?'selected':''}>${d}</option>`).join('')}
+                    </select>
+                    <button onclick="removeGeneratedQ(${i})" class="text-red-500 font-bold ml-auto px-2">Delete</button>
                 </div>
-            `;
+                <p id="ed-err-${i}" class="text-[10px] text-rose-500"></p>
+            </div>`;
+        }).join('');
+        // Flag the unusable ones up front instead of letting the user discover it at save time.
+        questions.forEach((q, i) => {
+            const errs = validateImportQuestion(q);
+            const el = document.getElementById('ed-err-' + i);
+            if(el && errs.length) el.textContent = '⚠️ ' + errs.join(' ');
         });
-        container.innerHTML = listHtml;
     }
 
     function removeGeneratedQ(idx){
+        collectEditedMCQs();               // keep whatever the user has typed so far
         state.tempGeneratedQuestions.splice(idx, 1);
         showEditMCQPage(state.tempGeneratedQuestions);
     }
 
+    function collectEditedMCQs(){
+        (state.tempGeneratedQuestions || []).forEach((q, i) => {
+            const qText = document.getElementById('ed-q-'+i);
+            if(!qText) return;
+            q.q = qText.value;
+            const opts = [];
+            for(let k = 0; k < 5; k++){
+                const el = document.getElementById(`ed-o${k}-${i}`);
+                if(el) opts.push(el.value.trim());
+            }
+            // Trailing blanks dropped: a blank box left at the end must not become an option, or
+            // validateImportQuestion() rejects the whole item for an out-of-range answer index.
+            while(opts.length && !opts[opts.length-1]) opts.pop();
+            q.opts = opts;
+            const get = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+            q.sub = get('ed-sub-'+i) || q.sub;
+            q.expl = get('ed-expl-'+i) !== undefined ? get('ed-expl-'+i) : q.expl;
+            q.difficulty = get('ed-diff-'+i) || q.difficulty || 'Medium';
+            const a = parseInt(get('ed-ans-'+i));
+            if(!isNaN(a)) q.ans = a;
+        });
+    }
+
     function saveEditedMCQs(){
-        let list = state.tempGeneratedQuestions;
-        list.forEach((q, i)=>{
-            let qText = document.getElementById('ed-q-'+i);
-            if(qText){
-                q.q = qText.value;
-                q.opts = [
-                    document.getElementById('ed-o1-'+i).value,
-                    document.getElementById('ed-o2-'+i).value,
-                    document.getElementById('ed-o3-'+i).value,
-                    document.getElementById('ed-o4-'+i).value
-                ];
-                q.sub = document.getElementById('ed-sub-'+i).value;
-                q.ans = parseInt(document.getElementById('ed-ans-'+i).value);
+        collectEditedMCQs();
+        // This path used to concat straight into the bank: no validation, no duplicate check.
+        // Verified - the same question text went in twice, and a structurally broken item was
+        // silently stamped status:'revision' by saveData() with nothing said. Add and Batch were
+        // fixed to route through validateCreatorEntry(); OCR/AI was the one remaining door.
+        const accepted = [], rejected = [];
+        (state.tempGeneratedQuestions || []).forEach((q, i) => {
+            const val = validateCreatorEntry(q, { skipBatchScan: true });
+            const errEl = document.getElementById('ed-err-' + i);
+            if(val.valid){
+                accepted.push(q);
+                if(errEl) errEl.textContent = '';
+            } else {
+                rejected.push({ q: q, msg: `#${i+1}: ${val.error}` });
+                if(errEl) errEl.textContent = '⚠️ ' + val.error;
             }
         });
-        localData.customQuestions = localData.customQuestions.concat(list);
-        saveData();
-        showToast(`✅ Saved ${list.length} questions successfully!`);
-        state.tempGeneratedQuestions = [];
-        navigate('page-mcq-creator');
+
+        if(accepted.length){
+            localData.customQuestions = localData.customQuestions.concat(accepted);
+            saveData();
+        }
+        // Rejected items stay on the page so they can be repaired; dropping them would throw
+        // away a scan the user just waited on.
+        state.tempGeneratedQuestions = rejected.map(r => r.q);
+
+        if(rejected.length){
+            showEditMCQPage(state.tempGeneratedQuestions);
+            rejected.forEach((r, i) => {
+                const el = document.getElementById('ed-err-' + i);
+                if(el) el.textContent = '⚠️ ' + r.msg.replace(/^#\d+:\s*/, '');
+            });
+            showToast(`⚠️ Saved ${accepted.length}. ${rejected.length} need fixing — ${rejected[0].msg}`, 6000);
+            console.warn('[OCR Review] Not saved:\n' + rejected.map(r => r.msg).join('\n'));
+        } else {
+            showToast(`✅ Saved ${accepted.length} questions successfully!`);
+            navigate('page-mcq-creator');
+        }
     }
 
     // ==================== MANUAL MCQ CREATOR ====================
@@ -13824,7 +14308,29 @@ document.querySelectorAll('button').forEach(btn => {
         if (!val) return '';
         try { return atob(val); } catch(e) { return val; }
     }
-    function getGeminiModel() { return KrishiStorage.getItem('krishi_gemini_model') || 'gemini-1.5-flash'; }
+    // Google has SHUT DOWN gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp,
+    // gemini-2.0-flash and gemini-2.0-flash-lite. Those were the only IDs this app ever wrote,
+    // so every existing user has a dead model in storage and the AI generator answered with a
+    // 404 for all of them - the fix has to migrate the stored value, not just the default.
+    // Deliberately no *-latest alias: those get swapped underneath you on each Google release.
+    const GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
+    const GEMINI_DEAD_MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro',
+        'gemini-1.5-pro-latest', 'gemini-1.0-pro', 'gemini-pro', 'gemini-2.0-flash-exp',
+        'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+
+    function getGeminiModel() {
+        const stored = KrishiStorage.getItem('krishi_gemini_model');
+        if(!stored) return GEMINI_DEFAULT_MODEL;
+        if(GEMINI_DEAD_MODELS.indexOf(stored) !== -1){
+            console.warn('[Gemini] Stored model "' + stored + '" has been shut down by Google — migrating to ' + GEMINI_DEFAULT_MODEL);
+            KrishiStorage.setItem('krishi_gemini_model', GEMINI_DEFAULT_MODEL);
+            const sel = document.getElementById('gemini-model-select');
+            if(sel) sel.value = GEMINI_DEFAULT_MODEL;
+            return GEMINI_DEFAULT_MODEL;
+        }
+        return stored;
+    }
+
     function getGeminiTemp() { return parseFloat(KrishiStorage.getItem('krishi_gemini_temp')) || 0.7; }
 
     function toggleKeyVisibility() {
@@ -13859,7 +14365,17 @@ document.querySelectorAll('button').forEach(btn => {
         
         let modelSelect = document.getElementById('gemini-model-select');
         if (modelSelect) {
-            modelSelect.value = getGeminiModel();
+            const want = getGeminiModel();
+            // A stored ID that is no longer one of the listed options would leave the select
+            // blank and then saveGeminiSettings() would write "" - so surface it as its own
+            // option instead of losing the user's choice.
+            if(![...modelSelect.options].some(o => o.value === want)){
+                const opt = document.createElement('option');
+                opt.value = want;
+                opt.textContent = want + ' (saved earlier)';
+                modelSelect.appendChild(opt);
+            }
+            modelSelect.value = want;
         }
 
         let tempSelect = document.getElementById('gemini-temp-select');
@@ -13962,10 +14478,18 @@ document.querySelectorAll('button').forEach(btn => {
 
     function toggleAIButtonVisibility(){
         let key = getApiKey();
-        let btn = document.getElementById('generate-ai-btn'); 
-        if(!btn) return;
-        if(key) btn.classList.remove('hidden');
-        else btn.classList.add('hidden');
+        let btn = document.getElementById('generate-ai-btn');
+        if(btn){
+            if(key) btn.classList.remove('hidden');
+            else btn.classList.add('hidden');
+        }
+        // The scanner header badge was static text reading "AI Connected" - it said that with no
+        // API key stored, which is exactly the situation in which the AI generator cannot run.
+        const badge = document.getElementById('ocr-ai-badge');
+        if(badge){
+            badge.textContent = key ? 'AI Connected' : 'AI key not set';
+            badge.style.opacity = key ? '' : '0.6';
+        }
     }
 
     // ==================== INSERTS PANEL (ADMIN) ====================
@@ -16468,104 +16992,158 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
     }
 
     // ==================== FILE SYNC BACKUPS DUMMIES ====================
-    async function generateAIQuestions() {
-        let text = document.getElementById('file-extracted-text').value.trim();
-        if(!text) { showToast('Text extracted empty!'); return; }
-        let key = getApiKey(); if(!key){ showToast('Enter API key inside settings first!'); return; }
-        
-        let status = document.getElementById('ai-status'); status.classList.remove('hidden'); status.textContent = 'Generating...';
-        let prompt = `Analyze the provided text and generate 3 multiple-choice questions based on it. CRITICAL INSTRUCTION: You MUST generate the questions and options in the EXACT SAME LANGUAGE as the provided text (e.g., if the text is in Nepali, generate Nepali questions in Devanagari script). 
-Format strictly as a JSON array of objects. Each object must have:
-- "q": The question string.
-- "opts": An array of exactly 4 option strings.
-- "ans": The integer index (0 to 3) of the correct option.
-- "sub": A short string for the subject category.
-Do not wrap in markdown. ONLY return valid JSON array.
+    // ==================== AI (GEMINI) QUESTION GENERATION ====================
+    // Rewritten for four things the old call got wrong:
+    //  * "generate 3 questions" was hardcoded, so the count selector had no effect and a
+    //    20-page PDF still produced three questions.
+    //  * no responseMimeType, so the model was free to answer in prose or in a ```json fence -
+    //    hence the fence-stripping and bracket-hunting that followed. JSON mode removes the
+    //    guesswork instead of cleaning up after it.
+    //  * expl / topic / difficulty were never requested, so every AI question landed with an
+    //    empty explanation - the single most useful field for revision.
+    //  * the entire document went in one request. Long text blew the output limit and returned
+    //    a truncated array (or nothing), which surfaced as "malformed JSON".
+    const GEMINI_CHUNK_CHARS = 12000;
+
+    function splitTextForAI(text, chunkChars){
+        const t = String(text || '');
+        if(t.length <= chunkChars) return [t];
+        const out = [];
+        let i = 0;
+        while(i < t.length){
+            let end = Math.min(t.length, i + chunkChars);
+            if(end < t.length){
+                // Break on a sentence or paragraph boundary so a question is never built from
+                // half a sentence. Only look back over the last fifth of the chunk.
+                const win = t.slice(i, end);
+                const brk = Math.max(win.lastIndexOf('\n'), win.lastIndexOf('. '),
+                                     win.lastIndexOf('। '), win.lastIndexOf('? '));
+                if(brk > chunkChars * 0.8) end = i + brk + 1;
+            }
+            out.push(t.slice(i, end));
+            i = end;
+        }
+        return out.filter(s => s.trim().length > 40);
+    }
+
+    function geminiPrompt(text, count){
+        return `You are preparing multiple-choice questions for a Nepal Civil Service agriculture exam.
+Generate exactly ${count} multiple-choice questions from the text below.
+CRITICAL: write the questions, options and explanations in the SAME LANGUAGE as the text (if the text is Nepali, answer in Nepali Devanagari).
+Rules:
+- Every question must be answerable from the text alone. Do not invent facts.
+- Exactly 4 options. All four must be plausible; no "None of the above", no placeholder text.
+- "ans" is the 0-based index of the correct option.
+- "expl" must be one or two sentences saying WHY the answer is correct, grounded in the text.
+Return ONLY a JSON array. Each element:
+{"q": string, "opts": [string, string, string, string], "ans": 0-3, "sub": string, "topic": string, "difficulty": "Easy" | "Medium" | "Hard", "expl": string}
 
 Text:
 ${text}`;
-        
-        try {
-            const model = getGeminiModel();
-            const temp = getGeminiTemp();
-            let res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: temp } })
-            });
-            
-            if (!res.ok) {
-                if (res.status === 429) throw new Error('API Quota Exceeded (429). Please wait a moment before trying again.');
-                if (res.status === 400) throw new Error('Invalid API Key (400). Please check your Gemini settings.');
-            }
+    }
 
-            let d = await res.json();
-            if (d.error) {
-                throw new Error(d.error.message || 'Gemini API call failed.');
-            }
-            if (!d.candidates || d.candidates.length === 0 || !d.candidates[0].content || !d.candidates[0].content.parts || d.candidates[0].content.parts.length === 0) {
-                throw new Error('API returned an empty response. This can happen if the prompt was flagged by safety filters.');
-            }
-            
-            let rawText = d.candidates[0].content.parts[0].text;
-            if (!rawText || rawText.trim().length === 0) {
-                throw new Error('Empty text content received from Gemini.');
-            }
-            
-            let cleanJSON = rawText.trim();
-            // Remove markdown code fences if present (e.g. ```json ... ``` or ``` ... ```)
-            if (cleanJSON.startsWith('```')) {
-                cleanJSON = cleanJSON.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '');
-            }
-            cleanJSON = cleanJSON.trim();
-            
-            // Find valid JSON array boundaries safely
-            let startIdx = cleanJSON.indexOf('[');
-            let endIdx = cleanJSON.lastIndexOf(']');
-            if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
-                throw new Error('Could not locate a valid JSON questions array in the response structure.');
-            }
-            
-            let questionsJsonStr = cleanJSON.substring(startIdx, endIdx + 1);
-            let questions;
-            try {
-                questions = JSON.parse(questionsJsonStr);
-            } catch(e) {
-                console.error('[PWA AI] Raw JSON parsing failed:', e);
-                throw new Error('The generated text contained malformed JSON elements: ' + e.message);
-            }
-            
-            if (!Array.isArray(questions)) {
-                throw new Error('Expected JSON array of questions, but received a different data type.');
-            }
-            
-            if (questions.length === 0) {
-                throw new Error('API generated 0 questions. Please try again with a different text section.');
-            }
-            
-            // Validate and normalize generated questions structure
-            questions.forEach((q, i) => {
-                q.id = Date.now() + i;
-                q.q = q.q || q.question || 'Untitled Question';
-                q.opts = q.opts || q.options || ['Option A', 'Option B', 'Option C', 'Option D'];
-                if (!Array.isArray(q.opts) || q.opts.length < 2) {
-                    q.opts = ['Option A', 'Option B', 'Option C', 'Option D'];
+    async function callGemini(model, key, prompt, temp){
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    temperature: temp,
+                    // JSON mode. The model can no longer wrap the array in prose or a code
+                    // fence, which is what all the string surgery below used to be for.
+                    responseMimeType: 'application/json',
+                    maxOutputTokens: 8192
                 }
-                q.ans = (q.ans !== undefined) ? parseInt(q.ans) : ((q.correctAnswerIndex !== undefined) ? parseInt(q.correctAnswerIndex) : 0);
-                if (isNaN(q.ans) || q.ans < 0 || q.ans >= q.opts.length) {
-                    q.ans = 0;
-                }
-                q.sub = q.sub || q.category || 'General';
-            });
-            
-            state.tempGeneratedQuestions = questions;
-            showEditMCQPage(questions);
-            navigate('page-edit-mcq');
-            status.textContent = '✅ Conversion successful!';
-        } catch(err){
-            console.error('[PWA AI] Question generation failed:', err);
-            status.textContent = `⚠️ Failed: ${err.message}`;
-            showToast(`⚠️ AI Generation Error: ${err.message}`, 5000);
+            })
+        });
+        if(!res.ok){
+            let detail = '';
+            try { const j = await res.json(); detail = (j && j.error && j.error.message) || ''; } catch(e){}
+            if(res.status === 429) throw new Error('API quota exceeded (429). Wait a moment and try again.');
+            if(res.status === 400) throw new Error('Rejected (400). ' + (detail || 'Check the API key in Settings.'));
+            if(res.status === 404) throw new Error(`Model "${model}" is not available on this key (404). Pick another model in Settings.`);
+            throw new Error(`Gemini error ${res.status}. ${detail}`);
         }
+        const d = await res.json();
+        if(d.error) throw new Error(d.error.message || 'Gemini API call failed.');
+        const cand = d.candidates && d.candidates[0];
+        if(!cand || !cand.content || !cand.content.parts || !cand.content.parts.length){
+            const reason = (cand && cand.finishReason) || (d.promptFeedback && d.promptFeedback.blockReason);
+            throw new Error('Empty response' + (reason ? ' (' + reason + ')' : '') + ' — the text may have been blocked by safety filters.');
+        }
+        let raw = cand.content.parts.map(p => p.text || '').join('').trim();
+        if(!raw) throw new Error('Empty text content received from Gemini.');
+        // Belt and braces: JSON mode should make this unnecessary, but a fence here would cost
+        // the user the whole request.
+        if(raw.startsWith('```')) raw = raw.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '').trim();
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch(e){
+            const s = raw.indexOf('['), t = raw.lastIndexOf(']');
+            if(s === -1 || t < s) throw new Error('Could not read a JSON array from the response: ' + e.message);
+            parsed = JSON.parse(raw.slice(s, t + 1));
+        }
+        if(parsed && !Array.isArray(parsed) && Array.isArray(parsed.questions)) parsed = parsed.questions;
+        if(!Array.isArray(parsed)) throw new Error('Expected a JSON array of questions.');
+        return parsed;
+    }
+
+    async function generateAIQuestions() {
+        const el = document.getElementById('file-extracted-text');
+        const text = el ? (el.value || '').trim() : '';
+        if(!text) { showToast('Extracted text is empty!'); return; }
+        const key = getApiKey();
+        if(!key){ showToast('Enter your Gemini API key in Settings first!'); return; }
+
+        const status = document.getElementById('ai-status');
+        if(status) status.classList.remove('hidden');
+        const want = getSelectCount('ai-count', 5);
+        const model = getGeminiModel();
+        const temp = getGeminiTemp();
+        const chunks = splitTextForAI(text, GEMINI_CHUNK_CHARS);
+        // Spread the requested total over the chunks rather than asking each chunk for the full
+        // count - otherwise 3 chunks x 20 questions returns 60.
+        const perChunk = Math.max(1, Math.ceil(want / chunks.length));
+
+        const collected = [];
+        const errors = [];
+        for(let i = 0; i < chunks.length && collected.length < want; i++){
+            if(status){
+                status.textContent = chunks.length > 1
+                    ? `Generating... (part ${i+1} of ${chunks.length}, ${collected.length}/${want} so far)`
+                    : 'Generating...';
+            }
+            try {
+                const got = await callGemini(model, key, geminiPrompt(chunks[i], perChunk), temp);
+                got.forEach(q => { if(collected.length < want) collected.push(q); });
+            } catch(err){
+                console.error('[PWA AI] Chunk ' + (i+1) + ' failed:', err);
+                errors.push(err.message || String(err));
+                // A 429 will hit every remaining chunk too; stop and keep what we have.
+                if(/429|quota/i.test(err.message || '')) break;
+            }
+        }
+
+        if(!collected.length){
+            const msg = errors[0] || 'API generated 0 questions. Try a different text section.';
+            if(status) status.textContent = '⚠️ Failed: ' + msg;
+            showToast('⚠️ AI generation error: ' + msg, 6000);
+            return;
+        }
+
+        // normalizeQuestion() handles every key spelling the model might use (options/choices,
+        // answer/correctIndex, Devanagari उत्तर, …) and clamps the answer index, so the hand-rolled
+        // field patching that used to live here - which quietly replaced a bad answer with 0 - is
+        // no longer needed.
+        state.tempGeneratedQuestions = collected.map(q => normalizeQuestion(q));
+        showEditMCQPage(state.tempGeneratedQuestions);
+        navigate('page-edit-mcq');
+        let done = `✅ Generated ${collected.length} question${collected.length > 1 ? 's' : ''}.`;
+        if(errors.length) done += ` ${errors.length} part(s) failed: ${errors[0]}`;
+        if(status) status.textContent = done;
+        showToast(done, errors.length ? 6000 : 3500);
     }
 
     function collectAllAppData() {
@@ -18739,12 +19317,17 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
     }
 
     // पुरानो स्क्यान प्रक्रिया सुरु हुँदा स्वतः लेजर बीम अन गर्ने हुक
+    // Both wrappers forward arguments and return values. They used to call the original with no
+    // arguments and discard the result, which silently broke two things once processFile became
+    // multi-file and async: openCameraScan() passes a FileList (it was dropped, so the picker's
+    // empty file list was used instead and the scan aborted with "Select a file first"), and
+    // `await processFile(...)` resolved before any extraction had happened.
     var origProcessFile = window.processFile;
     window.processFile = function() {
         var box = document.querySelector('#page-file-scan .border');
         if (box) triggerLaserScanEffect(box);
         if (typeof origProcessFile === 'function') {
-            origProcessFile();
+            return origProcessFile.apply(this, arguments);
         }
     };
 
@@ -18753,7 +19336,7 @@ var answered = (typeof state !== 'undefined' && state) ? state.answered : false;
         var box = document.getElementById('page-smart-scan');
         if (box) triggerLaserScanEffect(box);
         if (typeof origProcessScan === 'function') {
-            origProcessScan();
+            return origProcessScan.apply(this, arguments);
         }
     };
 
@@ -18962,65 +19545,93 @@ document.addEventListener('click', function(e) {
 });
 
 // ==================== DYNAMIC FIREBASE CONFIG & OCR PREPROCESS HELPERS ====================
+// Rewritten for two defects in the old preprocessor:
+//  * ONE global threshold (avgLuma * 0.9) for the whole photo. A phone photo of a page is never
+//    evenly lit - there is a shadow down one edge and glare in the middle - so a single cut
+//    either dissolved the shadowed text into solid black or bleached the bright half to white,
+//    and OCR returned garbage for exactly the photos people actually take.
+//  * no downscale. A current phone shoots 12 MP; every one of those pixels was binarized in JS
+//    and then handed to Tesseract, which works at about 300 dpi internally anyway. Minutes of
+//    work for no accuracy gain.
+// Now: downscale the long edge to OCR_MAX_EDGE, then Bradley-Roth adaptive thresholding over an
+// integral image, so each pixel is judged against the mean of its OWN neighbourhood and uneven
+// lighting stops mattering.
+const OCR_MAX_EDGE = 2000;
+
 window.preprocessImageForOCR = function(file) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
         const img = new Image();
-        img.src = URL.createObjectURL(file);
         img.onload = () => {
             try {
+                const scale = Math.min(1, OCR_MAX_EDGE / Math.max(img.width, img.height));
+                const w = Math.max(1, Math.round(img.width * scale));
+                const h = Math.max(1, Math.round(img.height * scale));
                 const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-                
-                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                canvas.width = w; canvas.height = h;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, w, h);
+
+                const imgData = ctx.getImageData(0, 0, w, h);
                 const data = imgData.data;
-                let totalLuma = 0;
-                const len = data.length;
-                for (let i = 0; i < len; i += 4) {
-                    const r = data[i];
-                    const g = data[i + 1];
-                    const b = data[i + 2];
-                    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                    totalLuma += gray;
+                const n = w * h;
+                const gray = new Uint8Array(n);
+                for (let i = 0, p = 0; i < n; i++, p += 4) {
+                    gray[i] = (0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]) | 0;
                 }
-                const avgLuma = totalLuma / (len / 4);
-                const threshold = Math.max(80, Math.min(180, avgLuma * 0.9));
-                
-                for (let i = 0; i < len; i += 4) {
-                    const r = data[i];
-                    const g = data[i + 1];
-                    const b = data[i + 2];
-                    let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                    if (gray > threshold) {
-                        gray = 255;
-                    } else {
-                        gray = 0;
+
+                // Summed-area table with one row/column of zero padding, so every window lookup
+                // is four unconditional reads and no bounds branching. Int32 is exact here:
+                // the largest possible sum is 2000*2000*255, well inside 2^31.
+                const stride = w + 1;
+                const integral = new Int32Array(stride * (h + 1));
+                for (let y = 0; y < h; y++) {
+                    let rowSum = 0;
+                    for (let x = 0; x < w; x++) {
+                        rowSum += gray[y * w + x];
+                        integral[(y + 1) * stride + (x + 1)] = integral[y * stride + (x + 1)] + rowSum;
                     }
-                    data[i] = gray;
-                    data[i + 1] = gray;
-                    data[i + 2] = gray;
                 }
-                
+
+                // Bradley-Roth: neighbourhood about 1/8 of the long edge, and a pixel is ink when
+                // it is more than 15% darker than that neighbourhood's mean.
+                const half = Math.max(6, Math.round(Math.max(w, h) / 16));
+                const T = 0.15;
+                for (let y = 0; y < h; y++) {
+                    const y1 = Math.max(0, y - half), y2 = Math.min(h - 1, y + half);
+                    for (let x = 0; x < w; x++) {
+                        const x1 = Math.max(0, x - half), x2 = Math.min(w - 1, x + half);
+                        const count = (x2 - x1 + 1) * (y2 - y1 + 1);
+                        const sum = integral[(y2 + 1) * stride + (x2 + 1)]
+                                  - integral[y1 * stride + (x2 + 1)]
+                                  - integral[(y2 + 1) * stride + x1]
+                                  + integral[y1 * stride + x1];
+                        const v = (gray[y * w + x] * count < sum * (1 - T)) ? 0 : 255;
+                        const p = (y * w + x) * 4;
+                        data[p] = data[p + 1] = data[p + 2] = v;
+                        data[p + 3] = 255;
+                    }
+                }
+
                 ctx.putImageData(imgData, 0, 0);
                 canvas.toBlob((blob) => {
-                    URL.revokeObjectURL(img.src);
-                    if (blob) {
-                        resolve(blob);
-                    } else {
-                        resolve(file);
-                    }
+                    URL.revokeObjectURL(url);
+                    resolve(blob || file);
                 }, 'image/png');
-            } catch(e) {
-                console.warn('[OCR Preprocessing] Binarization error:', e);
+            } catch (e) {
+                URL.revokeObjectURL(url);
+                console.warn('[OCR Preprocessing] Adaptive threshold failed, using the original:', e);
                 resolve(file);
             }
         };
         img.onerror = (err) => {
+            URL.revokeObjectURL(url);
             console.warn('[OCR Preprocessing] Image load error:', err);
             resolve(file);
         };
+        img.src = url;
     });
 };
 

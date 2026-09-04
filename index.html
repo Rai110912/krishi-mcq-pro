@@ -81,7 +81,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=q3dl55o" rel="stylesheet">
+    <link href="./index.css?v=5d4y4e5" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1320,10 +1320,11 @@
 
                 <div id="mcq-card-container" class="p-5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-4 relative">
                     <div class="flex justify-between items-center gap-1.5 flex-wrap">
-                        <div class="flex gap-1.5 items-center">
+                        <div class="flex gap-1.5 items-center flex-wrap">
                             <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-800 dark:text-indigo-300" id="q-subject-badge">General</span>
                             <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400" id="q-topic-badge">General Topic</span>
                             <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-orange-500/10 text-orange-700 dark:text-orange-400" id="q-difficulty-badge">Easy</span>
+                            <span class="hidden text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-800 dark:text-amber-300" id="q-repeat-badge" title="This question appears more than once in your bank - likely a repeated exam question."></span>
                         </div>
                         <div class="flex items-center gap-2">
                             <button id="q-hint-btn" onclick="showQuizHint()" class="hidden px-2 py-0.5 text-[9px] font-black bg-teal-500/10 text-teal-700 dark:text-teal-400 hover:bg-teal-500/20 rounded cursor-pointer transition">💡 Hint</button>
@@ -2682,7 +2683,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v229-q3dl55o (202609040236)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v235-5d4y4e5 (202609040349)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3508,6 +3509,14 @@
                 </div>
 
                 <div class="p-4 border rounded-xl space-y-2.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
+                    <p class="font-bold text-sm">☁️ Cloud vault (daily auto-snapshots)</p>
+                    <p class="text-[10px] text-gray-400">The app quietly saves a full snapshot to your account once a day. Restore one here if you lose your phone or wipe the app.</p>
+                    <button onclick="openCloudVaultPanel()" class="w-full bg-sky-600 hover:bg-sky-700 text-white py-2 rounded-lg font-bold text-xs transition cursor-pointer">☁️ Restore from cloud backup</button>
+                    <div id="vault-panel" class="hidden space-y-2"></div>
+                    <p id="vault-status" class="text-[10px] text-center font-semibold" style="color:var(--text-secondary);"></p>
+                </div>
+
+                <div class="p-4 border rounded-xl space-y-2.5 bg-white dark:bg-slate-800" style="border-color:var(--border);">
                     <p class="font-bold text-sm">💻 Download Complete Offline App</p>
                     <p class="text-[10px] text-gray-400">Download the entire application as a single index.html file to run offline.</p>
                     <button onclick="downloadCompleteApp()" class="w-full bg-indigo-600 hover:bg-indigo-750 text-white py-2 rounded-lg font-bold text-xs transition cursor-pointer">📥 Download App (index.html)</button>
@@ -3940,14 +3949,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=q3dl55o" defer></script>
-    <script src="./js/elite_3d_engine.js?v=q3dl55o" defer></script>
-    <script src="./js/canvas_charts.js?v=q3dl55o" defer></script>
+    <script src="./js/elite_animations_controller.js?v=5d4y4e5" defer></script>
+    <script src="./js/elite_3d_engine.js?v=5d4y4e5" defer></script>
+    <script src="./js/canvas_charts.js?v=5d4y4e5" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=q3dl55o" defer></script>
-    <script src="./js/sqlite_db.js?v=q3dl55o" defer></script>
-    <script src="./js/krishi_idb.js?v=q3dl55o"></script>
-    <script src="./js/app.js?v=q3dl55o" defer></script>
+    <script src="./js/pwa_helpers.js?v=5d4y4e5" defer></script>
+    <script src="./js/sqlite_db.js?v=5d4y4e5" defer></script>
+    <script src="./js/krishi_idb.js?v=5d4y4e5"></script>
+    <script src="./js/app.js?v=5d4y4e5" defer></script>
 
 
     <!--
@@ -3975,8 +3984,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=q3dl55o" defer></script>
-    <script src="./js/voice_assistant.js?v=q3dl55o" defer></script>
+<script src="./js/data_safety.js?v=5d4y4e5" defer></script>
+    <script src="./js/voice_assistant.js?v=5d4y4e5" defer></script>
 </body>
 </html>
 

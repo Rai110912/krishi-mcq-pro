@@ -677,6 +677,14 @@ async function loadStaticQuestions() {
             // Live question view is on screen when #page-mcq is not .hidden and is
             // actually laid out (offsetParent null => an ancestor page is display:none).
             let quizShowing = !!mcq && !mcq.classList.contains('hidden') && mcq.offsetParent !== null;
+            // The flashcard swiper is the same kind of full-screen session, so it hides the same
+            // chrome. It cannot be tested the same way though: #page-tinder-swiper carries its
+            // `hidden` class permanently and is switched on with `.active` plus an inline
+            // display, so it is judged on being active AND laid out.
+            let swiper = document.getElementById('page-tinder-swiper');
+            if (!quizShowing && swiper && swiper.classList.contains('active') && swiper.offsetParent !== null) {
+                quizShowing = true;
+            }
             // Bottom nav slides off the bottom.
             if (bnav) bnav.classList.toggle('bottom-nav-hidden', quizShowing);
             // Top chrome (header + stats ribbon) collapses/slides off the top, so the
@@ -687,12 +695,15 @@ async function loadStaticQuestions() {
             if (ribbon) ribbon.classList.toggle('quiz-chrome-hidden', quizShowing);
         };
         (function initQuizNavAutoHide() {
-            let mcq = document.getElementById('page-mcq');
-            if (!mcq || typeof MutationObserver === 'undefined') return;
-            // Every code path that opens/closes the quiz toggles #page-mcq's own
-            // class/style, so observing those attributes catches all of them.
+            if (typeof MutationObserver === 'undefined') return;
+            // Every code path that opens/closes either full-screen view toggles that page's own
+            // class/style, so observing those attributes catches all of them - including exits
+            // through navigate(), the back button or the end-of-deck panel.
             let obs = new MutationObserver(() => window.syncBottomNavToQuiz());
-            obs.observe(mcq, { attributes: true, attributeFilter: ['class', 'style'] });
+            ['page-mcq', 'page-tinder-swiper'].forEach(function(id) {
+                let el = document.getElementById(id);
+                if (el) obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
+            });
             window.syncBottomNavToQuiz(); // set correct initial state
         })();
 
@@ -4263,11 +4274,270 @@ scheduleMidnightCloudVault();
             await firestore.collection('users').doc(uid).collection('backups').doc(dateStr).set(snapshot, { merge: true });
             KrishiStorage.setItem('krishi_last_vault_date', dateStr);
             console.log('[Midnight Vault] Cloud backup snapshot created for:', dateStr);
+            // The pointer doc and the pruning are best-effort: a snapshot that landed must not be
+            // reported as failed because the bookkeeping after it did not.
+            try { await recordVaultIndexEntry(firestore, uid, dateStr, snapshot); } catch(e) { console.warn('[Midnight Vault] Index update failed:', e); }
         } catch(e) {
             console.warn('[Midnight Vault] Failed:', e);
         }
     }
     window.performMidnightVaultBackup = performMidnightVaultBackup;
+
+    // ---- Cloud vault: the read half ---------------------------------------------------------
+    // performMidnightVaultBackup() had been uploading a full daily snapshot to
+    // users/{uid}/backups/{date} with nothing ever reading it back: no list, no restore, no
+    // pruning. So the safety net could not be reached, and it grew by one document per day
+    // forever. Everything below is that missing half.
+    const VAULT_KEEP_DAYS = 14;
+    // `var` for the same reason the duplicate index cache uses it: this file's top level is one
+    // scope and a restore can be triggered from a handler that runs before this line does.
+    var vaultListItems = [];
+
+    // A pointer doc, not a collection scan. Listing by reading the collection would download every
+    // full snapshot just to render a list of dates - each one carries the whole question bank - and
+    // on mobile data that is not a list, it is a bill.
+    function vaultIndexRef(firestore, uid) {
+        return firestore.collection('users').doc(uid).collection('backups').doc('_index');
+    }
+
+    // Stored on the doc so the panel can say what a snapshot actually holds before you overwrite
+    // your current data with it. A date alone does not tell you whether that day's copy is the one
+    // worth restoring.
+    function vaultEntryOf(dateStr, snapshot) {
+        return {
+            date: dateStr,
+            ts: snapshot.vaultTimestamp || Date.now(),
+            qCount: Array.isArray(snapshot.customQuestions) ? snapshot.customQuestions.length : -1,
+            bmCount: Array.isArray(snapshot.bookmarked) ? snapshot.bookmarked.length : 0,
+            wrongCount: Array.isArray(snapshot.wrong) ? snapshot.wrong.length : 0,
+            solved: (snapshot.stats && snapshot.stats.totalSolved) || 0
+        };
+    }
+
+    // Writes the pointer entry, then deletes whatever fell off the end. Pruning is driven by the
+    // index rather than by a date calculation so a doc can never be orphaned: if it is not in the
+    // list the panel shows, it is not a snapshot anyone can reach.
+    async function recordVaultIndexEntry(firestore, uid, dateStr, snapshot) {
+        const ref = vaultIndexRef(firestore, uid);
+        let items = [];
+        try {
+            const doc = await ref.get();
+            const data = doc.exists ? doc.data() : null;
+            if (data && Array.isArray(data.items)) items = data.items.filter(it => it && it.date);
+        } catch(e) { /* a missing or unreadable index is rebuilt from this write onwards */ }
+
+        items = items.filter(it => it.date !== dateStr);
+        items.unshift(vaultEntryOf(dateStr, snapshot));
+        items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+        const dropped = items.slice(VAULT_KEEP_DAYS);
+        items = items.slice(0, VAULT_KEEP_DAYS);
+        await ref.set({ items: items, updatedAt: Date.now() }, { merge: true });
+
+        for (const it of dropped) {
+            try {
+                await firestore.collection('users').doc(uid).collection('backups').doc(it.date).delete();
+                console.log('[Midnight Vault] Pruned old snapshot:', it.date);
+            } catch(e) { console.warn('[Midnight Vault] Prune failed for', it.date, e); }
+        }
+    }
+
+    // Reads the pointer doc only. `legacy` tells the panel that snapshots may exist from before the
+    // index did, so it can offer the expensive scan instead of pretending there is nothing there.
+    async function listCloudVaultBackups() {
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return { items: [], legacy: false, error: 'not-signed-in' };
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            const doc = await vaultIndexRef(firestore, uid).get();
+            const data = doc.exists ? doc.data() : null;
+            const items = (data && Array.isArray(data.items)) ? data.items.filter(it => it && it.date) : [];
+            return { items: items, legacy: !items.length, error: '' };
+        } catch(e) {
+            console.warn('[Midnight Vault] List failed:', e);
+            return { items: [], legacy: false, error: e && e.message ? e.message : 'read failed' };
+        }
+    }
+
+    // The expensive path, and the reason it is behind its own button: the client SDK cannot fetch
+    // document ids without their contents, so discovering pre-index snapshots means downloading
+    // every one of them in full. Run once, write the index, never again.
+    async function scanCloudVaultForOlder() {
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) return { items: [], error: 'not-signed-in' };
+        const firestore = firebase.firestore(firebaseApp);
+        try {
+            const snap = await firestore.collection('users').doc(uid).collection('backups').get();
+            const items = [];
+            snap.forEach(doc => {
+                if (doc.id === '_index') return;
+                const d = doc.data() || {};
+                items.push(vaultEntryOf(doc.id, d));
+            });
+            items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+            const keep = items.slice(0, VAULT_KEEP_DAYS);
+            await vaultIndexRef(firestore, uid).set({ items: keep, updatedAt: Date.now() }, { merge: true });
+            return { items: keep, error: '' };
+        } catch(e) {
+            console.warn('[Midnight Vault] Scan failed:', e);
+            return { items: [], error: e && e.message ? e.message : 'scan failed' };
+        }
+    }
+
+    // Deliberately NOT reusing handleRestoreFile()'s apply block: that one defaults every absent
+    // key to an empty array, which is correct for a hand-picked file but destructive here.
+    // collectAllAppData() OMITS customQuestions whenever the bank is not proven hydrated, so a
+    // perfectly good snapshot can legitimately lack the key - and blanking the bank while
+    // "restoring a backup" is the exact failure this feature exists to prevent.
+    function applyVaultSnapshot(d) {
+        const applied = [];
+        const pairs = [
+            ['bookmarked', 'bookmarked'], ['bookmarkedLog', 'bookmarkedLog'],
+            ['wrong', 'wrong'], ['wrongLog', 'wrongLog'],
+            ['customQuestions', 'customQuestions'], ['streak', 'streak'],
+            ['stats', 'stats'], ['achievements', 'achievements'], ['progression', 'progression']
+        ];
+        pairs.forEach(([key, target]) => {
+            if (!Object.prototype.hasOwnProperty.call(d, key)) return;
+            if (!isSafeIncomingCollection(d[key], localData[target], 'vault.' + key)) return;
+            localData[target] = d[key];
+            applied.push(key);
+        });
+        return applied;
+    }
+
+    async function restoreFromCloudVault(dateStr) {
+        const uid = getCloudUID();
+        if (!uid || !firebaseApp) { showToast('⚠️ Login first - cloud snapshots belong to your account.', 5000); return; }
+
+        const entry = (vaultListItems || []).find(it => it.date === dateStr) || { date: dateStr };
+        const detail = entry.qCount >= 0
+            ? `${entry.qCount} custom question(s), ${entry.bmCount || 0} bookmark(s), ${entry.solved || 0} solved`
+            : 'progress data';
+        if (!confirm(`Restore the snapshot from ${dateStr}?\n\nIt holds ${detail}.\nYour current data will be REPLACED by it.`)) return;
+        // Same courtesy clearCache() and resetAllData() already give before they destroy something:
+        // the snapshot being restored is 24h old at best, so the data about to be replaced is the
+        // newer copy and there is no other route back to it.
+        try { if (confirm('Download a backup of your CURRENT data first? (recommended)')) backupAllData(); } catch(e) {}
+
+        const status = document.getElementById('vault-status');
+        if (status) { status.style.color = 'var(--text-secondary)'; status.textContent = '⏳ Downloading snapshot...'; }
+        try {
+            const firestore = firebase.firestore(firebaseApp);
+            const doc = await firestore.collection('users').doc(uid).collection('backups').doc(dateStr).get();
+            if (!doc.exists) throw new Error('That snapshot no longer exists in the cloud.');
+            const d = doc.data() || {};
+
+            // The bank is only written to IndexedDB once hydration proves localData is authoritative
+            // (see saveData()). Restoring it before then would leave the questions in memory only and
+            // let the pending hydration overwrite them - so this waits rather than half-restoring the
+            // one thing the user came here for.
+            if (Object.prototype.hasOwnProperty.call(d, 'customQuestions') && !customQuestionsHydrated) {
+                throw new Error('Question bank is still loading. Wait a few seconds and try again.');
+            }
+
+            const applied = applyVaultSnapshot(d);
+            if (d.sm2 && window.KrishiSM2Engine) { window.KrishiSM2Engine._saveData(d.sm2); applied.push('sm2'); }
+            if (Array.isArray(d.timingLog) && isSafeIncomingCollection(d.timingLog, timingLog, 'vault.timingLog')) { timingLog = d.timingLog; applied.push('timingLog'); }
+            const ms = Array.isArray(d.mockTestScores) ? d.mockTestScores : (Array.isArray(d.mockScores) ? d.mockScores : null);
+            if (ms && isSafeIncomingCollection(ms, mockTestScores, 'vault.mockScores')) { mockTestScores = normalizeMockScores(ms); applied.push('mockScores'); }
+
+            if (!applied.length) throw new Error('That snapshot had nothing restorable in it.');
+            saveTimingData();
+            saveData();
+
+            const qTxt = applied.indexOf('customQuestions') !== -1 ? `${localData.customQuestions.length} question(s) + ` : '';
+            if (status) { status.style.color = '#059669'; status.textContent = `✅ Restored ${qTxt}${applied.length} data set(s) from ${dateStr}.`; }
+            showToast(`✅ Restored snapshot from ${dateStr}.`, 5000);
+            try { scheduleRenderQuestionList(true); } catch(e) {}
+            try { updatePracticePage(); } catch(e) {}
+            navigate('page-home');
+        } catch(e) {
+            console.warn('[Midnight Vault] Restore failed:', e);
+            const msg = e && e.message ? e.message : 'restore failed';
+            if (status) { status.style.color = '#e11d48'; status.textContent = `❌ ${msg}`; }
+            showToast(`❌ Restore failed: ${msg}`, 6000);
+        }
+    }
+
+    function vaultRowHtml(it, i) {
+        // Index, not the date string, so the onclick carries no user text into markup.
+        const when = it.ts ? new Date(it.ts).toLocaleString() : it.date;
+        const bits = [];
+        if (it.qCount >= 0) bits.push(`${it.qCount} questions`);
+        else bits.push('bank not included');
+        if (it.bmCount) bits.push(`${it.bmCount} bookmarks`);
+        if (it.wrongCount) bits.push(`${it.wrongCount} mistakes`);
+        if (it.solved) bits.push(`${it.solved} solved`);
+        return `<div class="flex items-center justify-between gap-2 p-2.5 rounded-lg border" style="border-color:var(--border);">
+            <div class="min-w-0">
+                <p class="text-[11px] font-bold">${it.date}${i === 0 ? ' <span class="text-emerald-600">· latest</span>' : ''}</p>
+                <p class="text-[10px] opacity-70 truncate">${bits.join(' · ')}</p>
+                <p class="text-[9px] opacity-50">${when}</p>
+            </div>
+            <button onclick="restoreVaultByIndex(${i})" class="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg font-bold text-[10px] pressable">Restore</button>
+        </div>`;
+    }
+
+    function restoreVaultByIndex(i) {
+        const it = vaultListItems[i];
+        if (it) restoreFromCloudVault(it.date);
+    }
+
+    function renderCloudVaultList(res) {
+        const panel = document.getElementById('vault-panel');
+        if (!panel) return;
+        vaultListItems = (res && res.items) || [];
+        panel.classList.remove('hidden');
+
+        if (res && res.error === 'not-signed-in') {
+            panel.innerHTML = `<p class="text-[11px] text-center py-3 opacity-70">Login with your account first - daily snapshots are stored per account.</p>`;
+            return;
+        }
+        if (res && res.error) {
+            panel.innerHTML = `<p class="text-[11px] text-center py-3" style="color:#e11d48;">Could not read your snapshots: ${res.error}</p>`;
+            return;
+        }
+        if (!vaultListItems.length) {
+            panel.innerHTML = `<p class="text-[11px] text-center py-2 opacity-70">No snapshot list found yet. One is written automatically the first time you open the app each day.</p>
+                <button onclick="runCloudVaultScan()" class="w-full border rounded-lg py-2 text-[10px] font-bold pressable" style="border-color:var(--border);">Scan the cloud for older snapshots</button>
+                <p class="text-[9px] text-center opacity-50">Only needed once. It downloads every stored snapshot, so use Wi-Fi.</p>`;
+            return;
+        }
+        panel.innerHTML = `<div class="flex items-center justify-between">
+                <p class="text-[10px] font-bold opacity-70">${vaultListItems.length} snapshot(s) · newest first</p>
+                <button onclick="closeCloudVaultPanel()" class="text-[10px] font-bold px-2 py-1 border rounded-lg pressable" style="border-color:var(--border);">Close</button>
+            </div>
+            ${vaultListItems.map(vaultRowHtml).join('')}
+            <p class="text-[9px] text-center opacity-50">Only the last ${VAULT_KEEP_DAYS} days are kept. Restoring replaces your current data.</p>`;
+    }
+
+    function closeCloudVaultPanel() {
+        vaultListItems = [];
+        const panel = document.getElementById('vault-panel');
+        if (panel) { panel.innerHTML = ''; panel.classList.add('hidden'); }
+        const status = document.getElementById('vault-status');
+        if (status) status.textContent = '';
+    }
+
+    async function openCloudVaultPanel() {
+        const panel = document.getElementById('vault-panel');
+        if (panel) { panel.classList.remove('hidden'); panel.innerHTML = `<p class="text-[11px] text-center py-3 opacity-70">⏳ Reading your snapshot list...</p>`; }
+        renderCloudVaultList(await listCloudVaultBackups());
+    }
+
+    async function runCloudVaultScan() {
+        const panel = document.getElementById('vault-panel');
+        if (panel) panel.innerHTML = `<p class="text-[11px] text-center py-3 opacity-70">⏳ Scanning cloud snapshots (this can take a moment)...</p>`;
+        const res = await scanCloudVaultForOlder();
+        if (!res.items.length && !res.error) {
+            renderCloudVaultList({ items: [], legacy: false, error: '' });
+            const p = document.getElementById('vault-panel');
+            if (p) p.insertAdjacentHTML('afterbegin', `<p class="text-[11px] text-center py-2 opacity-70">Nothing found - no snapshot has been uploaded for this account yet.</p>`);
+            return;
+        }
+        renderCloudVaultList(res);
+    }
 
     async function enableCloudSync() {
         const inputKey = document.getElementById('cloud-sync-key-input').value.trim().toUpperCase();
@@ -6152,6 +6422,21 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         document.getElementById('q-subject-badge').textContent = q.sub||'General';
         document.getElementById('q-topic-badge').textContent = q.topic||'General Topic';
         document.getElementById('q-difficulty-badge').textContent = q.difficulty||'Easy';
+
+        // A repeated question is worth flagging while it is being answered, not only in the Manage
+        // list: "this was asked 3 times" is the cue to memorise this one properly. repeatCountOf()
+        // reads the cached duplicate index, so this costs a Map lookup per question, not a re-scan.
+        const repeatBadge = document.getElementById('q-repeat-badge');
+        if (repeatBadge) {
+            let rc = 0;
+            try { rc = repeatCountOf(q); } catch(e) { rc = 0; }
+            if (rc > 1) {
+                repeatBadge.textContent = `🔥 ${rc}× repeated`;
+                repeatBadge.classList.remove('hidden');
+            } else {
+                repeatBadge.classList.add('hidden');
+            }
+        }
         
         // Hint btn setup
         let hintBtn = document.getElementById('q-hint-btn');
@@ -9037,6 +9322,11 @@ if (state.isMock) {
             importBatchId: raw.importBatchId || undefined,
             importedAt: raw.importedAt || undefined,
 
+            // Same reason as the two above. This one is stamped when the duplicate scanner removes
+            // extra copies, so losing it on the next save would silently reset a "🔥 3× repeated"
+            // question back to ordinary the moment its copies were cleaned up.
+            repeatCount: Number(raw.repeatCount) > 1 ? Number(raw.repeatCount) : undefined,
+
             // Dual formats to maintain absolute safety with external format requests
             question: q,
             options: opts,
@@ -9496,18 +9786,38 @@ if (state.isMock) {
     function invalidateDuplicateIndex(){ _dupIndexCache = null; }
     function buildDuplicateIndex(){
         if (_dupIndexCache) return _dupIndexCache;
-        const live = new Map(), trash = new Map();
-        const add = (map, q) => {
+        const live = new Map(), trash = new Map(), counts = new Map();
+        const add = (map, q, count) => {
             if (!q) return;
             const n = getNormalizedText(q.q);
-            if (n && !map.has(n)) map.set(n, q);
+            if (!n) return;
+            if (!map.has(n)) map.set(n, q);
+            // Counted even when the representative is already stored: how MANY copies exist is the
+            // repeat signal, and the first-wins map above throws that number away.
+            if (count) counts.set(n, (counts.get(n) || 0) + 1);
         };
-        (typeof defaultQuestions !== 'undefined' ? defaultQuestions : []).forEach(q => add(live, q));
+        // Built-ins are counted for duplicate DETECTION but never toward the repeat signal: the seed
+        // bank is the app's own content, so a user question that happens to match one is a duplicate,
+        // not a question the exam asked twice.
+        (typeof defaultQuestions !== 'undefined' ? defaultQuestions : []).forEach(q => add(live, q, false));
         ((localData && localData.customQuestions) || []).forEach(q => {
-            if (q) add(q.deleted ? trash : live, q);
+            if (q) add(q.deleted ? trash : live, q, !q.deleted);
         });
-        _dupIndexCache = { live: live, trash: trash };
+        _dupIndexCache = { live: live, trash: trash, counts: counts };
         return _dupIndexCache;
+    }
+
+    // How many times this question sits in the bank. A student importing five years of past papers
+    // ends up with one copy per year it was asked, so the copy count IS the repeat count - and a
+    // question asked three times is the one to study first.
+    // The stamped `repeatCount` wins when it is higher: cleaning up extra copies with the duplicate
+    // scanner would otherwise destroy the very signal those copies carried.
+    function repeatCountOf(q){
+        if (!q) return 0;
+        const stamped = Number(q.repeatCount) || 0;
+        const n = getNormalizedText(q.q);
+        const live = n ? (buildDuplicateIndex().counts.get(n) || 0) : 0;
+        return Math.max(stamped, live);
     }
 
     // Same wording is not automatically the same question. Options are compared as a sorted set
@@ -9663,12 +9973,19 @@ if (state.isMock) {
     // copy resurrect every row on the next sync.
     function dupScanRemove(items, keepId) {
         let removed = 0;
+        // Stamp the survivor first. Once the extra copies are gone the bank can no longer tell that
+        // this question was asked three times, and that repeat count is worth more than the copies
+        // were - it is the reason to study this question before the others.
+        const keep = items.filter(q => q && !q.deleted).find(q => q.id === keepId);
+        const copies = items.filter(q => q && !q.deleted).length;
+        if (keep && copies > 1) keep.repeatCount = Math.max(Number(keep.repeatCount) || 0, copies);
         items.forEach(q => {
             if (!q || q.id === keepId || q.deleted) return;
             q.deleted = true;
             q.updatedAt = Date.now();
             removed++;
         });
+        if (keep && removed) keep.updatedAt = Date.now();
         return removed;
     }
 
@@ -10919,6 +11236,17 @@ function openEditImportModal(idx) {
         const meta = document.createElement('p');
         meta.className = 'text-gray-500';
         meta.textContent = `Subject: ${q.sub || 'General'} | Correct: Option ${String.fromCharCode(65 + (q.ans || 0))}`;
+
+        // Repeated questions are the highest-value ones in an exam bank, so the count is shown on
+        // the row rather than left for the duplicate scanner to reveal.
+        const repeats = repeatCountOf(q);
+        if (repeats > 1) {
+            const fire = document.createElement('span');
+            fire.className = 'ml-1 px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 font-bold';
+            fire.textContent = `🔥 ${repeats}× repeated`;
+            fire.title = 'This question appears ' + repeats + ' times in your bank - likely a repeated exam question.';
+            meta.appendChild(fire);
+        }
 
         const actions = document.createElement('div');
         actions.className = 'flex gap-2';
@@ -20789,6 +21117,16 @@ window.initNepalGlobe = function() {
     } catch(pushErr) {
         console.warn('[Push] Initialization failed:', pushErr);
     }
+})();
+
+// Everything below this line used to sit INSIDE initCapacitorNativeFeatures(), i.e. after its
+// `if (!isCapacitorNative) { return; }` - so on web and PWA none of it ever executed. The flashcard
+// swiper tile was a dead tap (ReferenceError, no toast), Export/Import Progress the same, the FPS
+// switch flipped itself on without showing anything, and KrishiDOMPruner simply did not exist. Only
+// the APK worked, because Capacitor injects its bridge even with server.url set. None of this code
+// touches a Capacitor plugin, so it lives in its own IIFE and runs everywhere.
+(function initSharedUIFeatures() {
+    'use strict';
 
     // ==================== PREMIUM HYBRID TINDER FLASHCARD SWIPER ====================
     window.swiperState = {

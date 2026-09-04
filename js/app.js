@@ -2366,6 +2366,16 @@ function loadData(){
         const display = document.getElementById('active-sync-key-display');
         const timeTxt = document.getElementById('sync-time-txt');
 
+        // First render of the session: a 'Syncing...' sitting in storage at startup cannot be a
+        // live cycle, because the watchdog timer that would have retired it died with the
+        // previous process. Without this the amber pulse outlived every relaunch.
+        if (!window.__krishiSyncStatusSanitized) {
+            window.__krishiSyncStatusSanitized = true;
+            if (KrishiStorage.getItem('krishi_sync_status') === 'Syncing...' && !window.__krishiSyncWatchdog) {
+                KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
+            }
+        }
+
         // Backup size meter: makes the invisible 900 KB ceiling visible before
         // it ever blocks a sync. Throttled to once per 30s — updateSyncUI can
         // fire in bursts (QR retry loop), and collect+stringify is not cheap.
@@ -2375,9 +2385,12 @@ function loadData(){
                 window.__krishiMeterAt = nowMs;
                 const meterEl = document.getElementById('krishi-backup-meter');
                 if (meterEl) {
-                    const probeKB = Math.round(JSON.stringify(collectAllAppData()).length / 1024);
-                    meterEl.textContent = '💾 Backup size: ~' + probeKB + ' KB / 900 KB limit';
-                    meterEl.style.color = probeKB > 750 ? '#ef4444' : (probeKB > 550 ? '#d97706' : '');
+                    const probeKB = measureCloudDocKB();
+                    const paused = KrishiStorage.getItem('krishi_sync_payload_too_big');
+                    meterEl.textContent = paused
+                        ? '⚠️ Backup paused: ~' + probeKB + ' KB / 900 KB limit'
+                        : '💾 Backup size: ~' + probeKB + ' KB / 900 KB limit';
+                    meterEl.style.color = (paused || probeKB > 750) ? '#ef4444' : (probeKB > 550 ? '#d97706' : '');
                 }
             }
         } catch (e) {}
@@ -19431,8 +19444,62 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         if (modal) modal.classList.add('hidden');
     };
 
+    // The truthful status for a cycle that announced 'Syncing...' and then never reported
+    // back. `krishi_sync_pending` is the authority: every completed cycle removes it, so its
+    // absence means the data did land and only the badge was left behind.
+    function resolveStuckSyncStatus() {
+        return (KrishiStorage.getItem('krishi_sync_pending') === 'true') ? 'Sync failed' : 'Synced';
+    }
+
+    // How long a sync may stay unreported before the badge stops claiming it is running.
+    // Deliberately not a module-level `const`: setSyncStatus() is reached from the boot call
+    // to initCloudSync() long before this part of the file has executed, and a const read in
+    // that window throws on the temporal dead zone. Same reason the timer handle lives on
+    // `window` instead of in a closure variable here.
+    function syncWatchdogMs() {
+        // Generous on purpose: a first sync that uploads a large question bank in chunks over
+        // a slow mobile connection is legitimately slow, and a cycle that finishes later still
+        // corrects the badge itself via setSyncStatus('Synced').
+        return 60000;
+    }
+
     function setSyncStatus(status) {
         KrishiStorage.setItem('krishi_sync_status', status);
+
+        if (status === 'Synced') {
+            // Owned here rather than at the two manual call sites that used to write it:
+            // performCloudSync() and the realtime snapshot handler never stamped it, so
+            // "Last Synced" showed the last time the user pressed Sync Now and stood still
+            // while every automatic sync succeeded silently behind it.
+            KrishiStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
+            // A completed cycle is proof the payload fit, so the size-stop marker is stale.
+            KrishiStorage.removeItem('krishi_sync_payload_too_big');
+        }
+
+        // 'Syncing...' is persisted like every other status, and nothing used to retire it:
+        // the only success-path clear on the initCloudSync() route is the setSyncStatus('Synced')
+        // inside the snapshot handler's `if (doc.exists)`, which sits behind an
+        // `if (syncInProgress) return;` and an `if (hasPendingWrites) return;` that both fire
+        // routinely at boot. A dropped snapshot therefore froze the amber pulse in localStorage
+        // and it survived every relaunch — the panel read "Syncing..." forever while the data
+        // was in fact backed up. Whatever the cause, the watchdog resolves it.
+        if (window.__krishiSyncWatchdog) {
+            clearTimeout(window.__krishiSyncWatchdog);
+            window.__krishiSyncWatchdog = null;
+        }
+        if (status === 'Syncing...') {
+            window.__krishiSyncWatchdog = setTimeout(function () {
+                window.__krishiSyncWatchdog = null;
+                if (KrishiStorage.getItem('krishi_sync_status') !== 'Syncing...') return;
+                // Written straight to storage instead of through setSyncStatus(): clearing a
+                // stranded badge is not a completed sync and must not stamp a fresh
+                // "Last Synced" time on a sync that never reported success.
+                KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
+                console.warn('[Cloud Sync] Watchdog retired a sync that never reported back.');
+                updateSyncUI();
+            }, syncWatchdogMs());
+        }
+
         updateSyncUI();
     }
 

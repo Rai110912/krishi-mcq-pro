@@ -21333,12 +21333,22 @@ window.initNepalGlobe = function() {
         card.classList.remove('hidden');
         emptyState.classList.add('hidden');
 
-        // Reset positions
+        // The replacement card is dealt in with a 140 ms pop instead of appearing at dead centre,
+        // so a fast run of swipes reads as new cards arriving rather than one card teleporting
+        // back. isAnimating is cleared straight away, before the pop finishes - waiting for it
+        // would put the old dead spot back - so the pop must yield to a drag that starts inside it.
         card.style.transition = 'none';
-        card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
-        card.style.opacity = '1';
+        card.style.transform = 'translate3d(0px, 8px, 0px) scale(0.97)';
+        card.style.opacity = '0.5';
         card.style.pointerEvents = 'auto'; // ensure clickable
         window.swiperState.isAnimating = false; // unlock interaction
+        requestAnimationFrame(function() {
+            if (window.swiperState.dragging) return;
+            if (window.swiperState.index >= window.swiperState.cards.length) return;
+            card.style.transition = 'transform 0.14s ease-out, opacity 0.14s ease-out';
+            card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
+            card.style.opacity = '1';
+        });
         window.swiperState.cardStartTime = Date.now(); // track time spent
         questionStartTime = window.swiperState.cardStartTime; // sync global timer for session history
 
@@ -21515,7 +21525,26 @@ window.initNepalGlobe = function() {
         triggerHaptic('click');
     };
 
-    window.swipeFlashcardLeft = function() {
+    // Exit animation timing. 350 ms was long enough that fast swiping felt like waiting on the
+    // app - the next card could not be touched until it finished. 200 ms still reads as a throw
+    // but hands control back almost at once, which is most of what "unresponsive" meant here.
+    const FLASHCARD_EXIT_MS = 200;
+
+    // The card leaves along the gesture that threw it instead of always straight sideways, so a
+    // diagonal flick looks like the same motion continuing rather than snapping to horizontal.
+    function flashcardExitTransform(dir, vec) {
+        let w = window.innerWidth || 420;
+        let outX = dir * (w + 220);
+        let outY = 0, rot = dir * 30;
+        if (vec) {
+            let ratio = (Math.abs(vec.x) > 4) ? (vec.y / Math.abs(vec.x)) : 0;
+            outY = Math.max(-260, Math.min(260, ratio * Math.abs(outX) * 0.35));
+            rot = dir * Math.max(12, Math.min(38, 30 + Math.abs(vec.vx || 0) * 6));
+        }
+        return `translate3d(${Math.round(outX)}px, ${Math.round(outY)}px, 0) rotate(${rot.toFixed(1)}deg)`;
+    }
+
+    function flashcardSwipe(known, vec) {
         if (window.swiperState.index >= window.swiperState.cards.length) return;
         if (window.swiperState.isAnimating) return;
         window.swiperState.isAnimating = true;
@@ -21526,55 +21555,46 @@ window.initNepalGlobe = function() {
             return;
         }
 
-        card.style.pointerEvents = 'none'; // disable pointer events during animation
-
-        card.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.35s ease';
-        card.style.transform = 'translate3d(-500px, 0px, 0) rotate(-30deg)';
+        card.style.pointerEvents = 'none';   // no second swipe lands mid-flight
+        card.style.willChange = 'transform, opacity';
+        card.style.transition = `transform ${FLASHCARD_EXIT_MS}ms cubic-bezier(0.25,0.46,0.45,0.94), opacity ${FLASHCARD_EXIT_MS}ms ease-out`;
+        card.style.transform = flashcardExitTransform(known ? 1 : -1, vec);
         card.style.opacity = '0';
 
-        let q = window.swiperState.cards[window.swiperState.index];
-        recordFlashcardSwipe(q, false);
+        recordFlashcardSwipe(window.swiperState.cards[window.swiperState.index], known);
 
-        playSound('wrong');
-        triggerHaptic('wrong');
-
-        window.swiperState.index++;
-        setTimeout(() => {
-            window.renderFlashcardCard();
-        }, 350);
-    };
-
-    window.swipeFlashcardRight = function() {
-        if (window.swiperState.index >= window.swiperState.cards.length) return;
-        if (window.swiperState.isAnimating) return;
-        window.swiperState.isAnimating = true;
-
-        const card = document.getElementById('tinder-card');
-        if (!card) {
-            window.swiperState.isAnimating = false;
-            return;
-        }
-
-        card.style.pointerEvents = 'none'; // disable pointer events during animation
-
-        card.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.35s ease';
-        card.style.transform = 'translate3d(500px, 0px, 0) rotate(30deg)';
-        card.style.opacity = '0';
-
-        let q = window.swiperState.cards[window.swiperState.index];
-        recordFlashcardSwipe(q, true);
-
-        playSound('correct');
-        triggerHaptic('correct');
+        playSound(known ? 'correct' : 'wrong');
+        // "Study later" is a scheduling choice, not a mistake, so both directions get the same
+        // light tick. The old 'wrong' haptic fired Haptics.notification WARNING - a long double
+        // rumble that arrived after the card had already gone and read as lag.
+        triggerHaptic('click');
 
         window.swiperState.index++;
-        setTimeout(() => {
-            window.renderFlashcardCard();
-        }, 350);
-    };
+        setTimeout(function() { window.renderFlashcardCard(); }, FLASHCARD_EXIT_MS);
+    }
+
+    window.swipeFlashcardLeft = function(vec) { flashcardSwipe(false, vec); };
+
+    window.swipeFlashcardRight = function(vec) { flashcardSwipe(true, vec); };
 
     window.exitFlashcardSwiper = function() {
         navigate('page-practice');
+    };
+
+    // Gesture tuning in one place, because the swiper is gesture-ONLY now: the 👎/⭐/👍 buttons
+    // are gone, so a drag that fails to commit is a dead end with nothing to fall back on.
+    // Two things decide a swipe instead of a single fixed 110 px: how far the card moved relative
+    // to its own width (a small phone should not need a screen-wide drag) and how fast the finger
+    // was moving when it left the glass. A quick flick of ~42 px commits; a slow deliberate drag
+    // still has to cross the distance line. That fixed 110 px was the whole complaint on the APK.
+    const SWIPE = {
+        distRatio: 0.20,    // share of card width that always commits...
+        distMin: 56,        // ...clamped so neither a narrow nor a wide screen gets a silly target
+        distMax: 96,
+        flickVel: 0.45,     // px/ms - this fast commits early
+        flickDist: 42,      // ...provided the card actually moved this far
+        upRatio: 1.15,      // vertical must beat horizontal by this much to read as "up"
+        upDist: 76
     };
 
     function attachSwiperGestures() {
@@ -21582,102 +21602,167 @@ window.initNepalGlobe = function() {
         const card = document.getElementById('tinder-card');
         if (!card) return;
 
-        let startX = 0, startY = 0;
+        let startX = 0, startY = 0, startT = 0;
         let deltaX = 0, deltaY = 0;
-        let isDragging = false;
+        let lastX = 0, lastY = 0, lastT = 0;
+        let velX = 0, velY = 0;
+        let isDragging = false, rafId = 0, activePointer = null;
+        let armed = '';            // what a release right now would do
+        let lastPointerUpAt = 0;
 
         const indRight = document.getElementById('tinder-indicator-right');
         const indLeft = document.getElementById('tinder-indicator-left');
         const indUp = document.getElementById('tinder-indicator-up');
 
-        // A drag counts as vertical only when it is clearly more up than sideways, so the ordinary
-        // left/right arc - which always carries some Y - never lights up the bookmark overlay.
-        const isBookmarkDrag = function() {
-            return deltaY < -15 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2;
-        };
+        function commitDistance() {
+            let w = card.offsetWidth || 320;
+            return Math.max(SWIPE.distMin, Math.min(SWIPE.distMax, w * SWIPE.distRatio));
+        }
+
+        // "Up" only when the drag is clearly more vertical than horizontal, so the ordinary
+        // left/right arc - which always carries some Y - never lights the bookmark overlay.
+        function isUpGesture() {
+            return deltaY < 0 && Math.abs(deltaY) > Math.abs(deltaX) * SWIPE.upRatio;
+        }
+
+        function setOpacity(el, v) {
+            if (el) el.style.opacity = String(Math.max(0, Math.min(0.92, v)));
+        }
+
+        // What a release right now would do: '', 'left', 'right' or 'up'.
+        function wouldCommit() {
+            let need = commitDistance();
+            if (isUpGesture()) {
+                if (-deltaY > SWIPE.upDist) return 'up';
+                if (-velY > SWIPE.flickVel && -deltaY > SWIPE.flickDist) return 'up';
+                return '';
+            }
+            if (deltaX > need || (velX > SWIPE.flickVel && deltaX > SWIPE.flickDist)) return 'right';
+            if (-deltaX > need || (-velX > SWIPE.flickVel && -deltaX > SWIPE.flickDist)) return 'left';
+            return '';
+        }
+
+        function resetIndicators() {
+            setOpacity(indRight, 0); setOpacity(indLeft, 0); setOpacity(indUp, 0);
+        }
+
+        function snapBack() {
+            card.style.transition = 'transform 0.18s cubic-bezier(0.22,0.61,0.36,1)';
+            card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
+            resetIndicators();
+        }
+
+        // One style write per frame. Android WebView fires pointermove faster than it paints, and
+        // the old code wrote a transform plus three opacity strings on every single event.
+        function paint() {
+            rafId = 0;
+            if (!isDragging) return;
+            card.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) rotate(${deltaX / 14}deg)`;
+            let need = commitDistance(), up = isUpGesture();
+            setOpacity(indUp, up ? (-deltaY - 10) / need : 0);
+            setOpacity(indRight, (!up && deltaX > 10) ? (deltaX - 10) / need : 0);
+            setOpacity(indLeft, (!up && deltaX < -10) ? (-deltaX - 10) / need : 0);
+            // Confirm the commit while the finger is still down - the tick says "let go now"
+            // rather than arriving after the card has already left the screen.
+            let now = wouldCommit();
+            if (now !== armed) { armed = now; if (now) triggerHaptic('click'); }
+        }
+
+        function schedulePaint() { if (!rafId) rafId = requestAnimationFrame(paint); }
 
         card.addEventListener('pointerdown', function(e) {
             if (window.swiperState.index >= window.swiperState.cards.length) return;
-            if (window.swiperState.isAnimating) return;
+            if (window.swiperState.isAnimating || isDragging) return;
             isDragging = true;
-            startX = e.clientX;
-            startY = e.clientY;
-            deltaX = 0;
-            deltaY = 0;
-            card.style.transition = 'none';
-            card.setPointerCapture(e.pointerId);
+            window.swiperState.dragging = true;   // tells renderFlashcardCard's pop to stand down
+            activePointer = e.pointerId;
+            startX = lastX = e.clientX;
+            startY = lastY = e.clientY;
+            startT = lastT = (e.timeStamp || Date.now());
+            deltaX = deltaY = velX = velY = 0;
+            armed = '';
+            card.style.transition = 'none';   // the card must follow the finger with no easing
+            card.style.opacity = '1';         // cancels a deal-in pop caught halfway
+            card.style.willChange = 'transform';
+            try { card.setPointerCapture(e.pointerId); } catch (err) {}
             card.style.cursor = 'grabbing';
         });
 
         card.addEventListener('pointermove', function(e) {
-            if (!isDragging) return;
+            if (!isDragging || e.pointerId !== activePointer) return;
+            let t = (e.timeStamp || Date.now());
+            let dt = t - lastT;
+            if (dt > 0) {
+                // Smoothed, so one jittery sample near the finger lift cannot fake a flick.
+                velX = velX * 0.6 + ((e.clientX - lastX) / dt) * 0.4;
+                velY = velY * 0.6 + ((e.clientY - lastY) / dt) * 0.4;
+                lastX = e.clientX; lastY = e.clientY; lastT = t;
+            }
             deltaX = e.clientX - startX;
             deltaY = e.clientY - startY;
-
-            // Apply translation and slight rotation based on X movement
-            card.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) rotate(${deltaX / 12}deg)`;
-
-            // Update swipe indicators opacity based on threshold (100px max)
-            if (isBookmarkDrag()) {
-                if (indUp) indUp.style.opacity = Math.min(0.9, (-deltaY - 15) / 100);
-                if (indRight) indRight.style.opacity = '0';
-                if (indLeft) indLeft.style.opacity = '0';
-            } else if (deltaX > 15) {
-                if (indRight) indRight.style.opacity = Math.min(0.9, (deltaX - 15) / 100);
-                if (indLeft) indLeft.style.opacity = '0';
-                if (indUp) indUp.style.opacity = '0';
-            } else if (deltaX < -15) {
-                if (indLeft) indLeft.style.opacity = Math.min(0.9, (-deltaX - 15) / 100);
-                if (indRight) indRight.style.opacity = '0';
-                if (indUp) indUp.style.opacity = '0';
-            } else {
-                if (indRight) indRight.style.opacity = '0';
-                if (indLeft) indLeft.style.opacity = '0';
-                if (indUp) indUp.style.opacity = '0';
-            }
+            schedulePaint();
         });
 
         const handlePointerUp = function(e) {
             if (!isDragging) return;
+            if (e && typeof e.pointerId === 'number' && e.pointerId !== activePointer) return;
             isDragging = false;
-            card.releasePointerCapture(e.pointerId);
+            window.swiperState.dragging = false;
+            activePointer = null;
+            lastPointerUpAt = Date.now();
+            if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+            try { if (e && typeof e.pointerId === 'number') card.releasePointerCapture(e.pointerId); } catch (err) {}
             card.style.cursor = 'grab';
 
-            card.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s ease';
+            let action = wouldCommit();
+            let elapsed = ((e && e.timeStamp) ? e.timeStamp : Date.now()) - startT;
+            armed = '';
 
-            if (deltaY < -110 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2) {
+            if (action === 'up') {
                 // Swipe up = bookmark, and the card deliberately stays: bookmarking says nothing
                 // about whether the student knows it, so it must not consume the card or hit FSRS.
                 window.bookmarkCurrentFlashcard();
-                card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
-                if (indRight) indRight.style.opacity = '0';
-                if (indLeft) indLeft.style.opacity = '0';
-                if (indUp) indUp.style.opacity = '0';
-            } else if (deltaX > 110) {
-                // Swipe Right (Know it)
-                window.swipeFlashcardRight();
-            } else if (deltaX < -110) {
-                // Swipe Left (Study later)
-                window.swipeFlashcardLeft();
+                snapBack();
+            } else if (action === 'right') {
+                window.swipeFlashcardRight({ x: deltaX, y: deltaY, vx: velX, vy: velY });
+            } else if (action === 'left') {
+                window.swipeFlashcardLeft({ x: deltaX, y: deltaY, vx: velX, vy: velY });
+            } else if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10 && elapsed < 400) {
+                // A tap, resolved here rather than in a click listener so the answer appears on
+                // the frame the finger lifts - a synthesized click can trail the gesture on APK.
+                snapBack();
+                window.revealFlashcardAnswer();
             } else {
-                // Return to center
-                card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
-                if (indRight) indRight.style.opacity = '0';
-                if (indLeft) indLeft.style.opacity = '0';
-                if (indUp) indUp.style.opacity = '0';
+                snapBack();
             }
         };
 
         card.addEventListener('pointerup', handlePointerUp);
         card.addEventListener('pointercancel', handlePointerUp);
+        // Losing capture - a system gesture, the WebView reclaiming the pointer - must not leave
+        // the card stranded mid-drag holding a stale transform.
+        card.addEventListener('lostpointercapture', function(e) { if (isDragging) handlePointerUp(e); });
 
-        // Also add click event to show answer on tap without drag
-        card.addEventListener('click', function(e) {
+        // Fallback only: a browser without pointer events still gets tap-to-reveal. When the
+        // pointer path already handled the gesture, the synthesized click is ignored.
+        card.addEventListener('click', function() {
+            if (Date.now() - lastPointerUpAt < 600) return;
             if (window.swiperState.isAnimating) return;
-            // Guard against click triggering after drag
-            if (Math.abs(deltaX) < 8 && Math.abs(deltaY) < 8) {
-                window.revealFlashcardAnswer();
-            }
+            window.revealFlashcardAnswer();
+        });
+
+        // The 👎/⭐/👍 buttons are gone, so the arrow keys are all that is left for anyone on a
+        // keyboard or a screen reader - a swipe is not reachable for them at all.
+        document.addEventListener('keydown', function(e) {
+            if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+            let page = document.getElementById('page-tinder-swiper');
+            if (!page || !page.classList.contains('active')) return;
+            let t = e.target, tag = t ? (t.tagName || '').toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || (t && t.isContentEditable)) return;
+            if (e.key === 'ArrowRight') { e.preventDefault(); window.swipeFlashcardRight(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); window.swipeFlashcardLeft(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); window.bookmarkCurrentFlashcard(); }
+            else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); window.revealFlashcardAnswer(); }
         });
 
         window.swiperState.listenersAttached = true;

@@ -1659,6 +1659,9 @@ function loadData(){
         });
         localData.wrongLog = wrLog;
 
+        // The duplicate index is a snapshot of the bank, so it dies here - this is the one choke
+        // point every change (add, import, undo, delete, cloud merge) already funnels through.
+        invalidateDuplicateIndex();
         if (localData.customQuestions && Array.isArray(localData.customQuestions)) {
             // First normalize all customQuestions
             localData.customQuestions = localData.customQuestions.map(q => normalizeQuestion(q));
@@ -8080,7 +8083,7 @@ if (state.isMock) {
         });
         document.getElementById('creator-panel-'+tab).classList.remove('hidden');
 
-        if(tab==='manage') scheduleRenderQuestionList(true);
+        if(tab==='manage'){ closeDupScan(); scheduleRenderQuestionList(true); }
         if(tab==='io'){ renderLastImportBar(); initImportDropZone(); }
     }
 
@@ -8217,16 +8220,26 @@ if (state.isMock) {
 
         const norm = getNormalizedText(q.q);
         if (norm) {
-            const clash = getAllQuestions().find(eq => !eq.deleted && getNormalizedText(eq.q) === norm);
+            // Shared index, not getAllQuestions(): that hid `draft` and `revision` rows, so you
+            // could retype a question already waiting in Revision and be told it was fine. The
+            // status is named in the message because otherwise "already exists" sends the user
+            // hunting through a Manage list that does not show it by default.
+            const index = buildDuplicateIndex();
+            const clash = index.live.get(norm);
             if (clash) {
+                const st = clash.status === 'draft' ? ' (Draft)' : clash.status === 'revision' ? ' (Revision)' : '';
                 return { valid: false, duplicate: true,
-                    error: clash.sub ? `Already exists in '${clash.sub}'.` : 'This question already exists.' };
+                    error: clash.sub ? `Already exists in '${clash.sub}'${st}.` : `This question already exists${st}.` };
             }
             const pending = (opts && opts.skipBatchScan) ? -1 : tempBatch.findIndex(b => getNormalizedText(b.q) === norm);
             if (pending !== -1) {
                 return { valid: false, duplicate: true,
                     error: `Already item #${pending + 1} in the current batch list.` };
             }
+            // Not blocked: deleting was a deliberate act, so re-adding is a real choice. It is
+            // still worth saying, because the delete was a soft delete - the old row is still
+            // there and the user is about to end up with two copies of the same question.
+            if (index.trash.has(norm)) return { valid: true, note: 'You had deleted this question earlier - saving it again as a new copy.' };
         }
         return { valid: true };
     }
@@ -8238,7 +8251,8 @@ if (state.isMock) {
 
         localData.customQuestions.push(q);
         saveData();
-        showToast('✅ Saved successfully!');
+        if (val.note) showToast('ℹ️ Saved. ' + val.note, 5000);
+        else showToast('✅ Saved successfully!');
         clearCreatorDraft();
         resetCreatorForm(!document.getElementById('cr-keep-subject').checked);
     }
@@ -9469,44 +9483,397 @@ if (state.isMock) {
             .replace(NORM_STRIP_RE, '');
     }
 
-    function detectDuplicatesAndErrors(questions) {
-        let allExisting = getAllQuestions();
-        // Map instead of two indexOf() scans: now that getNormalizedText() no longer throws away
-        // every Devanagari question, the norms are all non-empty and the old O(n*m) scan ran for
-        // real (a 1000-item bank x 500 imported rows = 500k long-string compares).
-        let existingIdxByNorm = new Map();
-        allExisting.forEach((eq, i) => {
-            let n = getNormalizedText(eq.q);
-            if (n && !existingIdxByNorm.has(n)) existingIdxByNorm.set(n, i);
+    // ---- Shared duplicate index ------------------------------------------------------------
+    // Built over defaultQuestions + every non-deleted custom question. Deliberately NOT
+    // getAllQuestions(): that one hides `draft` and `revision`, so importing the same file twice
+    // as drafts raised no duplicate warning at all, and the Add panel accepted a question that
+    // was already sitting in Revision. Soft-deleted rows go into a separate map so a re-import
+    // can say "you deleted this earlier" instead of silently resurrecting it.
+    // Cached: live validation calls this on every keystroke and a batch commit once per item.
+    // `var` not `let` on purpose - saveData() can run before this line is reached and a TDZ
+    // ReferenceError there would break every save.
+    var _dupIndexCache;
+    function invalidateDuplicateIndex(){ _dupIndexCache = null; }
+    function buildDuplicateIndex(){
+        if (_dupIndexCache) return _dupIndexCache;
+        const live = new Map(), trash = new Map();
+        const add = (map, q) => {
+            if (!q) return;
+            const n = getNormalizedText(q.q);
+            if (n && !map.has(n)) map.set(n, q);
+        };
+        (typeof defaultQuestions !== 'undefined' ? defaultQuestions : []).forEach(q => add(live, q));
+        ((localData && localData.customQuestions) || []).forEach(q => {
+            if (q) add(q.deleted ? trash : live, q);
         });
+        _dupIndexCache = { live: live, trash: trash };
+        return _dupIndexCache;
+    }
+
+    // Same wording is not automatically the same question. Options are compared as a sorted set
+    // so a reordered list still counts as identical, and the correct answer is compared by TEXT
+    // rather than by index for exactly the same reason.
+    function questionShapeOf(q){
+        const opts = (q.opts !== undefined ? q.opts : q.options) || [];
+        const norm = opts.map(o => getNormalizedText(o)).filter(s => s.length);
+        const ansIdx = parseInt(q.ans !== undefined ? q.ans : q.correctAnswerIndex);
+        const ansTxt = (!isNaN(ansIdx) && opts[ansIdx] !== undefined) ? getNormalizedText(opts[ansIdx]) : '';
+        return { opts: norm.sort(), ansTxt: ansTxt };
+    }
+
+    // 'identical' | 'variant' | 'conflict'. The conflict case is the one worth shouting about:
+    // same question, same options, different correct answer means one of the two copies is wrong,
+    // and that is a bigger problem than a repeat.
+    function compareDuplicateShape(a, b){
+        const x = questionShapeOf(a), y = questionShapeOf(b);
+        const sameOpts = x.opts.length === y.opts.length && x.opts.every((v, i) => v === y.opts[i]);
+        if (!sameOpts) return 'variant';
+        if (x.ansTxt && y.ansTxt && x.ansTxt !== y.ansTxt) return 'conflict';
+        return 'identical';
+    }
+
+    function describeDuplicateMatch(match, inTrash, kind){
+        const where = (match && match.sub) ? ` in '${match.sub}'` : '';
+        if (inTrash) return `You deleted this question earlier${where} - tick it only if you want it back.`;
+        const st = match && match.status;
+        const what = st === 'draft' ? `a Draft you already have${where}`
+                   : st === 'revision' ? `an item waiting in Revision${where}`
+                   : `an existing question${where}`;
+        if (kind === 'conflict') return `Same question and same options as ${what}, but the CORRECT ANSWER differs - one of the two is wrong.`;
+        if (kind === 'variant') return `Same wording as ${what}, but the options differ - check which version is right.`;
+        return `Matches ${what}.`;
+    }
+
+    // ---- Bank-wide duplicate scan -----------------------------------------------------------
+    // The import-time and Add-time checks only guard NEW rows. Everything already in the bank was
+    // added while getNormalizedText() deleted every Devanagari character, so Nepali duplicates
+    // could never be detected at all - there is no reason to assume the bank is clean, and until
+    // now there was no way to look.
+    let dupScanGroups = [];
+    let dupScanBuiltInCount = 0;
+
+    // Which copy is worth keeping. Published beats a draft, having an explanation beats not having
+    // one, and a longer option list beats a truncated one - i.e. it prefers the copy that took the
+    // most work, not merely the newest.
+    function dupKeepScore(q) {
+        let s = 0;
+        if (q.status !== 'draft' && q.status !== 'revision') s += 40;
+        const expl = getNormalizedText(q.expl || q.explanation || '');
+        if (expl.length) s += 20 + Math.min(20, Math.floor(expl.length / 20));
+        s += Math.min(10, ((q.opts || q.options || []).filter(o => String(o == null ? '' : o).trim().length).length));
+        if (q.topic) s += 3;
+        return s;
+    }
+
+    function scanBankDuplicates() {
+        const byNorm = new Map();
+        ((localData && localData.customQuestions) || []).forEach(q => {
+            if (!q || q.deleted) return;
+            const n = getNormalizedText(q.q);
+            if (!n) return;
+            let a = byNorm.get(n);
+            if (!a) byNorm.set(n, a = []);
+            a.push(q);
+        });
+
+        const builtIn = new Set();
+        (typeof defaultQuestions !== 'undefined' ? defaultQuestions : []).forEach(q => {
+            const n = getNormalizedText(q && q.q);
+            if (n) builtIn.add(n);
+        });
+
+        dupScanGroups = [];
+        dupScanBuiltInCount = 0;
+        byNorm.forEach((items, n) => {
+            const alsoBuiltIn = builtIn.has(n);
+            // A single custom copy of a built-in question is reported as a count only. Listing it as
+            // a deletable group would propose deleting the user's own work on an assumption.
+            if (items.length < 2) { if (alsoBuiltIn) dupScanBuiltInCount++; return; }
+            items.sort((a, b) => (dupKeepScore(b) - dupKeepScore(a)) ||
+                ((b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)));
+            dupScanGroups.push({ keepId: items[0].id, items: items, builtIn: alsoBuiltIn });
+        });
+        dupScanGroups.sort((a, b) => b.items.length - a.items.length);
+        renderDupScan();
+    }
+    function dupScanGroupHtml(g, gi) {
+        const esc = escapeCreatorHtml;
+        // Indexes, not ids: an id is a float (Date.now() + Math.random()) and round-tripping it
+        // through an onclick attribute is a precision bug waiting to happen.
+        const rows = g.items.map((q, ii) => {
+            const keep = q.id === g.keepId;
+            const st = q.status === 'draft' ? 'Draft' : q.status === 'revision' ? 'Revision' : 'Published';
+            const expl = importDisplayText(q.expl || q.explanation || '');
+            return `<div class="flex items-start justify-between gap-2 p-1.5 rounded ${keep ? 'bg-emerald-50 dark:bg-emerald-950/20' : 'bg-red-50 dark:bg-red-950/10'}">
+                    <span class="text-[9px] leading-snug">
+                        <b>${keep ? '✅ KEEP' : '🗑 remove'}</b> · ${esc(q.sub || '-')} · ${st}
+                        ${expl ? `<br><span class="opacity-70">expl: ${esc(expl.substring(0, 60))}</span>` : '<br><span class="opacity-50">no explanation</span>'}
+                    </span>
+                    ${keep ? '' : `<button onclick="dupScanKeep(${gi},${ii})" class="shrink-0 px-1.5 py-0.5 border rounded text-[9px] font-bold cursor-pointer" style="border-color:var(--border);">Keep this</button>`}
+                </div>`;
+        }).join('');
+        return `<div class="p-2 border rounded-xl space-y-1" style="border-color:var(--border);">
+                <p class="text-[10px] font-bold break-words">${esc(importDisplayText(g.items[0].q).substring(0, 120))}</p>
+                <p class="text-[9px] opacity-70">${g.items.length} copies${g.builtIn ? ' · this question is also in the built-in bank' : ''}</p>
+                ${rows}
+                <button onclick="dupScanDeleteGroup(${gi})" class="w-full py-1 rounded border text-[9px] font-bold text-red-600 cursor-pointer" style="border-color:var(--border);">Delete the other ${g.items.length - 1}</button>
+            </div>`;
+    }
+
+    function renderDupScan() {
+        const panel = document.getElementById('dup-scan-panel');
+        if (!panel) return;
+        panel.classList.remove('hidden');
+
+        const alsoNote = dupScanBuiltInCount
+            ? ` <span class="opacity-75">${dupScanBuiltInCount} of your questions also exist in the built-in bank.</span>` : '';
+        if (!dupScanGroups.length) {
+            panel.innerHTML = `<div class="p-3 border rounded-xl text-[11px] text-center" style="border-color:var(--border);">
+                ✅ No duplicate questions found in your bank.${alsoNote}
+                <button onclick="closeDupScan()" class="ml-1 underline cursor-pointer">Close</button></div>`;
+            return;
+        }
+
+        let extra = 0;
+        dupScanGroups.forEach(g => { extra += g.items.filter(q => q.id !== g.keepId).length; });
+        const parts = [`<div class="p-2 border rounded-xl flex items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/20" style="border-color:var(--border);">
+                <span class="text-[10px] font-bold text-amber-700 dark:text-amber-400">${dupScanGroups.length} duplicate group(s) · ${extra} extra copy(ies)${alsoNote}</span>
+                <span class="flex gap-1.5 shrink-0">
+                    <button onclick="dupScanDeleteAll()" class="px-2 py-1 rounded bg-red-600 text-white text-[10px] font-bold cursor-pointer">Delete ${extra} extra</button>
+                    <button onclick="closeDupScan()" class="px-2 py-1 rounded border text-[10px] font-bold cursor-pointer" style="border-color:var(--border);">Close</button>
+                </span></div>`];
+        dupScanGroups.forEach((g, gi) => parts.push(dupScanGroupHtml(g, gi)));
+        panel.innerHTML = parts.join('');
+    }
+
+    function closeDupScan() {
+        dupScanGroups = [];
+        const panel = document.getElementById('dup-scan-panel');
+        if (panel) { panel.innerHTML = ''; panel.classList.add('hidden'); }
+    }
+
+    function dupScanKeep(gi, ii) {
+        const g = dupScanGroups[gi];
+        if (!g || !g.items[ii]) return;
+        g.keepId = g.items[ii].id;
+        renderDupScan();
+    }
+
+    // Soft delete, the same way deleteCustomQuestion() does it: a hard splice would let the cloud
+    // copy resurrect every row on the next sync.
+    function dupScanRemove(items, keepId) {
+        let removed = 0;
+        items.forEach(q => {
+            if (!q || q.id === keepId || q.deleted) return;
+            q.deleted = true;
+            q.updatedAt = Date.now();
+            removed++;
+        });
+        return removed;
+    }
+
+    function dupScanDeleteGroup(gi) {
+        const g = dupScanGroups[gi];
+        if (!g) return;
+        const n = g.items.filter(q => q.id !== g.keepId).length;
+        if (!n) return;
+        if (!confirm(`Delete ${n} duplicate copy(ies) and keep 1?`)) return;
+        const removed = dupScanRemove(g.items, g.keepId);
+        saveData();
+        showToast(`🗑 Removed ${removed} duplicate copy(ies).`);
+        scanBankDuplicates();
+        scheduleRenderQuestionList(true);
+        updatePracticePage();
+    }
+
+    function dupScanDeleteAll() {
+        let total = 0;
+        dupScanGroups.forEach(g => { total += g.items.filter(q => q.id !== g.keepId).length; });
+        if (!total) return;
+        if (!confirm(`Delete ${total} extra copy(ies) across ${dupScanGroups.length} group(s)?\n\nOne copy of each question is kept - the one marked KEEP.`)) return;
+        let removed = 0;
+        dupScanGroups.forEach(g => { removed += dupScanRemove(g.items, g.keepId); });
+        saveData();
+        showToast(`🗑 Removed ${removed} duplicate copy(ies). One copy of each was kept.`, 5000);
+        scanBankDuplicates();
+        scheduleRenderQuestionList(true);
+        updatePracticePage();
+    }
+
+    // ---- Near-duplicate detection -----------------------------------------------------------
+    // Exact matching cannot see "Which crop fixes nitrogen?" next to "Which crop fixes the
+    // nitrogen?" - one word apart, and in an exam bank that is the same question. getNormalizedText()
+    // strips spaces too, so it cannot be tokenized; this keeps word boundaries.
+    const DUP_TOKEN_SPLIT_RE = (function(){
+        try { return new RegExp('[^\\p{L}\\p{N}\\p{M}]+', 'gu'); }
+        catch(e){ return /[^a-z0-9ऀ-ॿ]+/g; }
+    })();
+
+    // Fillers every MCQ stem shares - they inflate the score without carrying meaning. Negation
+    // words ('not', 'except', 'छैन', 'होइन') are deliberately NOT here: they flip the meaning of a
+    // question and are handled by dupNegation() instead.
+    const DUP_STOPWORDS = new Set(['the','a','an','of','is','are','was','were','which','what','who',
+        'whom','following','in','on','for','to','and','or','by','with','as','at','from','that','this',
+        'it','be','been','can','does','do','did','has','have','had','one','among','below','above',
+        'given','term','called','known','मा','को','का','की','ले','लाई','बाट','हो','हुन','छ','र','कुन',
+        'के','निम्न','मध्ये','तलका','भनिन्छ','गरिन्छ','हुन्छ','कति','अनुसार','सबै']);
+
+    function dupTokens(txt) {
+        let plain = String(txt == null ? '' : txt)
+            .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+            .replace(/<\/?[^>]+(>|$)/g, ' ')
+            .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"').replace(/&#0?39;/g, "'");
+        if (plain.normalize) plain = plain.normalize('NFC');
+        plain = plain.toLowerCase().replace(/[​‌‍⁠﻿]/g, '');
+        const out = new Set();
+        plain.split(DUP_TOKEN_SPLIT_RE).forEach(w => {
+            if (w.length > 1 && !DUP_STOPWORDS.has(w)) out.add(w);
+        });
+        return out;
+    }
+
+    // "Which is NOT a cereal?" and "Which is a cereal?" are one token apart and opposite questions -
+    // the single worst false positive an MCQ similarity score can produce. \b does not behave around
+    // Devanagari, so the two scripts are tested separately. 'no' is excluded on purpose ("no tillage").
+    const DUP_NEG_EN_RE = /\b(not|except|excluding|incorrect|false|wrong|never|neither|nor)\b/;
+    const DUP_NEG_NE_RE = /होइन|छैन|हुँदैन|हुदैन|बाहेक|गलत|नहुने|नपर्ने/;
+    function dupNegation(txt) {
+        const s = String(txt == null ? '' : txt).toLowerCase();
+        return DUP_NEG_EN_RE.test(s) || DUP_NEG_NE_RE.test(s);
+    }
+
+    function makeFuzzyIndex() {
+        return { items: [], sets: [], postings: new Map() };
+    }
+
+    function fuzzyIndexAdd(fx, q, set) {
+        const i = fx.items.length;
+        const s = set || dupTokens(q && q.q);
+        fx.items.push(q);
+        fx.sets.push(s);
+        s.forEach(w => {
+            let a = fx.postings.get(w);
+            if (!a) fx.postings.set(w, a = []);
+            a.push(i);
+        });
+    }
+
+    // Inverted index so a 1000-item bank is not re-tokenised for every imported row. Hangs off the
+    // same cache object as the exact index, so saveData() invalidates both together, and is built
+    // lazily - the Add panel's per-keystroke validation must not pay for it.
+    function getFuzzyIndex() {
+        const cache = buildDuplicateIndex();
+        if (cache.fuzzy) return cache.fuzzy;
+        const fx = makeFuzzyIndex();
+        cache.live.forEach(q => fuzzyIndexAdd(fx, q));   // one representative per exact norm
+        cache.fuzzy = fx;
+        return fx;
+    }
+
+    const DUP_NEAR_THRESHOLD = 0.84;
+
+    function nearestInIndex(fx, set, neg) {
+        if (!fx || !fx.items.length) return null;
+        // A token carried by a large share of the corpus ('crop', 'soil', 'nepal') pulls in every
+        // item as a candidate without narrowing anything, so it is skipped while gathering. The
+        // score itself is still computed over the full token sets.
+        const cutoff = Math.max(20, Math.floor(fx.items.length * 0.15));
+        const candidates = new Map();
+        set.forEach(w => {
+            const a = fx.postings.get(w);
+            if (!a || a.length > cutoff) return;
+            a.forEach(i => candidates.set(i, (candidates.get(i) || 0) + 1));
+        });
+
+        let best = null;
+        candidates.forEach((hits, i) => {
+            const other = fx.sets[i];
+            if (!other || !other.size) return;
+            let inter = 0;
+            set.forEach(w => { if (other.has(w)) inter++; });
+            let dice = (2 * inter) / (set.size + other.size);
+            if (neg !== dupNegation(fx.items[i].q)) dice -= 0.20;   // opposite question, same words
+            if (dice >= DUP_NEAR_THRESHOLD && (!best || dice > best.score)) best = { q: fx.items[i], score: dice, i: i };
+        });
+        return best;
+    }
+
+    // `batchIndex` lets a file be checked against itself as well as against the bank - an
+    // AI-generated set repeating one question with two different wordings is the exact case this
+    // was added for, and the bank index alone cannot see it.
+    function findNearDuplicate(q, batchIndex) {
+        const set = dupTokens(q && q.q);
+        // Under three meaningful words there is nothing to be similar about - a 2-token question
+        // either matches exactly or it does not, and scoring it produces noise.
+        if (set.size < 3) return null;
+        const neg = dupNegation(q && q.q);
+        const inBank = nearestInIndex(getFuzzyIndex(), set, neg);
+        const inBatch = batchIndex ? nearestInIndex(batchIndex, set, neg) : null;
+        if (inBank && (!inBatch || inBank.score >= inBatch.score)) { inBank.where = 'bank'; return inBank; }
+        if (inBatch) { inBatch.where = 'batch'; return inBatch; }
+        return null;
+    }
+
+    function detectDuplicatesAndErrors(questions) {
+        // One shared Map-backed index instead of a per-item scan: now that getNormalizedText() no
+        // longer throws away every Devanagari question, the norms are all non-empty and the old
+        // O(n*m) scan ran for real (a 1000-item bank x 500 imported rows = 500k long compares).
+        const index = buildDuplicateIndex();
 
         let processed = [];
         let batchIdxByNorm = new Map();
+        // Grows as the loop walks the file, so item #40 is compared against items #1-39 but never
+        // against itself. Every row is added, valid or not, which keeps its position in this index
+        // equal to its position in the batch - that is what the message below quotes.
+        const batchFuzzy = makeFuzzyIndex();
 
         questions.forEach((q, idx) => {
             let errors = validateImportQuestion(q);
             let qNorm = getNormalizedText(q.q);
 
-            let isDup = false;
-            let dupSource = "";
+            let dupKind = '';
+            let dupSource = '';
+            let dupScore = 0;
 
             if (qNorm) {
-                if (existingIdxByNorm.has(qNorm)) {
-                    isDup = true;
-                    let matchedQ = allExisting[existingIdxByNorm.get(qNorm)];
-                    dupSource = matchedQ.sub ? `Matches existing item in subject '${matchedQ.sub}'` : "Matches an existing question";
+                let match = index.live.get(qNorm);
+                let inTrash = false;
+                if (!match) { match = index.trash.get(qNorm); inTrash = !!match; }
+
+                if (match) {
+                    dupKind = inTrash ? 'trash' : compareDuplicateShape(q, match);
+                    dupSource = describeDuplicateMatch(match, inTrash, dupKind);
                 } else if (batchIdxByNorm.has(qNorm)) {
-                    isDup = true;
-                    dupSource = `Duplicate of item #${batchIdxByNorm.get(qNorm) + 1} in this import batch`;
+                    dupKind = 'batch';
+                    dupSource = `Duplicate of item #${batchIdxByNorm.get(qNorm) + 1} in this import batch.`;
+                } else {
+                    // A near match is a WARNING and stays ticked. Two genuinely different questions
+                    // can share 90% of their wording, and silently dropping a good question is worse
+                    // than a false alarm the reviewer can read and dismiss.
+                    const near = findNearDuplicate(q, batchFuzzy);
+                    if (near) {
+                        dupKind = 'near';
+                        dupScore = Math.round(near.score * 100);
+                        const snip = importDisplayText(near.q.q).substring(0, 70);
+                        dupSource = near.where === 'batch'
+                            ? `${dupScore}% similar to item #${near.i + 1} in this import batch: "${snip}"`
+                            : `${dupScore}% similar to a question you already have${near.q.sub ? ` in '${near.q.sub}'` : ''}: "${snip}"`;
+                    }
                 }
                 if (!batchIdxByNorm.has(qNorm)) batchIdxByNorm.set(qNorm, idx);
             }
+
+            fuzzyIndexAdd(batchFuzzy, q);
 
             processed.push({
                 ...q,
                 errors: errors,
                 isValid: errors.length === 0,
-                isDuplicate: isDup,
+                isDuplicate: dupKind !== '' && dupKind !== 'near',
+                dupKind: dupKind,
+                dupScore: dupScore,
                 duplicateSource: dupSource
             });
         });
@@ -9668,11 +10035,11 @@ if (state.isMock) {
         let list = document.getElementById('import-preview-list');
         if (!list) return;
 
-        let validCount = 0, dupCount = 0, invalidCount = 0;
+        let validCount = 0, dupCount = 0, invalidCount = 0, nearCount = 0;
         importPreviewQuestions.forEach(q => {
             if (!q.isValid) invalidCount++;
             else if (q.isDuplicate) dupCount++;
-            else validCount++;
+            else { validCount++; if (q.dupKind === 'near') nearCount++; }
         });
 
         const total = importPreviewQuestions.length;
@@ -9684,7 +10051,10 @@ if (state.isMock) {
         }
         list.innerHTML = parts.join('');
 
-        document.getElementById('import-summary-text').textContent = `Total parsed: ${total}`;
+        // A near-duplicate is counted as valid and stays ticked, so it has to be said out loud here
+        // or the reviewer scrolls past a row the app already suspects.
+        document.getElementById('import-summary-text').textContent = `Total parsed: ${total}` +
+            (nearCount ? ` · ${nearCount} likely duplicate${nearCount === 1 ? '' : 's'} (still ticked)` : '');
         document.getElementById('import-stat-valid').textContent = validCount;
         document.getElementById('import-stat-dup').textContent = dupCount;
         document.getElementById('import-stat-invalid').textContent = invalidCount;
@@ -9718,8 +10088,24 @@ if (state.isMock) {
                 borderClass = 'border-l-red-500 border-red-200 bg-red-50/20';
                 statusBadge = `<span class="bg-red-100 text-red-800 text-[9px] font-bold px-1.5 py-0.5 rounded">Invalid</span>`;
             } else if (q.isDuplicate) {
-                borderClass = 'border-l-amber-500 border-amber-200 bg-amber-50/20';
-                statusBadge = `<span class="bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded">Duplicate</span>`;
+                // An answer conflict is not the same class of problem as a plain repeat, so it does
+                // not get the same quiet amber treatment - one of the two copies is factually wrong.
+                const dupLabel = q.dupKind === 'conflict' ? 'Answer Conflict'
+                               : q.dupKind === 'variant'  ? 'Variant'
+                               : q.dupKind === 'trash'    ? 'In Trash'
+                               : 'Duplicate';
+                if (q.dupKind === 'conflict') {
+                    borderClass = 'border-l-rose-500 border-rose-200 bg-rose-50/20';
+                    statusBadge = `<span class="bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded">${dupLabel}</span>`;
+                } else {
+                    borderClass = 'border-l-amber-500 border-amber-200 bg-amber-50/20';
+                    statusBadge = `<span class="bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded">${dupLabel}</span>`;
+                }
+            } else if (q.dupKind === 'near') {
+                // Stays ticked - the tint and the badge are there to make the reviewer look, not to
+                // take the decision away.
+                borderClass = 'border-l-amber-400 border-amber-200 bg-amber-50/10';
+                statusBadge = `<span class="bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded">Likely Dup ${q.dupScore}%</span>`;
             } else {
                 borderClass = 'border-l-emerald-500 border-emerald-200 bg-emerald-50/20';
                 statusBadge = `<span class="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-1.5 py-0.5 rounded">Valid</span>`;
@@ -9733,10 +10119,19 @@ if (state.isMock) {
                     </div>
                 `;
             }
-            if (q.isDuplicate) {
+            if (q.dupKind) {
+                const isConflict = q.dupKind === 'conflict';
+                const tone = isConflict
+                    ? 'bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/30'
+                    : 'bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/30';
+                const head = isConflict ? 'Answer Conflict:'
+                           : q.dupKind === 'trash' ? 'Previously Deleted:'
+                           : q.dupKind === 'variant' ? 'Same Wording:'
+                           : q.dupKind === 'near' ? 'Likely Duplicate:'
+                           : 'Duplicate Question:';
                 errorHtml += `
-                    <div class="bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 p-2 rounded text-[10px] border border-amber-200 dark:border-amber-900/30">
-                        ⚠️ <b>Duplicate Question:</b> ${esc(q.duplicateSource)}
+                    <div class="${tone} p-2 rounded text-[10px] border">
+                        ⚠️ <b>${head}</b> ${esc(q.duplicateSource)}
                     </div>
                 `;
             }
@@ -9847,6 +10242,8 @@ if (state.isMock) {
             delete q.isValid;
             delete q.isDuplicate;
             delete q.duplicateSource;
+            delete q.dupKind;
+            delete q.dupScore;
             delete q._src;
             delete q._warn;
         });

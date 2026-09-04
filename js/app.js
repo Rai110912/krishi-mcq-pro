@@ -179,6 +179,7 @@ async function loadStaticQuestions() {
     let importPreviewQuestions=[];
     let importSelectedIds=[];
     let importDuplicates=[];
+    let importPreviewLimit=150;   // rows drawn at once; "Show all" lifts it (see renderImportPreview)
     let currentCreatorTab='add';
 
     let state={
@@ -7851,7 +7852,12 @@ if (state.isMock) {
             showToast('ℹ️ No Q/A format detected — built fill-in-the-blank drafts from the text instead.', 4000);
         }
 
-        let normalized = parsed.map(raw => normalizeQuestion(raw));
+        let normalized = parsed.map(raw => {
+            let n = normalizeQuestion(raw);
+            if (raw && raw._src) n._src = raw._src;   // "TXT line 12" - survives normalizeQuestion
+            return n;
+        });
+        importPreviewLimit = 150;
         importPreviewQuestions = detectDuplicatesAndErrors(normalized);
         
         importSelectedIds = [];
@@ -8075,6 +8081,33 @@ if (state.isMock) {
         document.getElementById('creator-panel-'+tab).classList.remove('hidden');
 
         if(tab==='manage') scheduleRenderQuestionList(true);
+        if(tab==='io'){ renderLastImportBar(); initImportDropZone(); }
+    }
+
+    // Bound lazily from switchCreatorTab because the IO panel exists but is hidden at load, and the
+    // DOMContentLoaded block is far above this point in the file.
+    let importDropZoneBound = false;
+    function initImportDropZone(){
+        const zone = document.getElementById('import-drop-zone');
+        if (!zone || importDropZoneBound) return;
+        importDropZoneBound = true;
+
+        const stop = e => { e.preventDefault(); e.stopPropagation(); };
+        ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => {
+            stop(e);
+            zone.style.borderColor = '#7c3aed';
+            zone.classList.add('bg-violet-50', 'dark:bg-violet-950/20');
+        }));
+        const clear = () => {
+            zone.style.borderColor = 'var(--border)';
+            zone.classList.remove('bg-violet-50', 'dark:bg-violet-950/20');
+        };
+        ['dragleave','dragend'].forEach(ev => zone.addEventListener(ev, e => { stop(e); clear(); }));
+        zone.addEventListener('drop', e => {
+            stop(e); clear();
+            const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+            if (files.length) importFileList(files);
+        });
     }
 
     function updateOptionCount(){
@@ -8653,7 +8686,40 @@ if (state.isMock) {
     })();
 
     // ==================== CREATOR FILE HANDLERS (IO) ====================
-    function parseCSV(text) {
+    // A CSV saved by Excel outside the US uses ';' as the separator, and text copied out of a
+    // spreadsheet is tab-separated. Both used to collapse into a single column per row, so every
+    // row failed with "Must have at least 2 non-empty options" and the file looked corrupt.
+    function detectCsvDelimiter(text) {
+        const sample = String(text || '').split(/\r?\n/).filter(l => l.trim().length).slice(0, 12);
+        if (!sample.length) return ',';
+        let best = ',', bestScore = -1;
+        [',', ';', '\t', '|'].forEach(d => {
+            const counts = sample.map(l => parseCsvLineCount(l, d));
+            const max = Math.max.apply(null, counts);
+            if (max < 2) return;
+            // reward many columns, punish rows that disagree about how many there are
+            const spread = counts.filter(c => c !== counts[0]).length;
+            const score = max * 2 - spread * 3;
+            if (score > bestScore) { bestScore = score; best = d; }
+        });
+        return best;
+    }
+
+    // Counts delimiters outside quotes only, so "Rice, wheat" stays one cell while scoring.
+    function parseCsvLineCount(line, delim) {
+        let n = 1, inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (c === '"') {
+                if (inQuotes && line[i + 1] === '"') i++;
+                else inQuotes = !inQuotes;
+            } else if (c === delim && !inQuotes) n++;
+        }
+        return n;
+    }
+
+    function parseCSV(text, delim) {
+        const sep = delim || ',';
         let lines = [];
         let row = [""];
         let inQuotes = false;
@@ -8667,7 +8733,7 @@ if (state.isMock) {
                 } else {
                     inQuotes = !inQuotes;
                 }
-            } else if (c === ',' && !inQuotes) {
+            } else if (c === sep && !inQuotes) {
                 row.push("");
             } else if ((c === '\r' || c === '\n') && !inQuotes) {
                 if (c === '\r' && next === '\n') {
@@ -8950,6 +9016,13 @@ if (state.isMock) {
                 return Date.now();
             })(),
 
+            // Import provenance. This must be carried through here, not only stamped at import
+            // time: saveData() re-runs normalizeQuestion() over every customQuestion, so any key
+            // this function does not copy is erased on the very next save - which would leave
+            // "Undo last import" with nothing to match on.
+            importBatchId: raw.importBatchId || undefined,
+            importedAt: raw.importedAt || undefined,
+
             // Dual formats to maintain absolute safety with external format requests
             question: q,
             options: opts,
@@ -8961,17 +9034,96 @@ if (state.isMock) {
         };
     }
 
+    const CSV_ANS_TOKEN_RE = /^(?:[A-Ea-e][.)]?|[कखगघ][.)]?|[0-5])$/;
+
+    function csvKnownSubjectSet(){
+        const s = new Set(['agronomy', 'soil science', 'horticulture', 'plant pathology', 'general']);
+        try { (getAllSubjects() || []).forEach(x => s.add(String(x).trim().toLowerCase())); } catch(e){}
+        return s;
+    }
+
+    // Headerless CSVs wider than the canonical 6 columns used to be guessed with
+    //   isOptE = cols[5].length > 4 || (isNaN(parseInt(cols[5])) && cols[5].length > 1)
+    // which read the row  Q,A,B,C,D,Agronomy,2  as five options with "Agronomy" as option E and
+    // the answer one column too far right - a silently wrong correct answer, no error shown
+    // (verified). Score the three layouts that actually occur, over a sample of rows, and admit it
+    // when the two best are tied instead of picking one quietly.
+    function pickHeaderlessCsvLayout(rows){
+        const LAYOUTS = [
+            { name: 'L5',  opts: [1,2,3,4,5], ans: 6, sub: 7, expl: 8 },
+            { name: 'L4S', opts: [1,2,3,4],   ans: 5, sub: 6, expl: 7 },
+            { name: 'L4R', opts: [1,2,3,4],   ans: 6, sub: 5, expl: 7 }
+        ];
+        const known = csvKnownSubjectSet();
+        const sample = rows.filter(r => r.length >= 7).slice(0, 25);
+        if (!sample.length) return { layout: LAYOUTS[1], confident: true };
+
+        const scored = LAYOUTS.map(L => {
+            let score = 0;
+            sample.forEach(cols => {
+                const cell = i => (cols[i] === undefined ? '' : cols[i]);
+                const opts = L.opts.map(cell);
+                const ansCell = cell(L.ans), subCell = cell(L.sub);
+
+                if (CSV_ANS_TOKEN_RE.test(ansCell)) score += 3;
+                else if (normalizeCorrectAnswer(ansCell, opts) !== -1) score += 1;
+                else score -= 3;
+
+                if (known.has(subCell.toLowerCase())) score += 2;
+                else if (CSV_ANS_TOKEN_RE.test(subCell)) score -= 2;   // "B" is not a subject
+                else if (subCell.length >= 3 && !/\d/.test(subCell)) score += 1;
+
+                if (L.name === 'L5') {
+                    const optE = opts[4] || '';
+                    if (known.has(optE.toLowerCase())) score -= 3;     // a subject is not an option
+                    else if (optE.length) score += 1;
+                }
+            });
+            return { L: L, score: score };
+        });
+
+        // A subject repeats down the file; an option almost never does. When column 5 holds the same
+        // value on several rows while the real option columns keep changing, it is a subject column
+        // and this row is [q, A, B, C, D, subject, answer]. Without this, an UNKNOWN subject name
+        // ("ZZNewSubject") left L5 and L4R tied and the subject was read as option E again - the very
+        // bug this function exists to remove, just for subjects not yet in the list.
+        if (sample.length >= 3) {
+            const col5 = sample.map(c => String(c[5] === undefined ? '' : c[5]).trim().toLowerCase());
+            const col2 = sample.map(c => String(c[2] === undefined ? '' : c[2]).trim().toLowerCase());
+            const uniq = a => new Set(a.filter(v => v.length)).size;
+            const col5Repeats = uniq(col5) > 0 && uniq(col5) <= Math.max(1, Math.floor(sample.length / 3));
+            const optsVary = uniq(col2) > uniq(col5);
+            if (col5Repeats && optsVary) {
+                const hit = scored.find(s => s.L.name === 'L4R');
+                if (hit) hit.score += 4;
+            }
+        }
+
+        scored.sort((a, b) => b.score - a.score);
+
+        return { layout: scored[0].L, confident: scored[0].score > scored[1].score };
+    }
+
     function parseCSVQuestions(text) {
-        let rows = parseCSV(text);
+        let rows = parseCSV(text, detectCsvDelimiter(text));
         if (rows.length === 0) return [];
 
         let questions = [];
         let firstRow = rows[0];
 
-        let isHeader = firstRow.some(col => {
+        // A single loose match used to be enough, so a headerless file whose FIRST QUESTION happened
+        // to contain the word "question" ("Which question type is...?") lost that whole row - it was
+        // eaten as a header, silently, with no count mismatch to notice. A real header row names
+        // several columns, so require two hits unless one cell is exactly a header name.
+        const HEADER_EXACT = ['question','q','subject','sub','category','explanation','expl','topic','marks','status','answer','correct index','correct answer','difficulty'];
+        let headerHits = 0, headerExact = false;
+        firstRow.forEach(col => {
             let cl = col.toLowerCase().trim();
-            return cl.includes("question") || cl === "q" || cl.includes("option") || cl === "subject" || cl === "sub" || cl.includes("correct") || cl.includes("answer") || cl === "explanation" || cl === "expl";
+            if (HEADER_EXACT.indexOf(cl) !== -1 || /^option\s*[a-e]$/.test(cl)) { headerExact = true; headerHits++; return; }
+            if (cl.includes("question") || cl.includes("option") || cl.includes("correct") ||
+                cl.includes("answer") || cl === "expl") headerHits++;
         });
+        let isHeader = headerExact || headerHits >= 2;
 
         let colMap = { q: -1, opts: [], ans: -1, sub: -1, expl: -1, topic: -1, difficulty: -1, marks: -1, status: -1 };
 
@@ -9009,11 +9161,12 @@ if (state.isMock) {
         }
 
         let startRow = isHeader ? 1 : 0;
+        let headerless = isHeader ? null : pickHeaderlessCsvLayout(rows);
         for (let i = startRow; i < rows.length; i++) {
             let cols = rows[i];
             if (cols.length === 0 || (cols.length === 1 && cols[0] === "")) continue;
 
-            let raw = {};
+            let raw = { _src: 'CSV row ' + (i + 1) };
             if (isHeader) {
                 if (colMap.q !== -1) raw.q = cols[colMap.q];
                 
@@ -9039,17 +9192,13 @@ if (state.isMock) {
                     raw.opts = [cols[1], cols[2], cols[3], cols[4]];
                     raw.ans = cols[5];
                 } else if (cols.length >= 7) {
-                    let isOptE = cols[5].length > 4 || (Number.isNaN(parseInt(cols[5])) && cols[5].length > 1);
-                    if (isOptE) {
-                        raw.opts = [cols[1], cols[2], cols[3], cols[4], cols[5]];
-                        raw.ans = cols[6];
-                        if (cols.length >= 8) raw.sub = cols[7];
-                        if (cols.length >= 9) raw.expl = cols[8];
-                    } else {
-                        raw.opts = [cols[1], cols[2], cols[3], cols[4]];
-                        raw.ans = cols[5];
-                        raw.sub = cols[6];
-                        if (cols.length >= 8) raw.expl = cols[7];
+                    const L = headerless.layout;
+                    raw.opts = L.opts.map(ci => (cols[ci] === undefined ? '' : cols[ci]));
+                    raw.ans = cols[L.ans];
+                    if (cols[L.sub] !== undefined && cols[L.sub] !== '') raw.sub = cols[L.sub];
+                    if (cols[L.expl] !== undefined && cols[L.expl] !== '') raw.expl = cols[L.expl];
+                    if (!headerless.confident) {
+                        raw._warn = 'No header row — column layout was guessed. Check the correct answer.';
                     }
                 } else if (cols.length === 5) {
                     raw.opts = [cols[1], cols[2], cols[3]];
@@ -9064,17 +9213,85 @@ if (state.isMock) {
         return questions;
     }
 
+    // Label lines used to be sliced with hand-counted offsets. 'अङ्क:' is 5 code units but the code
+    // sliced at 4, so the value became ": 5", parseInt() gave NaN and marks silently stayed 1
+    // forever; 'व्याख्या:' is 9 and was sliced at 8, leaving a stray ':' in front of every Nepali
+    // explanation (both verified). One regex with a capture group per field kills the whole class.
+    const TXT_META_FIELDS = [
+        { key: 'sub',        fileLevel: true, labels: ['subject', 'sub', 'category', 'विषय'] },
+        { key: 'topic',      fileLevel: true, labels: ['topic', 'chapter', 'unit', 'शीर्षक', 'अध्याय'] },
+        { key: 'difficulty', fileLevel: true, labels: ['difficulty', 'level', 'diff', 'स्तर'] },
+        { key: 'marks',      fileLevel: true, num: true, labels: ['marks', 'points', 'score', 'अङ्क', 'अंक'] },
+        { key: 'ans',   state: 'other',       labels: ['correct answer', 'सही उत्तर', 'answer', 'correct', 'ans', 'key', 'उत्तर', 'कुन'] },
+        { key: 'expl',  state: 'explanation', labels: ['explanation', 'expl', 'notes', 'व्याख्या', 'विवरण'] }
+    ];
+
+    const TXT_META_RES = TXT_META_FIELDS.map(f => {
+        // longest label first, so 'subject' wins over 'sub' and 'सही उत्तर' over 'उत्तर'
+        const alt = f.labels.slice().sort((a, b) => b.length - a.length)
+            .map(l => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+')).join('|');
+        return { field: f, re: new RegExp('^(?:' + alt + ')\\s*[:ः]\\s*(.*)$', 'i') };
+    });
+
+    // Captures the option label so its style (A / 1 / क) can be tracked - see
+    // txtNumericPrefixIsOption(). Accepts "A.", "A)", "A-" and "(A)" exactly as before.
+    const TXT_OPT_RE = /^(?:\(\s*([A-Ea-e1-5कखगघ])\s*\)|([A-Ea-e1-5कखगघ])\s*[.)\-])\s*/;
+
+    // A numerically-labelled option ("1. Urea") also matches the question-number pattern, and the
+    // question test ran first - so a bank that numbers options 1./2./3./4. instead of A./B./C./D.
+    // was shredded into one question per option. Verified: "1. Rice" and "3. Maize" each started a
+    // new question while "2) Wheat" did not, i.e. the damage was inconsistent too. Decide using the
+    // label style the current question is already using.
+    function txtNumericPrefixIsOption(line, curQ) {
+        if (!curQ) return false;
+        const m = line.match(/^(\d+)[\s.\-]/);
+        if (!m) return false;
+        const n = parseInt(m[1], 10);
+        if (!(n >= 1 && n <= 5)) return false;
+        if (line.indexOf('?') !== -1) return false;                    // '?' means question
+        if (curQ.optStyle === 'alpha' || curQ.optStyle === 'nep') return false;
+        if (curQ.optStyle === 'num') {
+            if (n !== curQ.opts.length + 1) return false;              // must continue 1,2,3,4
+            // The one real ambiguity: question #5 arriving right after four numeric options. An
+            // option E runs about as long as its siblings; a question stem does not.
+            if (curQ.opts.length >= 4) {
+                const longest = curQ.opts.reduce((a, o) => Math.max(a, String(o).length), 0);
+                if (line.length > Math.max(30, longest * 2.5)) return false;
+            }
+            return true;
+        }
+        // no options yet: only "1." straight after a question line opens a numeric option block
+        return n === 1 && curQ.opts.length === 0 && curQ.q.trim().length > 0;
+    }
+
+    // fileDefaults carries Subject:/Topic:/Difficulty:/Marks: lines that appear BEFORE the first
+    // question. They used to be dropped on the floor by `if (curQ)`, which is exactly where a
+    // human puts a file-wide subject.
+    function txtNewQuestion(text, lineNo, fileDefaults) {
+        const d = fileDefaults || {};
+        return {
+            q: text, opts: [], ans: '', expl: '',
+            sub: d.sub || 'General',
+            topic: d.topic || '',
+            difficulty: d.difficulty || 'Medium',
+            marks: d.marks || 1,
+            status: 'published',
+            optStyle: '',
+            _src: 'TXT line ' + lineNo
+        };
+    }
+
     function parseTXTQuestions(text) {
         let lines = text.split(/\r?\n/);
         let questions = [];
         let curQ = null;
+        let fileDefaults = {};
         let parseState = 'question'; // 'question', 'options', 'explanation', 'other'
-        
+
         // Match numbers like 1, 2 or Nepali numbers like १, २ and prefixes like Q:, Question:, प्रश्न:, प्र.
         const qNumRegex = /^(?:[qQ]uestion|[qQ])\s*[:.)-]?\s*\d+|^\d+[\s.-]+[.)-]?|^[१२३४५६७८९०]+[\s.-]+[.)-]?|^[qQ]\d+[:.)-]?|^(?:प्रश्न|प्र\s*\.?)\s*\d*[:ः.)-]?/;
-        // Match options starting with A-E, 1-5 or Nepali letters क, ख, ग, घ
-        const optRegex = /^(?:[A-Ea-e1-5कखगघ]|[a-eA-E1-5कखगघ])(?:\.|\)|-)\s*|^\(\s*(?:[A-Ea-e1-5कखगघ]|[a-eA-E1-5कखगघ])\s*\)\s*/;
-        
+        const optRegex = TXT_OPT_RE;
+
         function commitCurrent() {
             if (curQ) {
                 curQ.q = curQ.q.trim();
@@ -9083,7 +9300,8 @@ if (state.isMock) {
                 curQ.sub = curQ.sub.trim() || 'General';
                 curQ.topic = curQ.topic.trim();
                 curQ.difficulty = curQ.difficulty.trim() || 'Medium';
-                
+                delete curQ.optStyle;   // parser bookkeeping, not part of the question
+
                 if (curQ.q || curQ.opts.length > 0) {
                     questions.push(curQ);
                 }
@@ -9094,94 +9312,38 @@ if (state.isMock) {
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i].trim();
             if (line.length === 0) continue;
-            
-            let lower = line.toLowerCase();
-            
-            // 1. Metadata attributes
-            if (lower.startsWith('subject:') || lower.startsWith('sub:') || lower.startsWith('विषय:')) {
-                let startIdx = lower.startsWith('subject:') ? 8 : (lower.startsWith('sub:') ? 4 : 5);
-                let val = line.substring(startIdx).trim();
-                if (curQ) curQ.sub = val;
-                continue;
+
+            // 1-3. Metadata / answer / explanation labels, table-driven
+            let metaHit = false;
+            for (let mi = 0; mi < TXT_META_RES.length; mi++) {
+                const m = line.match(TXT_META_RES[mi].re);
+                if (!m) continue;
+                const f = TXT_META_RES[mi].field;
+                const val = f.num ? (parseInt(m[1].trim(), 10) || 1) : m[1].trim();
+                if (curQ) curQ[f.key] = val;
+                else if (f.fileLevel) fileDefaults[f.key] = val;   // applies to every question below
+                if (f.state) parseState = f.state;
+                metaHit = true;
+                break;
             }
-            if (lower.startsWith('topic:') || lower.startsWith('chapter:') || lower.startsWith('शीर्षक:')) {
-                let startIdx = lower.startsWith('topic:') ? 6 : (lower.startsWith('chapter:') ? 8 : 7);
-                let val = line.substring(startIdx).trim();
-                if (curQ) curQ.topic = val;
-                continue;
-            }
-            if (lower.startsWith('difficulty:') || lower.startsWith('level:') || lower.startsWith('स्तर:')) {
-                let startIdx = lower.startsWith('difficulty:') ? 11 : (lower.startsWith('level:') ? 6 : 5);
-                let val = line.substring(startIdx).trim();
-                if (curQ) curQ.difficulty = val;
-                continue;
-            }
-            if (lower.startsWith('marks:') || lower.startsWith('points:') || lower.startsWith('अङ्क:')) {
-                let startIdx = lower.startsWith('marks:') ? 6 : (lower.startsWith('points:') ? 7 : 4);
-                let val = parseInt(line.substring(startIdx).trim()) || 1;
-                if (curQ) curQ.marks = val;
-                continue;
-            }
-            
-            // 2. Correct Answer
-            if (lower.startsWith('answer:') || lower.startsWith('correct:') || lower.startsWith('ans:') || lower.startsWith('key:') ||
-                lower.startsWith('उत्तर:') || lower.startsWith('उत्तरः') || lower.startsWith('सही उत्तर:') || lower.startsWith('सही उत्तरः') ||
-                lower.startsWith('कुन:')) {
-                
-                let startIdx = 0;
-                if (lower.startsWith('answer:')) startIdx = 7;
-                else if (lower.startsWith('correct:')) startIdx = 8;
-                else if (lower.startsWith('ans:')) startIdx = 4;
-                else if (lower.startsWith('key:')) startIdx = 4;
-                else if (lower.startsWith('उत्तर:')) startIdx = 6;
-                else if (lower.startsWith('उत्तरः')) startIdx = 6;
-                else if (lower.startsWith('सही उत्तर:')) startIdx = 10;
-                else if (lower.startsWith('सही उत्तरः')) startIdx = 10;
-                else if (lower.startsWith('कुन:')) startIdx = 4;
-                
-                let val = line.substring(startIdx).trim();
-                if (curQ) curQ.ans = val;
-                parseState = 'other';
-                continue;
-            }
-            
-            // 3. Explanation
-            if (lower.startsWith('explanation:') || lower.startsWith('expl:') || lower.startsWith('व्याख्या:') || lower.startsWith('व्याख्याः') || lower.startsWith('विवरण:')) {
-                let startIdx = 0;
-                if (lower.startsWith('explanation:')) startIdx = 12;
-                else if (lower.startsWith('expl:')) startIdx = 5;
-                else if (lower.startsWith('व्याख्या:')) startIdx = 8;
-                else if (lower.startsWith('व्याख्याः')) startIdx = 8;
-                else if (lower.startsWith('विवरण:')) startIdx = 6;
-                
-                let val = line.substring(startIdx).trim();
-                if (curQ) curQ.expl = val;
-                parseState = 'explanation';
-                continue;
-            }
-            
-            // 4. Check for New Question Start
-            if (qNumRegex.test(line)) {
+            if (metaHit) continue;
+
+            // 4. New question start - unless a bare number is really the next option
+            if (qNumRegex.test(line) && !txtNumericPrefixIsOption(line, curQ)) {
                 commitCurrent();
-                curQ = {
-                    q: line.replace(qNumRegex, '').trim(),
-                    opts: [],
-                    ans: '',
-                    expl: '',
-                    sub: 'General',
-                    topic: '',
-                    difficulty: 'Medium',
-                    marks: 1,
-                    status: 'published'
-                };
+                curQ = txtNewQuestion(line.replace(qNumRegex, '').trim(), i + 1, fileDefaults);
                 parseState = 'question';
                 continue;
             }
-            
-            // 5. Check for Option Line
-            if (optRegex.test(line) && curQ) {
-                let optText = line.replace(optRegex, '').trim();
-                curQ.opts.push(optText);
+
+            // 5. Option line
+            let optM = curQ ? line.match(optRegex) : null;
+            if (optM) {
+                const label = optM[1] || optM[2] || '';
+                if (!curQ.optStyle) {
+                    curQ.optStyle = /[1-5]/.test(label) ? 'num' : (/[A-Ea-e]/.test(label) ? 'alpha' : 'nep');
+                }
+                curQ.opts.push(line.replace(optRegex, '').trim());
                 parseState = 'options';
                 continue;
             }
@@ -9196,17 +9358,7 @@ if (state.isMock) {
                     if (line.includes('?') && !line.match(/^[A-Ea-e1-5कखगघ]/)) {
                         // Fallback new question detector
                         commitCurrent();
-                        curQ = {
-                            q: line,
-                            opts: [],
-                            ans: '',
-                            expl: '',
-                            sub: 'General',
-                            topic: '',
-                            difficulty: 'Medium',
-                            marks: 1,
-                            status: 'published'
-                        };
+                        curQ = txtNewQuestion(line, i + 1, fileDefaults);
                         parseState = 'question';
                     } else if (curQ.opts.length > 0) {
                         curQ.opts[curQ.opts.length - 1] += ' ' + line;
@@ -9218,17 +9370,7 @@ if (state.isMock) {
                     }
                 }
             } else {
-                curQ = {
-                    q: line,
-                    opts: [],
-                    ans: '',
-                    expl: '',
-                    sub: 'General',
-                    topic: '',
-                    difficulty: 'Medium',
-                    marks: 1,
-                    status: 'published'
-                };
+                curQ = txtNewQuestion(line, i + 1, fileDefaults);
                 parseState = 'question';
             }
         }
@@ -9300,47 +9442,66 @@ if (state.isMock) {
         return errors;
     }
 
+    // Was: .replace(/[^a-z0-9]/g, "") - which deleted every Devanagari character, so ANY Nepali
+    // question normalized to "" (verified: "यूरियामा नाइट्रोजन कति प्रतिशत ?" -> ""). Both callers
+    // guard with `if (norm)`, so duplicate detection was silently switched off for the entire
+    // Nepali half of the app - and two unrelated Nepali questions also compared equal. Shared
+    // with validateCreatorEntry() at ~8185, so the Add panel had the same hole.
+    const NORM_STRIP_RE = (function(){
+        // \p{M} keeps Devanagari vowel signs. Dropping them would make "कति" and "कत" hash equal,
+        // and a false duplicate silently un-ticks a legitimate question in the import preview.
+        try { return new RegExp('[^\\p{L}\\p{N}\\p{M}]', 'gu'); }
+        catch(e){ return /[^a-z0-9ऀ-ॿ]/g; }          // no Unicode property escapes
+    })();
+
     function getNormalizedText(txt) {
         if (!txt) return "";
-        let plain = String(txt).replace(/<\/?[^>]+(>|$)/g, ""); // strip HTML tags
-        return plain.toLowerCase().replace(/[^a-z0-9]/g, ""); // strip non-alphanumeric
+        let plain = String(txt)
+            .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+            .replace(/<\/?[^>]+(>|$)/g, " ")           // strip HTML tags
+            .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"').replace(/&#0?39;/g, "'");
+        // NFC: the same Devanagari word typed with a different composition order must hash equal
+        if (plain.normalize) plain = plain.normalize('NFC');
+        return plain.toLowerCase()
+            .replace(/[​-‍⁠﻿]/g, '')   // zero-width joiners = same word
+            .replace(NORM_STRIP_RE, '');
     }
 
     function detectDuplicatesAndErrors(questions) {
         let allExisting = getAllQuestions();
-        let existingNorms = allExisting.map(eq => getNormalizedText(eq.q));
-        
+        // Map instead of two indexOf() scans: now that getNormalizedText() no longer throws away
+        // every Devanagari question, the norms are all non-empty and the old O(n*m) scan ran for
+        // real (a 1000-item bank x 500 imported rows = 500k long-string compares).
+        let existingIdxByNorm = new Map();
+        allExisting.forEach((eq, i) => {
+            let n = getNormalizedText(eq.q);
+            if (n && !existingIdxByNorm.has(n)) existingIdxByNorm.set(n, i);
+        });
+
         let processed = [];
-        let currentBatchNorms = [];
-        
+        let batchIdxByNorm = new Map();
+
         questions.forEach((q, idx) => {
             let errors = validateImportQuestion(q);
             let qNorm = getNormalizedText(q.q);
-            
+
             let isDup = false;
             let dupSource = "";
-            
-            if (qNorm && qNorm.length > 0) {
-                let existingIdx = existingNorms.indexOf(qNorm);
-                if (existingIdx !== -1) {
-                    isDup = true;
-                    let matchedQ = allExisting[existingIdx];
-                    dupSource = matchedQ.sub ? `Matches existing item in subject '${matchedQ.sub}'` : "Matches an existing question";
-                } else {
-                    let batchDupIdx = currentBatchNorms.indexOf(qNorm);
-                    if (batchDupIdx !== -1) {
-                        isDup = true;
-                        dupSource = `Duplicate of item #${batchDupIdx + 1} in this import batch`;
-                    }
-                }
-            }
-            
+
             if (qNorm) {
-                currentBatchNorms.push(qNorm);
-            } else {
-                currentBatchNorms.push("");
+                if (existingIdxByNorm.has(qNorm)) {
+                    isDup = true;
+                    let matchedQ = allExisting[existingIdxByNorm.get(qNorm)];
+                    dupSource = matchedQ.sub ? `Matches existing item in subject '${matchedQ.sub}'` : "Matches an existing question";
+                } else if (batchIdxByNorm.has(qNorm)) {
+                    isDup = true;
+                    dupSource = `Duplicate of item #${batchIdxByNorm.get(qNorm) + 1} in this import batch`;
+                }
+                if (!batchIdxByNorm.has(qNorm)) batchIdxByNorm.set(qNorm, idx);
             }
-            
+
             processed.push({
                 ...q,
                 errors: errors,
@@ -9352,87 +9513,207 @@ if (state.isMock) {
         return processed;
     }
 
-    function importQuestions() {
-        let fileInput = document.getElementById('import-file'); let file = fileInput.files[0];
-        let status = document.getElementById('import-status');
-        if (!file) { status.textContent = '❌ Target file empty!'; return; }
-        
-        let reader = new FileReader();
-        reader.onload = function(e) {
-            let text = e.target.result;
-            let ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-            let rawQuestions = [];
-
-            try {
-                if (ext === '.json') {
-                    rawQuestions = parseJSONQuestions(text);
-                } else if (ext === '.csv') {
-                    rawQuestions = parseCSVQuestions(text);
-                } else if (ext === '.txt') {
-                    rawQuestions = parseTXTQuestions(text);
-                } else {
-                    showToast('Unsupported file format for importer!');
-                    status.textContent = '❌ Unsupported format!';
-                    return;
-                }
-                
-                if (rawQuestions.length === 0) {
-                    status.textContent = '❌ Passed file contains no valid structure!';
-                    showToast('No questions found in file!');
-                    return;
-                }
-
-                // Match fields & normalize structures
-                let normalized = rawQuestions.map(raw => normalizeQuestion(raw));
-                
-                // Identify valid status, issues, and duplicates
-                importPreviewQuestions = detectDuplicatesAndErrors(normalized);
-                
-                // Set default selections: valid non-duplicates only!
-                importSelectedIds = [];
-                importPreviewQuestions.forEach((q, i) => {
-                    if (q.isValid && !q.isDuplicate) {
-                        importSelectedIds.push(i);
-                    }
-                });
-
-                document.getElementById('import-preview-area').classList.remove('hidden');
-                status.textContent = `📋 Parsed ${importPreviewQuestions.length} items successfully!`;
-                
-                renderImportPreview();
-                showToast('Parsing finished! Scroll down to preview.', 3000);
-            } catch (err) {
-                status.textContent = `⚠️ Parsing error: ${err.message}`;
-                showToast('Parsing failed! Check exact error logs.');
-                console.error(err);
-            }
-        };
-        reader.onerror = function() {
-            status.textContent = '⚠️ Read file failure!';
-        };
-        reader.readAsText(file);
+    // Every import entry point - the file picker (now multi-file), the drag-and-drop zone and the
+    // paste box - funnels through importSourceToRaw + runImportPreview so all three behave alike.
+    function importSourceToRaw(text, ext, label) {
+        let raw;
+        if (ext === '.json')     raw = parseJSONQuestions(text);
+        else if (ext === '.csv') raw = parseCSVQuestions(text);
+        else if (ext === '.txt') raw = parseTXTQuestions(text);
+        else throw new Error('Unsupported format: ' + ext);
+        raw = raw || [];
+        raw.forEach((r, i) => {
+            if (!r || typeof r !== 'object') return;
+            if (!r._src) r._src = (ext === '.json' ? 'JSON item ' : 'item ') + (i + 1);
+            if (label) r._src = label + ' · ' + r._src;
+        });
+        return raw;
     }
 
+    // '{' / '[' means JSON. A delimiter that is present on every sampled line means CSV/TSV.
+    // Everything else is treated as plain text, which is also the safest fallback.
+    function detectPastedFormat(text) {
+        const t = String(text || '').replace(/```json/gi, '').replace(/```/g, '').trim();
+        if (!t) return '';
+        if (t[0] === '{' || t[0] === '[') return '.json';
+        const lines = t.split(/\r?\n/).filter(l => l.trim().length).slice(0, 12);
+        if (lines.length) {
+            const d = detectCsvDelimiter(t);
+            // parseCsvLineCount returns the FIELD count, not the separator count.
+            const counts = lines.map(l => parseCsvLineCount(l, d));
+            // 4+ fields on every line is the smallest real row (question + 2 options + answer);
+            // prose does not keep that up line after line. A single pasted line is far more
+            // ambiguous - one sentence can hold three commas - so it must look like a full
+            // question row (6 fields) before it counts as CSV.
+            const need = lines.length === 1 ? 6 : 4;
+            if (Math.min.apply(null, counts) >= need) return '.csv';
+        }
+        return '.txt';
+    }
+
+    // readFileAsText() is not redefined here on purpose: it already exists above (the OCR text
+    // path uses it) and both declarations share one scope, so a copy down here would shadow the
+    // original and quietly drop its String(result || '') coercion.
+
+    // sources: [{ text, ext, label }]
+    function runImportPreview(sources) {
+        let status = document.getElementById('import-status');
+        let rawQuestions = [];
+        try {
+            sources.forEach(s => {
+                rawQuestions = rawQuestions.concat(importSourceToRaw(s.text, s.ext, s.label));
+            });
+        } catch (err) {
+            if (status) status.textContent = `⚠️ Parsing error: ${err.message}`;
+            showToast('Parsing failed! Check exact error logs.');
+            console.error(err);
+            return;
+        }
+
+        if (rawQuestions.length === 0) {
+            if (status) status.textContent = '❌ No valid question structure found!';
+            showToast('No questions found!');
+            return;
+        }
+
+        // Match fields & normalize structures. normalizeQuestion() builds a fresh object and drops
+        // unknown keys, so the source pointer and the layout warning are re-attached afterwards.
+        let normalized = rawQuestions.map((raw, i) => {
+            let n = normalizeQuestion(raw);
+            if (raw && raw._src) n._src = raw._src;
+            if (raw && raw._warn) n._warn = raw._warn;
+            return n;
+        });
+
+        importPreviewLimit = 150;
+        importPreviewQuestions = detectDuplicatesAndErrors(normalized);
+
+        // Set default selections: valid non-duplicates only!
+        importSelectedIds = [];
+        importPreviewQuestions.forEach((q, i) => {
+            if (q.isValid && !q.isDuplicate) importSelectedIds.push(i);
+        });
+
+        document.getElementById('import-preview-area').classList.remove('hidden');
+        const from = sources.length > 1 ? ` from ${sources.length} sources` : '';
+        if (status) status.textContent = `📋 Parsed ${importPreviewQuestions.length} items${from} successfully!`;
+
+        renderImportPreview();
+        showToast('Parsing finished! Scroll down to preview.', 3000);
+    }
+
+    async function importQuestions() {
+        let fileInput = document.getElementById('import-file');
+        let status = document.getElementById('import-status');
+        let files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
+
+        // No file picked? Fall back to the paste box so one button serves both inputs.
+        if (files.length === 0) {
+            let pasteEl = document.getElementById('import-paste');
+            let pasted = pasteEl ? pasteEl.value.trim() : '';
+            if (pasted) return importPastedText();
+            if (status) status.textContent = '❌ Choose a file or paste text first!';
+            return;
+        }
+        return importFileList(files);
+    }
+
+    async function importFileList(files) {
+        let status = document.getElementById('import-status');
+        const ALLOWED = ['.json', '.csv', '.txt'];
+        let sources = [], skipped = [];
+
+        if (status) status.textContent = `⏳ Reading ${files.length} file(s)...`;
+        for (const file of files) {
+            const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+            if (ALLOWED.indexOf(ext) === -1) { skipped.push(file.name); continue; }
+            try {
+                sources.push({ text: await readFileAsText(file), ext: ext, label: file.name });
+            } catch (e) {
+                skipped.push(file.name);
+            }
+        }
+
+        if (sources.length === 0) {
+            if (status) status.textContent = '❌ Unsupported format! Use .json, .csv or .txt';
+            showToast('Unsupported file format for importer!');
+            return;
+        }
+        if (skipped.length) showToast(`⚠️ Skipped ${skipped.length} file(s): ${skipped.join(', ')}`, 4000);
+        runImportPreview(sources);
+    }
+
+    function importPastedText() {
+        let pasteEl = document.getElementById('import-paste');
+        let status = document.getElementById('import-status');
+        let text = pasteEl ? pasteEl.value : '';
+        if (!text.trim()) {
+            if (status) status.textContent = '❌ Paste box is empty!';
+            return;
+        }
+        const ext = detectPastedFormat(text);
+        if (status) status.textContent = `⏳ Detected ${ext.replace('.', '').toUpperCase()} - parsing...`;
+        runImportPreview([{ text: text, ext: ext, label: 'Pasted ' + ext.replace('.', '').toUpperCase() }]);
+    }
+
+    // Rewritten for three defects:
+    //  1. every field was interpolated into innerHTML raw - q.q, each option, q.sub, q.topic,
+    //     q.expl, q.duplicateSource, and even the error strings (which quote the file's own answer
+    //     value). Verified: an imported '<img src=x onerror=...>' became a live element, and the
+    //     app actively promotes sharing exported bundles. Plain text like "pH < 7" also silently
+    //     disappeared from the preview.
+    //  2. `list.innerHTML +=` inside the loop reparsed the entire accumulated list once per item.
+    //  3. no row cap, so a big file built every card before the tab responded at all.
     function renderImportPreview() {
         let list = document.getElementById('import-preview-list');
         if (!list) return;
-        list.innerHTML = '';
-        
-        let validCount = 0;
-        let dupCount = 0;
-        let invalidCount = 0;
 
-        importPreviewQuestions.forEach((q, i) => {
+        let validCount = 0, dupCount = 0, invalidCount = 0;
+        importPreviewQuestions.forEach(q => {
             if (!q.isValid) invalidCount++;
             else if (q.isDuplicate) dupCount++;
             else validCount++;
+        });
 
+        const total = importPreviewQuestions.length;
+        const shown = Math.min(total, importPreviewLimit);
+        const parts = [];
+        for (let i = 0; i < shown; i++) parts.push(importPreviewCardHtml(importPreviewQuestions[i], i));
+        if (shown < total) {
+            parts.push('<button onclick="showAllImportPreview()" class="w-full py-2 border rounded-lg text-[11px] font-bold text-violet-600 bg-violet-50 dark:bg-violet-950/20 hover:bg-violet-100 cursor-pointer" style="border-color:var(--border);">Showing ' + shown + ' of ' + total + ' — Show all</button>');
+        }
+        list.innerHTML = parts.join('');
+
+        document.getElementById('import-summary-text').textContent = `Total parsed: ${total}`;
+        document.getElementById('import-stat-valid').textContent = validCount;
+        document.getElementById('import-stat-dup').textContent = dupCount;
+        document.getElementById('import-stat-invalid').textContent = invalidCount;
+        document.getElementById('import-selected-count').textContent = importSelectedIds.length;
+    }
+
+    function showAllImportPreview(){
+        importPreviewLimit = Infinity;
+        renderImportPreview();
+    }
+
+    // creatorPlainText() strips anything between '<' and '>', which is right for Quill HTML but
+    // wrong for a text file: "soil pH < 7 means low pH?" rendered as "soil pH ?" in the preview -
+    // the reviewer approved a question they could not actually read. Only strip when the string
+    // really carries markup (an app JSON export can), otherwise show the stored text verbatim.
+    const IMPORT_HTML_TAG_RE = /<\/?(?:p|br|b|i|u|strong|em|span|div|ul|ol|li|sub|sup|img|a|h[1-6]|table|tbody|tr|td|th|font|pre|code)\b[^>]*>/i;
+    function importDisplayText(txt) {
+        const s = String(txt == null ? '' : txt);
+        return IMPORT_HTML_TAG_RE.test(s) ? creatorPlainText(s) : s.replace(/\s+/g, ' ').trim();
+    }
+
+    function importPreviewCardHtml(q, i) {
+            const esc = escapeCreatorHtml;
             let isChecked = importSelectedIds.includes(i) ? 'checked' : '';
-            
+
             // Generate visual border, badge
             let borderClass = 'border-gray-200';
             let statusBadge = '';
-            
+
             if (!q.isValid) {
                 borderClass = 'border-l-red-500 border-red-200 bg-red-50/20';
                 statusBadge = `<span class="bg-red-100 text-red-800 text-[9px] font-bold px-1.5 py-0.5 rounded">Invalid</span>`;
@@ -9448,19 +9729,26 @@ if (state.isMock) {
             if (q.errors && q.errors.length > 0) {
                 errorHtml += `
                     <div class="bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 p-2 rounded text-[10px] space-y-0.5 border border-red-200 dark:border-red-900/50">
-                        ${q.errors.map(err => `<div>❌ ${err}</div>`).join('')}
+                        ${q.errors.map(err => `<div>❌ ${esc(err)}</div>`).join('')}
                     </div>
                 `;
             }
             if (q.isDuplicate) {
                 errorHtml += `
                     <div class="bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 p-2 rounded text-[10px] border border-amber-200 dark:border-amber-900/30">
-                        ⚠️ <b>Duplicate Question:</b> ${q.duplicateSource}
+                        ⚠️ <b>Duplicate Question:</b> ${esc(q.duplicateSource)}
+                    </div>
+                `;
+            }
+            if (q._warn) {
+                errorHtml += `
+                    <div class="bg-orange-50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 p-2 rounded text-[10px] border border-orange-200 dark:border-orange-900/30">
+                        ⚠️ ${esc(q._warn)}
                     </div>
                 `;
             }
 
-            list.innerHTML += `
+            return `
                 <div class="p-3 border rounded-xl space-y-2.5 bg-white dark:bg-slate-800 border-l-4 ${borderClass}" style="border-color:var(--border);">
                     <div class="flex justify-between items-start gap-2">
                         <label class="flex items-center gap-2 cursor-pointer">
@@ -9468,42 +9756,34 @@ if (state.isMock) {
                             <span class="font-bold text-gray-500">#${i + 1}</span>
                         </label>
                         <div class="flex gap-1.5 items-center">
+                            ${q._src ? `<span class="text-[9px] font-mono text-gray-400">${esc(q._src)}</span>` : ''}
                             ${statusBadge}
                             <button onclick="openEditImportModal(${i})" class="text-blue-500 hover:text-blue-600 bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 rounded text-[10px] font-semibold border border-blue-100 dark:border-blue-900/50 cursor-pointer">Edit</button>
                         </div>
                     </div>
-                    
+
                     <div>
-                        <p class="font-medium text-xs break-words text-[var(--text)]">${q.q}</p>
+                        <p class="font-medium text-xs break-words text-[var(--text)]">${esc(importDisplayText(q.q))}</p>
                     </div>
 
                     <div class="grid grid-cols-2 gap-1.5 text-[10px] text-gray-500">
                         ${q.opts.map((opt, oIdx) => {
                             let isCorrect = oIdx === q.ans;
                             let cls = isCorrect ? 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/20 rounded px-1.5 py-0.5 border border-emerald-200/50' : 'px-1.5 py-0.5';
-                            return `<div class="${cls}"><b>${String.fromCharCode(65+oIdx)}:</b> ${opt || '<span class="text-red-400 font-normal">Empty</span>'}</div>`;
+                            return `<div class="${cls}"><b>${String.fromCharCode(65+oIdx)}:</b> ${opt ? esc(importDisplayText(opt)) : '<span class="text-red-400 font-normal">Empty</span>'}</div>`;
                         }).join('')}
                     </div>
 
                     ${errorHtml}
 
                     <div class="text-[9px] text-gray-400 flex flex-wrap gap-x-2 gap-y-1">
-                        <span><b>Subject:</b> ${q.sub || 'General'}</span>
-                        ${q.topic ? `<span>• <b>Topic:</b> ${q.topic}</span>` : ''}
-                        <span>• <b>Diff:</b> ${q.difficulty || 'Medium'}</span>
-                        ${q.expl ? `<span>• <b>Expl:</b> ${q.expl.substring(0, 30)}...</span>` : ''}
+                        <span><b>Subject:</b> ${esc(q.sub || 'General')}</span>
+                        ${q.topic ? `<span>• <b>Topic:</b> ${esc(q.topic)}</span>` : ''}
+                        <span>• <b>Diff:</b> ${esc(q.difficulty || 'Medium')}</span>
+                        ${q.expl ? `<span>• <b>Expl:</b> ${esc(importDisplayText(q.expl).substring(0, 30))}...</span>` : ''}
                     </div>
                 </div>
             `;
-        });
-
-        // Set counters
-        document.getElementById('import-summary-text').textContent = `Total parsed: ${importPreviewQuestions.length}`;
-        document.getElementById('import-stat-valid').textContent = validCount;
-        document.getElementById('import-stat-dup').textContent = dupCount;
-        document.getElementById('import-stat-invalid').textContent = invalidCount;
-        
-        document.getElementById('import-selected-count').textContent = importSelectedIds.length;
     }
 
     function toggleImportSelect(idx){
@@ -9548,19 +9828,49 @@ if (state.isMock) {
             }
         }
 
-        final.forEach((q, i) => { 
-            q.id = Date.now() + Math.random() + i; 
+        // A batch stamp lets "Undo last import" find exactly these rows later, even after the user
+        // has imported something else, edited items, or reloaded the app.
+        const batchId = 'imp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        const stamp = Date.now();
+        const publishEl = document.getElementById('import-as-published');
+        const asDraft = publishEl ? !publishEl.checked : false;
+        const newIds = [];
+
+        final.forEach((q, i) => {
+            q.id = Date.now() + Math.random() + i;
+            newIds.push(q.id);
+            q.importBatchId = batchId;
+            q.importedAt = stamp;
+            if (asDraft) q.status = 'draft';
             // Clean up UI-only validation helper variables before storing
             delete q.errors;
             delete q.isValid;
             delete q.isDuplicate;
             delete q.duplicateSource;
+            delete q._src;
+            delete q._warn;
         });
 
         localData.customQuestions = localData.customQuestions.concat(final);
         saveData();
         cancelImportPreview();
-        showToast(`✅ Loaded ${final.length} custom questions successfully!`);
+
+        // saveData() silently rewrites status to 'revision' for anything that fails validation, and
+        // getAllQuestions() then hides those rows. Reporting "Loaded N successfully" without saying
+        // so is how questions used to disappear straight after a green success toast.
+        const idSet = new Set(newIds);
+        let demoted = 0;
+        (localData.customQuestions || []).forEach(q => {
+            if (q && idSet.has(q.id) && q.status === 'revision') demoted++;
+        });
+
+        let msg = `✅ Loaded ${final.length} custom question${final.length === 1 ? '' : 's'}!`;
+        if (asDraft) {
+            msg += ` Saved as drafts - publish them from Manage.`;
+        } else if (demoted > 0) {
+            msg += ` ⚠️ ${demoted} need${demoted === 1 ? 's' : ''} fixing (moved to Revision) and will not appear in practice yet.`;
+        }
+        showToast(msg, demoted > 0 || asDraft ? 6000 : 3000);
         
         // Reset file input
         let fileInput = document.getElementById('import-file');
@@ -9570,13 +9880,65 @@ if (state.isMock) {
         
         // Reload details
         updatePracticePage();
+        renderLastImportBar();
+    }
+
+    // The batch is derived from the questions themselves rather than a separate saved pointer, so it
+    // stays truthful after an undo, a cloud sync, or a restore from backup.
+    function findLastImportBatch() {
+        const all = localData.customQuestions || [];
+        let bestId = null, bestAt = -1;
+        all.forEach(q => {
+            if (!q || !q.importBatchId || q.deleted) return;
+            const at = Number(q.importedAt) || 0;
+            if (at > bestAt) { bestAt = at; bestId = q.importBatchId; }
+        });
+        if (!bestId) return null;
+        const items = all.filter(q => q && q.importBatchId === bestId && !q.deleted);
+        return { id: bestId, at: bestAt, count: items.length };
+    }
+
+    function renderLastImportBar() {
+        const bar = document.getElementById('last-import-bar');
+        if (!bar) return;
+        const b = findLastImportBatch();
+        if (!b || b.count === 0) { bar.classList.add('hidden'); return; }
+        const when = b.at > 0 ? new Date(b.at).toLocaleString() : '';
+        const label = document.getElementById('last-import-text');
+        if (label) label.textContent = `Last import: ${b.count} question${b.count === 1 ? '' : 's'}${when ? ' · ' + when : ''}`;
+        bar.classList.remove('hidden');
+    }
+
+    function undoLastImport() {
+        const b = findLastImportBatch();
+        if (!b || b.count === 0) { showToast('⚠️ No recent import to undo!'); return; }
+        const when = b.at > 0 ? new Date(b.at).toLocaleString() : 'an earlier session';
+        if (!confirm(`Remove the ${b.count} question(s) imported on ${when}?\n\nOnly that batch is removed. Any edits you made to them are removed too.`)) return;
+
+        // Soft delete, exactly like deleteCustomQuestion: a hard splice would let the cloud copy
+        // resurrect every row on the next sync.
+        let removed = 0;
+        (localData.customQuestions || []).forEach(q => {
+            if (q && q.importBatchId === b.id && !q.deleted) {
+                q.deleted = true;
+                q.updatedAt = Date.now();
+                removed++;
+            }
+        });
+        saveData();
+        renderLastImportBar();
+        if (typeof scheduleRenderQuestionList === 'function') scheduleRenderQuestionList(true);
+        updatePracticePage();
+        showToast(`↩️ Removed ${removed} imported question${removed === 1 ? '' : 's'}.`, 4000);
     }
 
     function cancelImportPreview(){
         document.getElementById('import-preview-area').classList.add('hidden');
-        importPreviewQuestions=[]; importSelectedIds=[];
+        importPreviewQuestions=[]; importSelectedIds=[]; importPreviewLimit=150;
         let fileInput = document.getElementById('import-file');
         if (fileInput) fileInput.value = '';
+        let pasteEl = document.getElementById('import-paste');
+        if (pasteEl) pasteEl.value = '';
         let status = document.getElementById('import-status');
         if (status) status.textContent = '';
     }
@@ -9642,11 +10004,15 @@ function updateEditImportAnsDropdown(selectedIdx) {
         }
     }
     
+    // Built with one assignment and escaped text: an option like 'pH < 7' used to truncate the
+    // <option> and silently vanish from the dropdown.
+    let ansHtml = '';
     for (let i = 0; i < count; i++) {
         let val = document.getElementById('edit-import-o' + i).value.trim() || `Option ${optLetters[i]}`;
         let selected = (i === selectedIdx) ? 'selected' : '';
-        ansSelect.innerHTML += `<option value="${i}" ${selected}>Option ${optLetters[i]} (${val.substring(0, 15)})</option>`;
+        ansHtml += `<option value="${i}" ${selected}>Option ${optLetters[i]} (${escapeCreatorHtml(val.substring(0, 15))})</option>`;
     }
+    ansSelect.innerHTML = ansHtml;
 }
 
 function openEditImportModal(idx) {
@@ -9678,12 +10044,20 @@ function openEditImportModal(idx) {
 
     let subSelect = document.getElementById('edit-import-sub');
     if (subSelect) {
-        subSelect.innerHTML = '';
-        let subjects = getAllSubjects();
+        let subjects = getAllSubjects() || [];
+        // The file's own subject must be an option. Without this the browser falls back to the
+        // first entry in the list, so simply opening this modal on an imported question whose
+        // subject is new rewrote it to 'Agronomy' the moment Save was pressed - silently.
+        let own = (q.sub || '').trim();
+        if (own && !subjects.some(s => String(s).toLowerCase() === own.toLowerCase())) {
+            subjects = [own].concat(subjects);
+        }
+        let subHtml = '';
         subjects.forEach(s => {
-            let selected = (s.toLowerCase() === (q.sub || '').toLowerCase()) ? 'selected' : '';
-            subSelect.innerHTML += `<option value="${s}" ${selected}>${s}</option>`;
+            let selected = (String(s).toLowerCase() === own.toLowerCase()) ? 'selected' : '';
+            subHtml += `<option value="${escapeCreatorHtml(s)}" ${selected}>${escapeCreatorHtml(s)}</option>`;
         });
+        subSelect.innerHTML = subHtml;
     }
 
     document.getElementById('edit-import-expl').value = q.expl || '';
@@ -9739,7 +10113,12 @@ function openEditImportModal(idx) {
             explanation: expl,
             subject: sub,
             tags: importPreviewQuestions[idx].tags || [],
-            source: importPreviewQuestions[idx].source || ""
+            source: importPreviewQuestions[idx].source || "",
+
+            // Keep the source pointer ("CSV row 12" / "TXT line 40") through an edit, otherwise the
+            // row number disappears from the card the moment it is corrected. _warn is deliberately
+            // NOT carried over: the user has just reviewed this item, so the guess warning is spent.
+            _src: importPreviewQuestions[idx]._src || ''
         };
 
         // Re-calculate validation statuses and duplicates for the entire list (since duplicates are dependent on list contents)

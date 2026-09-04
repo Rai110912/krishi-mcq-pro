@@ -625,7 +625,11 @@ class KrishiSM2Engine {
         } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.save', e); }
     }
 
-    static recordAnswer(questionId, isCorrect, timeSpentSec = 10) {
+    // opts.maxGrade caps how much credit an answer can earn. A self-rated flashcard swipe is
+    // weaker evidence than a graded answer - the student said "I know this" without ever picking
+    // an option - so the swiper passes maxGrade:2 and a 2-second swipe can no longer buy the full
+    // Easy grade (stability 5.8 => a 6 day first interval) that a real answer earns.
+    static recordAnswer(questionId, isCorrect, timeSpentSec = 10, opts = null) {
         if (!questionId) return;
         const data = this._getData();
         const now = Date.now();
@@ -662,6 +666,13 @@ class KrishiSM2Engine {
             if (timeSpentSec <= 5) { grade = 3; feedback = "🚀 Easy"; }
             else if (timeSpentSec <= 15) { grade = 2; feedback = "✅ Good"; }
             else { grade = 1; feedback = "⏳ Hard"; }
+        }
+
+        // A wrong answer is already grade 0, so this only ever trims a passing grade.
+        let capGrade = (opts && typeof opts.maxGrade === 'number') ? opts.maxGrade : null;
+        if (capGrade !== null && grade > capGrade) {
+            grade = Math.max(0, capGrade);
+            feedback = (grade === 3) ? "🚀 Easy" : (grade === 2) ? "✅ Good" : (grade === 1) ? "⏳ Hard" : feedback;
         }
 
         // --- FSRS DSR Math ---
@@ -750,6 +761,16 @@ class KrishiSM2Engine {
             // is no longer force-shown today via a sticky status==='due' flag.
             return rec.nextReview && rec.nextReview <= now;
         });
+    }
+
+    // The mirror of getDueQuestions: cards that have never been graded at all. getDueQuestions
+    // drops exactly these (`if (!rec) return false`), so before this existed a freshly imported
+    // bank was invisible to the scheduler - it could only enter the rotation by luck, when a
+    // random quiz happened to serve it. This is the first-exposure queue the swiper draws from.
+    static getNewQuestions(allQuestions) {
+        if (!Array.isArray(allQuestions) || allQuestions.length === 0) return [];
+        const data = this._getData();
+        return allQuestions.filter(q => q && !data[q.id || q.q]);
     }
 
     static getStats() {

@@ -116,3 +116,32 @@ test('getStats reports due/mastered counts', () => {
     assert.ok(stats.masteredCount >= 1);
     assert.ok(stats.dueCount >= 1);
 });
+
+// The flashcard swiper self-rates ("I know this") without ever picking an option, so it must not
+// earn the same credit as a graded answer.
+test('maxGrade caps a self-rated swipe at Good instead of Easy', () => {
+    const fb = Engine.recordAnswer('q-selfrated', true, 2, { maxGrade: 2 });
+    assert.match(fb, /Good/);
+    assert.strictEqual(recordOf('q-selfrated').interval, 2);   // Good on a new card => stability 2.4
+
+    // The identical 2 second answer without the cap still earns the full Easy interval.
+    const fb2 = Engine.recordAnswer('q-uncapped', true, 2);
+    assert.match(fb2, /Easy/);
+    assert.strictEqual(recordOf('q-uncapped').interval, 6);
+
+    // A wrong answer is already grade 0, so the cap can only ever trim, never lift.
+    Engine.recordAnswer('q-capped-wrong', false, 2, { maxGrade: 2 });
+    assert.strictEqual(recordOf('q-capped-wrong').status, 'due');
+});
+
+// Runs last: getDueQuestions() prunes every record whose id is missing from the pool it is given.
+test('getNewQuestions returns the never-graded cards getDueQuestions cannot reach', () => {
+    seed('seen-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+    const pool = [{ id: 'seen-1' }, { id: 'never-1' }, { id: 'never-2' }];
+
+    assert.deepStrictEqual(Engine.getNewQuestions(pool).map(q => q.id), ['never-1', 'never-2']);
+    assert.deepStrictEqual(Engine.getNewQuestions([]), []);
+
+    // The gap this closes: a card with no record is invisible to the scheduler.
+    assert.strictEqual(Engine.getDueQuestions(pool).some(q => q.id === 'never-1'), false);
+});

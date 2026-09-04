@@ -15091,6 +15091,18 @@ document.querySelectorAll('button').forEach(btn => {
             let dailyT = getDailyTarget() || 50;
             elDailyCount.textContent = `${solved} / ${dailyT} solved today`;
         }
+
+        // The swiper's own numbers, kept out of the solved/accuracy counters on purpose: cards seen
+        // is effort, not a score. "0 new" is worth saying too - that is when Spaced Review is next.
+        let elFlash = document.getElementById('smart-flashcard-count-lbl');
+        if (elFlash && typeof window.getFlashcardCounts === 'function') {
+            let fc = window.getFlashcardCounts('all');
+            let seenToday = (((localData.stats || {}).flashcardDaily || {})[getLocalDateString()] || {}).seen || 0;
+            let tail = seenToday ? ` · ${seenToday} swiped today` : '';
+            elFlash.textContent = fc.newCount
+                ? `${fc.newCount} new cards waiting${tail}`
+                : `No new cards left · ${fc.dueCount} due for review${tail}`;
+        }
     }
 
     function updateHomePage(){
@@ -21133,25 +21145,143 @@ window.initNepalGlobe = function() {
         cards: [],
         index: 0,
         listenersAttached: false,
-        isAnimating: false
+        isAnimating: false,
+        subject: 'all',
+        newIds: null,
+        session: { seen: 0, known: 0, later: 0, ids: [] }
     };
 
-    window.startFlashcardSwiper = function() {
+    // How many cards a session holds. Sized off what is left of today's Daily Target so the deck
+    // matches the work still planned for today, but clamped at both ends: a 3 card deck is not
+    // worth opening, and a 60 card one never gets finished in one sitting.
+    function flashcardDeckSize() {
+        let solvedToday = (typeof getSolvedTodayCount === 'function') ? getSolvedTodayCount() : 0;
+        let target = ((typeof getDailyTarget === 'function') ? getDailyTarget() : 0) || 50;
+        return Math.max(10, Math.min(30, target - solvedToday));
+    }
+
+    // Counts for the practice tile label, without the ordering work buildFlashcardDeck does.
+    window.getFlashcardCounts = function(subject) {
+        let out = { newCount: 0, dueCount: 0 };
+        try {
+            let full = getAllQuestions();
+            let inSubject = q => !subject || subject === 'all' || (q && q.sub === subject);
+            let E = window.KrishiSM2Engine;
+            if (!E || !full.length) return out;
+            let mistakes = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
+            // Both engine queries are handed the FULL bank - see buildFlashcardDeck for why a
+            // subject slice must never reach getDueQuestions().
+            let fresh = (typeof E.getNewQuestions === 'function') ? E.getNewQuestions(full) : [];
+            fresh = fresh.filter(inSubject);
+            out.newCount = mistakes ? fresh.filter(q => !mistakes.has(String(q.id || q.q))).length : fresh.length;
+            out.dueCount = (typeof E.getDueQuestions === 'function') ? E.getDueQuestions(full).filter(inSubject).length : 0;
+        } catch(e) { window.krishiLogSilent && krishiLogSilent('flashcard.counts', e); }
+        return out;
+    };
+
+    // The deck is a FIRST-EXPOSURE queue, not one more random pile - that is the one job no other
+    // practice mode does. KrishiSM2Engine.getDueQuestions() cannot reach a question that has never
+    // been graded, so a freshly imported bank sat outside the scheduler entirely until some random
+    // quiz happened to serve it. Order: never-seen cards first, the ones the exam repeated (the 🔥
+    // repeatCount signal) ahead of the rest, then due cards to top the deck up. Unresolved mistakes
+    // stay out - those belong to Review Mistakes, where they get answered for real.
+    window.buildFlashcardDeck = function(limit, subject) {
+        let result = { cards: [], newTotal: 0, dueTotal: 0, poolSize: 0, newIds: new Set() };
+        let full = getAllQuestions();
+        let inSubject = q => !subject || subject === 'all' || (q && q.sub === subject);
+        result.poolSize = full.filter(inSubject).length;
+        if (!result.poolSize) return result;
+
+        let mistakes = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
+        let E = window.KrishiSM2Engine;
+        // Both engine queries are handed the FULL bank and their RESULT is filtered by subject,
+        // never the other way round: getDueQuestions() treats any stored record whose id is missing
+        // from the list it is given as an orphan and deletes it, so asking it about one subject
+        // would silently wipe the review schedule of every other subject.
+        let fresh = (E && typeof E.getNewQuestions === 'function') ? E.getNewQuestions(full) : full.slice();
+        fresh = fresh.filter(inSubject);
+        if (mistakes) fresh = fresh.filter(q => !mistakes.has(String(q.id || q.q)));
+        result.newTotal = fresh.length;
+        result.newIds = new Set(fresh.map(q => String(q.id || q.q)));
+
+        // repeatCountOf() normalizes text on every call, so it is resolved once per card here
+        // rather than inside the comparator, which would run it O(n log n) times.
+        let rcMap = new Map();
+        fresh.forEach(function(q) {
+            let v = 0;
+            try { v = (typeof repeatCountOf === 'function') ? repeatCountOf(q) : 0; } catch(e) { v = 0; }
+            rcMap.set(q, v);
+        });
+        // Shuffle first, then a stable sort by repeat count: equal counts keep their random order.
+        let ordered = shuffle(fresh).sort((a, b) => (rcMap.get(b) || 0) - (rcMap.get(a) || 0));
+
+        if (ordered.length < limit && E && typeof E.getDueQuestions === 'function') {
+            let have = new Set(ordered.map(q => String(q.id || q.q)));
+            let due = E.getDueQuestions(full).filter(inSubject).filter(q => !have.has(String(q.id || q.q)));
+            result.dueTotal = due.length;
+            ordered = ordered.concat(shuffle(due));
+        }
+
+        result.cards = ordered.slice(0, limit);
+        return result;
+    };
+
+    // Built from the real subject list, with the DOM API rather than innerHTML: subject names are
+    // user-typed, so an apostrophe or angle bracket must not be able to break the markup.
+    function populateFlashcardSubjectFilter(selected) {
+        let sel = document.getElementById('tinder-subject-filter');
+        if (!sel) return;
+        let subs = [];
+        try { subs = (typeof getAllSubjects === 'function') ? (getAllSubjects() || []) : []; } catch(e) { subs = []; }
+        sel.innerHTML = '';
+        let all = document.createElement('option');
+        all.value = 'all';
+        all.textContent = 'All subjects';
+        sel.appendChild(all);
+        subs.forEach(function(s) {
+            let o = document.createElement('option');
+            o.value = String(s);
+            o.textContent = String(s);
+            sel.appendChild(o);
+        });
+        sel.value = selected || 'all';
+        if (!sel.value) sel.value = 'all';
+    }
+
+    window.restartFlashcardDeck = function() {
+        let sel = document.getElementById('tinder-subject-filter');
+        let want = sel ? sel.value : (window.swiperState.subject || 'all');
+        window.startFlashcardSwiper(want);
+        // A subject with nothing new and nothing due bails out with a toast and keeps the deck that
+        // is already on screen, so put the dropdown back instead of letting it claim otherwise.
+        if (sel && window.swiperState.subject !== want) sel.value = window.swiperState.subject || 'all';
+    };
+
+    window.startFlashcardSwiper = function(subject) {
         if (typeof stopTimer === 'function') stopTimer();
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
             state.perQuestionTimerInterval = null;
         }
 
-        let pool = getAllQuestions();
-        if (!pool || pool.length === 0) {
+        let sub = subject || 'all';
+        let deck = window.buildFlashcardDeck(flashcardDeckSize(), sub);
+        if (!deck.poolSize) {
             showToast('No questions available to practice!');
             return;
         }
+        if (!deck.cards.length) {
+            // An empty deck is good news, but it must not read as a dead tap: name the queue that
+            // is empty and point at the mode that still has work waiting.
+            showToast('🎉 यहाँ कुनै नयाँ कार्ड बाँकी छैन! FSRS Spaced Repetition प्रयोग गर्नुहोस्।');
+            return;
+        }
 
-        // Fetch 15 random shuffled questions
-        window.swiperState.cards = shuffle([...pool]).slice(0, Math.min(15, pool.length));
+        window.swiperState.cards = deck.cards;
         window.swiperState.index = 0;
+        window.swiperState.subject = sub;
+        window.swiperState.newIds = deck.newIds;
+        window.swiperState.session = { seen: 0, known: 0, later: 0, ids: [] };
 
         navigate('page-tinder-swiper');
         // Force flexbox display to respect layout styling
@@ -21160,8 +21290,14 @@ window.initNepalGlobe = function() {
             page.style.setProperty('display', 'flex', 'important');
         }
 
+        populateFlashcardSubjectFilter(sub);
         window.renderFlashcardCard();
         attachSwiperGestures();
+
+        let newInDeck = Math.min(deck.newTotal, deck.cards.length);
+        let reviewInDeck = deck.cards.length - newInDeck;
+        showToast(`🎴 ${newInDeck} new${reviewInDeck ? ` + ${reviewInDeck} review` : ''} cards ready` +
+            (deck.newTotal > newInDeck ? ` · ${deck.newTotal - newInDeck} new left for later` : ''));
 
         // Draggable Entrance Wobble Physics to guide new swipe users
         const card = document.getElementById('tinder-card');
@@ -21190,6 +21326,7 @@ window.initNepalGlobe = function() {
         if (window.swiperState.index >= window.swiperState.cards.length) {
             card.classList.add('hidden');
             emptyState.classList.remove('hidden');
+            renderFlashcardSummary();
             return;
         }
 
@@ -21208,8 +21345,10 @@ window.initNepalGlobe = function() {
         // Reset indicators
         const indRight = document.getElementById('tinder-indicator-right');
         const indLeft = document.getElementById('tinder-indicator-left');
+        const indUp = document.getElementById('tinder-indicator-up');
         if (indRight) indRight.style.opacity = '0';
         if (indLeft) indLeft.style.opacity = '0';
+        if (indUp) indUp.style.opacity = '0';
 
         // Hide answer and show clue
         const explContainer = document.getElementById('tinder-card-expl-container');
@@ -21226,6 +21365,30 @@ window.initNepalGlobe = function() {
 
         if (subBadge) subBadge.textContent = q.sub || 'General';
         if (numBadge) numBadge.textContent = `Card ${window.swiperState.index + 1}/${window.swiperState.cards.length}`;
+
+        // Whether this card is a first exposure or a scheduled review changes how to read it, and
+        // a question the exam has already repeated is the one to memorise properly - both were
+        // known when the deck was built but never shown.
+        const tierBadge = document.getElementById('tinder-card-tier');
+        if (tierBadge) {
+            let isNew = !!(window.swiperState.newIds && window.swiperState.newIds.has(String(q.id || q.q)));
+            tierBadge.textContent = isNew ? '✨ New' : '🔁 Review';
+            tierBadge.className = 'text-[9px] font-black uppercase px-2 py-0.5 rounded-lg ' + (isNew
+                ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
+                : 'bg-violet-500/10 text-violet-700 dark:text-violet-400');
+        }
+        const repBadge = document.getElementById('tinder-card-repeat');
+        if (repBadge) {
+            let rcv = 0;
+            try { rcv = (typeof repeatCountOf === 'function') ? repeatCountOf(q) : 0; } catch(e) { rcv = 0; }
+            if (rcv > 1) {
+                repBadge.textContent = `🔥 ${rcv}× repeated`;
+                repBadge.classList.remove('hidden');
+            } else {
+                repBadge.classList.add('hidden');
+            }
+        }
+
         if (qText) qText.textContent = q.q;
         if (explText) {
             let correctOptionText = '';
@@ -21234,6 +21397,109 @@ window.initNepalGlobe = function() {
             }
             explText.innerHTML = correctOptionText + (q.expl || 'यो प्रश्नको लागि थप व्याख्या उपलब्ध छैन।');
         }
+    };
+
+    function renderFlashcardSummary() {
+        let s = window.swiperState.session || { seen: 0, known: 0, later: 0, ids: [] };
+        let el = document.getElementById('tinder-session-summary');
+        if (el) {
+            el.textContent = s.seen
+                ? `${s.seen} cards seen — ${s.known} known 👍, ${s.later} to study 👎. सबै FSRS मा तालिकाबद्ध भए।`
+                : 'तपाईंले यो खण्डका सबै प्रश्नहरू रिभिजन गरिसक्नुभयो।';
+        }
+        // Nothing to test if the deck was opened and closed without a single swipe.
+        let btn = document.getElementById('tinder-quiz-deck-btn');
+        if (btn) btn.classList.toggle('hidden', !(s.ids && s.ids.length));
+    }
+
+    // A swipe is a SELF-REPORT, not an answered question, and the two must never be written to the
+    // same place. Every right swipe used to do totalSolved++/totalCorrect++, so a minute of thumbing
+    // dragged the home ribbon accuracy (totalCorrect/totalSolved) towards 100% without a single
+    // option ever being picked; every left swipe pushed the id into localData.wrong, which
+    // getDueQuestions() then refuses to schedule - "study later" quietly removed the card from the
+    // review queue it was supposed to join. Now the swiper feeds FSRS (capped at Good, because
+    // self-rating is weak evidence) and its own card counters, nothing else.
+    function recordFlashcardSwipe(q, known) {
+        if (!q) return;
+        let secondsSpent = Math.max(1, Math.round((Date.now() - (window.swiperState.cardStartTime || Date.now())) / 1000));
+
+        if (window.KrishiSM2Engine) {
+            window.KrishiSM2Engine.recordAnswer(q.id || q.q, known, secondsSpent, { maxGrade: 2 });
+        }
+
+        if (!localData.stats) localData.stats = { totalSolved: 0, totalCorrect: 0, subjectStats: {} };
+        let st = localData.stats;
+        st.flashcardsSeen = (st.flashcardsSeen || 0) + 1;
+        if (known) st.flashcardsKnown = (st.flashcardsKnown || 0) + 1;
+
+        let today = getLocalDateString();
+        if (!st.flashcardDaily || typeof st.flashcardDaily !== 'object') st.flashcardDaily = {};
+        let day = st.flashcardDaily[today] || { seen: 0, known: 0 };
+        day.seen++;
+        if (known) day.known++;
+        st.flashcardDaily[today] = day;
+        // localData rides along inside the synced user document, so the per-day log stays capped.
+        let days = Object.keys(st.flashcardDaily).sort();
+        if (days.length > 30) days.slice(0, days.length - 30).forEach(k => { delete st.flashcardDaily[k]; });
+
+        let ses = window.swiperState.session;
+        if (ses) {
+            ses.seen++;
+            if (known) ses.known++; else ses.later++;
+            let sid = String(q.id || q.q);
+            if (ses.ids.indexOf(sid) === -1) ses.ids.push(sid);
+        }
+
+        saveData();
+    }
+
+    // Mirrors toggleBookmarkCurrent(), which is welded to the quiz view (state.questions plus the
+    // #bookmark-btn icon) and cannot be reused from here. The *Log/_rev bookkeeping is the part
+    // that matters: that is what the Firestore merge reads to settle a two-device edit.
+    window.bookmarkFlashcard = function(q) {
+        if (!q || typeof q.id === 'undefined') return;
+        if (!Array.isArray(localData.bookmarked)) localData.bookmarked = [];
+        if (!localData.bookmarkedLog) localData.bookmarkedLog = {};
+        let idx = localData.bookmarked.indexOf(q.id);
+        let rev = localData.bookmarkedLog[q.id] ? (localData.bookmarkedLog[q.id]._rev || 0) : 0;
+        let now = Date.now();
+        if (idx === -1) {
+            localData.bookmarked.push(q.id);
+            localData.bookmarkedLog[q.id] = { action: 'add', timestamp: now, _rev: rev + 1 };
+            showToast('⭐ Bookmarked!');
+            playSound('celebrate');
+        } else {
+            localData.bookmarked.splice(idx, 1);
+            localData.bookmarkedLog[q.id] = { action: 'remove', timestamp: now, _rev: rev + 1 };
+            showToast('Bookmark removed');
+            playSound('click');
+        }
+        triggerHaptic('click');
+        saveData();
+    };
+
+    window.bookmarkCurrentFlashcard = function() {
+        if (window.swiperState.index >= window.swiperState.cards.length) return;
+        window.bookmarkFlashcard(window.swiperState.cards[window.swiperState.index]);
+    };
+
+    // The swiper can introduce a card but never prove the student knows it, so this hands the exact
+    // cards just seen to the graded quiz - the one place accuracy, mistakes and the streak are
+    // allowed to be written.
+    window.quizFlashcardDeck = function() {
+        let ses = window.swiperState.session || { ids: [] };
+        let ids = new Set((ses.ids || []).map(String));
+        if (!ids.size) { showToast('Swipe a few cards first.'); return; }
+        let pool = getAllQuestions().filter(q => ids.has(String(q.id || q.q)));
+        if (!pool.length) { showToast('Those questions are no longer in your bank.'); return; }
+        if (typeof setupMCQSession !== 'function') { showToast('Quiz engine unavailable — please reload.'); return; }
+        state.activeConfig = {
+            subject: 'all', topic: 'all', difficulty: 'all', count: pool.length,
+            timer: 'off', timerMin: 0, perQTimer: 'off', perQSec: 0,
+            negativeMarking: 'off', feedback: 'immediate', shuffleQs: true, shuffleOpts: true
+        };
+        setupMCQSession(shuffle(pool), false, 0);
+        showToast(`📝 ${pool.length} cards — now answer them for real.`);
     };
 
     window.revealFlashcardAnswer = function() {
@@ -21267,41 +21533,7 @@ window.initNepalGlobe = function() {
         card.style.opacity = '0';
 
         let q = window.swiperState.cards[window.swiperState.index];
-        if (q) {
-            if (!localData.wrong) localData.wrong = [];
-            if (localData && localData.wrong && !localData.wrong.includes(q.id)) {
-                localData.wrong.push(q.id);
-                // saveData() is called below
-            }
-            
-            let secondsSpent = Math.max(1, Math.round((Date.now() - (window.swiperState.cardStartTime || Date.now())) / 1000));
-            
-            // FSRS
-            if (window.KrishiSM2Engine) {
-                window.KrishiSM2Engine.recordAnswer(q.id || q.q, false, secondsSpent);
-            }
-
-            // Session History
-            if (typeof recordQuestionTime === 'function') {
-                recordQuestionTime(q.id, q.sub, q.difficulty || 'Medium', false);
-            }
-
-            // Stats & Streak
-            if (!localData.stats) localData.stats = {totalSolved:0, totalCorrect:0, subjectStats:{}};
-            if (!localData.stats.subjectStats) localData.stats.subjectStats = {};
-            
-            localData.stats.totalSolved++;
-            if (!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub] = {solved:0, correct:0};
-            localData.stats.subjectStats[q.sub].solved++;
-
-            let today = getLocalDateString();
-            if (!localData.streak) localData.streak = {};
-            if (!localData.streak[today]) localData.streak[today] = {solved:0, correct:0};
-            localData.streak[today].solved++;
-
-            saveData();
-            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
-        }
+        recordFlashcardSwipe(q, false);
 
         playSound('wrong');
         triggerHaptic('wrong');
@@ -21330,46 +21562,7 @@ window.initNepalGlobe = function() {
         card.style.opacity = '0';
 
         let q = window.swiperState.cards[window.swiperState.index];
-        if (q) {
-            if (!localData.wrong) localData.wrong = [];
-            if (localData && localData.wrong && localData.wrong.includes(q.id)) {
-                localData.wrong = localData.wrong.filter(id => id !== q.id);
-                if (!localData.wrongLog) localData.wrongLog = {};
-                let rev = localData.wrongLog[q.id] ? (localData.wrongLog[q.id]._rev || 0) : 0;
-                localData.wrongLog[q.id] = { action: 'remove', timestamp: Date.now(), _rev: rev + 1 };
-            }
-
-            let secondsSpent = Math.max(1, Math.round((Date.now() - (window.swiperState.cardStartTime || Date.now())) / 1000));
-            
-            // FSRS
-            if (window.KrishiSM2Engine) {
-                window.KrishiSM2Engine.recordAnswer(q.id || q.q, true, secondsSpent);
-            }
-
-            // Session History
-            if (typeof recordQuestionTime === 'function') {
-                recordQuestionTime(q.id, q.sub, q.difficulty || 'Medium', true);
-            }
-
-            // Stats & Streak
-            if (!localData.stats) localData.stats = {totalSolved:0, totalCorrect:0, subjectStats:{}};
-            if (!localData.stats.subjectStats) localData.stats.subjectStats = {};
-            
-            localData.stats.totalSolved++;
-            localData.stats.totalCorrect++;
-            if (!localData.stats.subjectStats[q.sub]) localData.stats.subjectStats[q.sub] = {solved:0, correct:0};
-            localData.stats.subjectStats[q.sub].solved++;
-            localData.stats.subjectStats[q.sub].correct++;
-
-            let today = getLocalDateString();
-            if (!localData.streak) localData.streak = {};
-            if (!localData.streak[today]) localData.streak[today] = {solved:0, correct:0};
-            localData.streak[today].solved++;
-            localData.streak[today].correct++;
-
-            saveData();
-            if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
-        }
+        recordFlashcardSwipe(q, true);
 
         playSound('correct');
         triggerHaptic('correct');
@@ -21395,6 +21588,13 @@ window.initNepalGlobe = function() {
 
         const indRight = document.getElementById('tinder-indicator-right');
         const indLeft = document.getElementById('tinder-indicator-left');
+        const indUp = document.getElementById('tinder-indicator-up');
+
+        // A drag counts as vertical only when it is clearly more up than sideways, so the ordinary
+        // left/right arc - which always carries some Y - never lights up the bookmark overlay.
+        const isBookmarkDrag = function() {
+            return deltaY < -15 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2;
+        };
 
         card.addEventListener('pointerdown', function(e) {
             if (window.swiperState.index >= window.swiperState.cards.length) return;
@@ -21418,15 +21618,22 @@ window.initNepalGlobe = function() {
             card.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) rotate(${deltaX / 12}deg)`;
 
             // Update swipe indicators opacity based on threshold (100px max)
-            if (deltaX > 15) {
+            if (isBookmarkDrag()) {
+                if (indUp) indUp.style.opacity = Math.min(0.9, (-deltaY - 15) / 100);
+                if (indRight) indRight.style.opacity = '0';
+                if (indLeft) indLeft.style.opacity = '0';
+            } else if (deltaX > 15) {
                 if (indRight) indRight.style.opacity = Math.min(0.9, (deltaX - 15) / 100);
                 if (indLeft) indLeft.style.opacity = '0';
+                if (indUp) indUp.style.opacity = '0';
             } else if (deltaX < -15) {
                 if (indLeft) indLeft.style.opacity = Math.min(0.9, (-deltaX - 15) / 100);
                 if (indRight) indRight.style.opacity = '0';
+                if (indUp) indUp.style.opacity = '0';
             } else {
                 if (indRight) indRight.style.opacity = '0';
                 if (indLeft) indLeft.style.opacity = '0';
+                if (indUp) indUp.style.opacity = '0';
             }
         });
 
@@ -21438,7 +21645,15 @@ window.initNepalGlobe = function() {
 
             card.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s ease';
 
-            if (deltaX > 110) {
+            if (deltaY < -110 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2) {
+                // Swipe up = bookmark, and the card deliberately stays: bookmarking says nothing
+                // about whether the student knows it, so it must not consume the card or hit FSRS.
+                window.bookmarkCurrentFlashcard();
+                card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
+                if (indRight) indRight.style.opacity = '0';
+                if (indLeft) indLeft.style.opacity = '0';
+                if (indUp) indUp.style.opacity = '0';
+            } else if (deltaX > 110) {
                 // Swipe Right (Know it)
                 window.swipeFlashcardRight();
             } else if (deltaX < -110) {
@@ -21449,6 +21664,7 @@ window.initNepalGlobe = function() {
                 card.style.transform = 'translate3d(0px, 0px, 0px) rotate(0deg)';
                 if (indRight) indRight.style.opacity = '0';
                 if (indLeft) indLeft.style.opacity = '0';
+                if (indUp) indUp.style.opacity = '0';
             }
         };
 

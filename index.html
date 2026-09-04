@@ -81,7 +81,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=5d4y4e5" rel="stylesheet">
+    <link href="./index.css?v=jgtecf7" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1144,7 +1144,7 @@
                         <span class="text-xl">🎴</span>
                         <div>
                             <p class="font-black text-xs text-emerald-600 dark:text-emerald-400">Premium Flashcard Swiper</p>
-                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400">Swipe right if you know it, left to study later — fast mobile learning cards</p>
+                            <p class="text-[9.5px] text-slate-500 dark:text-slate-400" id="smart-flashcard-count-lbl">New cards first — swipe right if you know it, left to study later</p>
                         </div>
                     </div>
                 </div>
@@ -2683,7 +2683,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v235-5d4y4e5 (202609040349)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v238-jgtecf7 (202609040433)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -2722,34 +2722,47 @@
         <!-- PREMIUM TINDER FLASHCARD SWIPER SCREEN (Additive & Modular) -->
         <div id="page-tinder-swiper" class="page p-4 space-y-4 hidden flex flex-col h-[90vh] overflow-hidden select-none">
             <!-- Header -->
-            <div class="flex justify-between items-center pb-2 border-b" style="border-color:var(--border);">
-                <h2 class="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+            <div class="flex justify-between items-center gap-2 pb-2 border-b" style="border-color:var(--border);">
+                <h2 class="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5 shrink-0">
                     <span>🎴 Flashcard Swiper</span>
                 </h2>
-                <button onclick="exitFlashcardSwiper()" class="text-xs font-black text-rose-500 hover:underline cursor-pointer">Exit ✕</button>
+                <div class="flex items-center gap-2 min-w-0">
+                    <select id="tinder-subject-filter" onchange="restartFlashcardDeck()" aria-label="Filter flashcards by subject" class="text-[10px] font-bold px-2 py-1 rounded-lg border bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 max-w-[40vw] cursor-pointer" style="border-color:var(--border);">
+                        <option value="all">All subjects</option>
+                    </select>
+                    <button onclick="exitFlashcardSwiper()" class="text-xs font-black text-rose-500 hover:underline cursor-pointer shrink-0">Exit ✕</button>
+                </div>
             </div>
-            
+
             <!-- Gesture Coaching Tip (Pulses gently to guide new users) -->
             <div id="tinder-coaching-guide" class="text-center text-[10px] text-slate-400 dark:text-slate-500 animate-pulse font-medium py-0.5">
-                💡 Swipe left 👈 to Study Later | Swipe right 👉 if you Know It!
+                💡 Swipe left 👈 Study Later | right 👉 Know It | up ☝️ Bookmark
             </div>
-            
+
             <!-- Cards stack container -->
             <div class="flex-1 flex items-center justify-center relative w-full h-[60vh]">
                 <!-- Empty state for Swiper -->
                 <div id="tinder-empty-state" class="absolute text-center p-6 space-y-3 hidden">
                     <span class="text-4xl animate-bounce block">🏆</span>
                     <h3 class="font-extrabold text-sm text-slate-800 dark:text-white">सबै कार्डहरू सकियो!</h3>
-                    <p class="text-[10.5px] text-slate-400">तपाईंले यो खण्डका सबै प्रश्नहरू रिभिजन गरिसक्नुभयो।</p>
-                    <button onclick="exitFlashcardSwiper()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition">Back to Practice</button>
+                    <p id="tinder-session-summary" class="text-[10.5px] text-slate-400">तपाईंले यो खण्डका सबै प्रश्नहरू रिभिजन गरिसक्नुभयो।</p>
+                    <div class="flex flex-col gap-2 items-stretch pt-1">
+                        <button id="tinder-quiz-deck-btn" onclick="quizFlashcardDeck()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm transition cursor-pointer">📝 Test these cards in a quiz</button>
+                        <button onclick="restartFlashcardDeck()" class="px-4 py-2 border rounded-xl font-bold text-xs text-emerald-600 dark:text-emerald-400 transition cursor-pointer" style="border-color:var(--border);">🔄 Next batch</button>
+                        <button onclick="exitFlashcardSwiper()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition cursor-pointer">Back to Practice</button>
+                    </div>
                 </div>
 
                 <!-- Swipeable Card -->
                 <div id="tinder-card" class="absolute w-full max-w-sm h-[380px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl flex flex-col p-6 cursor-grab active:cursor-grabbing transition-transform duration-300 overflow-hidden" style="touch-action: none;">
                     <!-- Badge Header -->
-                    <div class="flex justify-between items-center">
-                        <span id="tinder-card-subject" class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-700 dark:text-indigo-400">Agronomy</span>
-                        <span id="tinder-card-number" class="text-[9px] font-bold text-slate-400">Card 1/10</span>
+                    <div class="flex justify-between items-center gap-1.5">
+                        <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+                            <span id="tinder-card-subject" class="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-700 dark:text-indigo-400">Agronomy</span>
+                            <span id="tinder-card-tier" class="hidden text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-sky-500/10 text-sky-700 dark:text-sky-400">New</span>
+                            <span id="tinder-card-repeat" class="hidden text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-800 dark:text-amber-300" title="This question appears more than once in your bank - likely a repeated exam question."></span>
+                        </div>
+                        <span id="tinder-card-number" class="text-[9px] font-bold text-slate-400 shrink-0">Card 1/10</span>
                     </div>
 
                     <!-- Question / Content -->
@@ -2765,14 +2778,16 @@
                     <!-- Swiping Indicators Overlay -->
                     <div id="tinder-indicator-right" class="absolute inset-0 bg-emerald-500/10 border-4 border-emerald-500 rounded-3xl opacity-0 pointer-events-none flex items-center justify-center"><span class="text-white bg-emerald-500 px-4 py-2 rounded-full font-black text-xs uppercase shadow">KNOW IT 👍</span></div>
                     <div id="tinder-indicator-left" class="absolute inset-0 bg-rose-500/10 border-4 border-rose-500 rounded-3xl opacity-0 pointer-events-none flex items-center justify-center"><span class="text-white bg-rose-500 px-4 py-2 rounded-full font-black text-xs uppercase shadow">STUDY LATER 👎</span></div>
+                    <div id="tinder-indicator-up" class="absolute inset-0 bg-amber-500/10 border-4 border-amber-500 rounded-3xl opacity-0 pointer-events-none flex items-center justify-center"><span class="text-white bg-amber-500 px-4 py-2 rounded-full font-black text-xs uppercase shadow">BOOKMARK ⭐</span></div>
                 </div>
             </div>
 
             <!-- Bottom Actions -->
-            <div class="flex justify-center items-center gap-6 pb-4">
-                <button onclick="swipeFlashcardLeft()" class="w-14 h-14 rounded-full bg-white dark:bg-slate-900 border border-rose-100 hover:border-rose-300 text-rose-500 shadow-md flex items-center justify-center text-xl cursor-pointer active:scale-90 transition-all font-black" style="box-shadow: 0 4px 6px -1px rgba(244,63,94,0.15)">👎</button>
-                <button onclick="revealFlashcardAnswer()" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-black text-xs cursor-pointer active:scale-95 transition-all">👀 Show Answer</button>
-                <button onclick="swipeFlashcardRight()" class="w-14 h-14 rounded-full bg-white dark:bg-slate-900 border border-emerald-100 hover:border-emerald-300 text-emerald-500 shadow-md flex items-center justify-center text-xl cursor-pointer active:scale-90 transition-all font-black" style="box-shadow: 0 4px 6px -1px rgba(16,185,129,0.15)">👍</button>
+            <div class="flex justify-center items-center gap-4 pb-4">
+                <button onclick="swipeFlashcardLeft()" aria-label="Study later" class="w-14 h-14 rounded-full bg-white dark:bg-slate-900 border border-rose-100 hover:border-rose-300 text-rose-500 shadow-md flex items-center justify-center text-xl cursor-pointer active:scale-90 transition-all font-black" style="box-shadow: 0 4px 6px -1px rgba(244,63,94,0.15)">👎</button>
+                <button onclick="revealFlashcardAnswer()" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-black text-xs cursor-pointer active:scale-95 transition-all">👀 Show Answer</button>
+                <button onclick="bookmarkCurrentFlashcard()" aria-label="Bookmark this card" title="Bookmark (or swipe up)" class="w-11 h-11 rounded-full bg-white dark:bg-slate-900 border border-amber-100 hover:border-amber-300 text-amber-500 shadow-md flex items-center justify-center text-lg cursor-pointer active:scale-90 transition-all font-black" style="box-shadow: 0 4px 6px -1px rgba(245,158,11,0.15)">⭐</button>
+                <button onclick="swipeFlashcardRight()" aria-label="I know this" class="w-14 h-14 rounded-full bg-white dark:bg-slate-900 border border-emerald-100 hover:border-emerald-300 text-emerald-500 shadow-md flex items-center justify-center text-xl cursor-pointer active:scale-90 transition-all font-black" style="box-shadow: 0 4px 6px -1px rgba(16,185,129,0.15)">👍</button>
             </div>
         </div>
 
@@ -3949,14 +3964,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=5d4y4e5" defer></script>
-    <script src="./js/elite_3d_engine.js?v=5d4y4e5" defer></script>
-    <script src="./js/canvas_charts.js?v=5d4y4e5" defer></script>
+    <script src="./js/elite_animations_controller.js?v=jgtecf7" defer></script>
+    <script src="./js/elite_3d_engine.js?v=jgtecf7" defer></script>
+    <script src="./js/canvas_charts.js?v=jgtecf7" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=5d4y4e5" defer></script>
-    <script src="./js/sqlite_db.js?v=5d4y4e5" defer></script>
-    <script src="./js/krishi_idb.js?v=5d4y4e5"></script>
-    <script src="./js/app.js?v=5d4y4e5" defer></script>
+    <script src="./js/pwa_helpers.js?v=jgtecf7" defer></script>
+    <script src="./js/sqlite_db.js?v=jgtecf7" defer></script>
+    <script src="./js/krishi_idb.js?v=jgtecf7"></script>
+    <script src="./js/app.js?v=jgtecf7" defer></script>
 
 
     <!--
@@ -3984,8 +3999,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=5d4y4e5" defer></script>
-    <script src="./js/voice_assistant.js?v=5d4y4e5" defer></script>
+<script src="./js/data_safety.js?v=jgtecf7" defer></script>
+    <script src="./js/voice_assistant.js?v=jgtecf7" defer></script>
 </body>
 </html>
 

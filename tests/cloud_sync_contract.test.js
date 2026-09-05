@@ -206,3 +206,220 @@ test("the 'online' listener only re-inits when the realtime listener is missing"
         'The Firestore SDK reconnects its own listeners; only re-init when there is none.'
     );
 });
+
+// ── Settings must be able to travel DOWN from a peer ───────────────────────────
+//
+// collectAllAppData() rewrites payload.updatedAt to Date.now() on every read, so the
+// document clock `useCloud = cloudUpdatedAt > local.updatedAt` is structurally almost
+// always false. Any field resolved on that flag alone can only ever be pushed up, never
+// pulled down: on a second device the home layout, theme, planner, goals, sound settings
+// and last practice config stayed at their defaults forever. Each one now merges on its
+// own settingStamps clock instead.
+
+/** The stamped fields, and the storage key whose write must set each one's clock. */
+const STAMPED = {
+    dark: 'krishi_dark',
+    batterySaver: 'krishi_battery_saver',
+    hapticEnabled: 'krishi_haptic_enabled',
+    eliteAnimations: 'krishi_elite_animations',
+    difficultyBias: 'krishi_difficulty_bias',
+    intensityMode: 'krishi_intensity_mode',
+    activePlanMode: 'krishi_active_plan_mode',
+    retryDelay: 'krishi_retry_delay',
+    homeSettings: 'krishi_home_settings',
+    appearanceSettings: 'krishi_appearance_settings',
+    customAppearanceSettings: 'krishi_custom_appearance_settings',
+    plannerSettings: 'krishi_planner_settings',
+    goalSettings: 'krishi_goal_settings',
+    lastPracticeConfig: 'krishi_last_practice_config',
+    soundEnabled: 'krishi_sound_enabled',
+    soundMuted: 'krishi_sound_muted',
+    soundVolume: 'krishi_sound_volume'
+};
+
+test('every stamped setting resolves on its per-field clock, not the document clock', () => {
+    const body = functionBody('mergeCloudAndLocalData');
+    Object.keys(STAMPED).forEach(field => {
+        // Scalar toggles are resolved inside a forEach over a name array, not by name.
+        const line = new RegExp('merged\\.' + field + '\\s*=\\s*([^;]+);').exec(body);
+        if (!line) return;
+        assert.match(line[1], /takeCloudFor\(/,
+            'merged.' + field + ' is resolved without takeCloudFor(). If it reads `useCloud` ' +
+            'directly it can never be pulled from a peer, because collectAllAppData() sets ' +
+            'local.updatedAt to Date.now() and the cloud stamp is always older.'
+        );
+    });
+    // `useCloud` may survive only as takeCloudFor()'s own legacy fallback.
+    const outside = body.replace(/function takeCloudFor[\s\S]*?\n        \}/, '');
+    assert.doesNotMatch(outside, /useCloud\s*\?/,
+        'a `useCloud ? cloud : local` ternary is left outside takeCloudFor(); that field can ' +
+        'never travel down from another device'
+    );
+});
+
+test('takeCloudFor() picks the newer clock and carries the survivor forward', () => {
+    // Behavioural, not textual: lift the real source out of the merge and run it.
+    const body = functionBody('mergeCloudAndLocalData');
+    const src = /function takeCloudFor\(field\)\s*\{[\s\S]*?\n        \}/.exec(body);
+    assert.ok(src, 'takeCloudFor() not found inside mergeCloudAndLocalData()');
+
+    const build = (localStamps, cloudStamps, useCloud) => {
+        const mergedStamps = {};
+        // eslint-disable-next-line no-new-func
+        const fn = new Function('localStamps', 'cloudStamps', 'mergedStamps', 'useCloud',
+            src[0] + '; return takeCloudFor;')(localStamps, cloudStamps, mergedStamps, useCloud);
+        return { fn, mergedStamps };
+    };
+
+    let { fn, mergedStamps } = build({ homeSettings: 100 }, { homeSettings: 500 }, false);
+    assert.equal(fn('homeSettings'), true,
+        'a peer that wrote later must win even though the document clock says otherwise'
+    );
+    assert.equal(mergedStamps.homeSettings, 500, 'the winning clock must be carried forward');
+
+    ({ fn, mergedStamps } = build({ homeSettings: 900 }, { homeSettings: 500 }, false));
+    assert.equal(fn('homeSettings'), false, 'the newer local edit must not be overwritten');
+    assert.equal(mergedStamps.homeSettings, 900,
+        'the surviving clock must be the max, or the next merge compares against a stale ' +
+        'stamp and flips the value straight back'
+    );
+
+    ({ fn, mergedStamps } = build({}, {}, false));
+    assert.equal(fn('homeSettings'), false, 'no stamps on either side falls back to useCloud');
+    assert.deepEqual(mergedStamps, {},
+        'a zero stamp must not be written, or a legacy field looks clocked at 0 forever'
+    );
+
+    ({ fn } = build({}, {}, true));
+    assert.equal(fn('homeSettings'), true, 'the legacy document-clock fallback must still work');
+});
+
+test('the stamp is taken at the storage boundary, not at each write site', () => {
+    // 17 keys written from 10 functions. A hand-maintained list of stampSetting() calls is
+    // how this bug happens again: the writer nobody remembered stays on a stale clock and
+    // silently loses to the peer. Hooking setItem/removeItem once cannot be forgotten.
+    const hook = /function installSettingStampHook\(\)\s*\{[\s\S]*?\n    \}\)\(\);/.exec(APP_JS);
+    assert.ok(hook, 'installSettingStampHook() is gone — settings writes are no longer clocked');
+    const src = hook[0];
+
+    assert.match(src, /store\.setItem\s*=\s*function/, 'setItem is not hooked');
+    assert.match(src, /store\.removeItem\s*=\s*function/,
+        'removeItem is not hooked; reset-to-defaults is a write and needs a clock, otherwise ' +
+        "the peer's stale copy wins and the reset is undone"
+    );
+    // Memory: a wrapper that forgets .apply(this, arguments) makes the call silently no-op.
+    assert.match(src, /rawSetItem\.apply\(store,\s*arguments\)/, 'setItem wrapper drops its args');
+    assert.match(src, /rawRemoveItem\.apply\(store,\s*arguments\)/, 'removeItem wrapper drops its args');
+    assert.match(src, /__krishiApplyingCloudData/,
+        'the hook must stand down while applyAllAppData() installs a peer\'s values, or every ' +
+        'incoming setting is re-stamped Date.now() and pushed straight back out'
+    );
+
+    const map = /const STAMPED_SETTING_KEYS = \{[\s\S]*?\n    \};/.exec(APP_JS);
+    assert.ok(map, 'STAMPED_SETTING_KEYS map not found');
+    Object.entries(STAMPED).forEach(([field, key]) => {
+        assert.ok(map[0].includes("'" + key + "'") && map[0].includes("'" + field + "'"),
+            'STAMPED_SETTING_KEYS is missing ' + key + ' -> ' + field + ', so writing it takes ' +
+            'no clock and the setting can never win against a peer'
+        );
+    });
+});
+
+test('applyAllAppData() suppresses the stamp hook only when real clocks arrive', () => {
+    const body = functionBody('applyAllAppData');
+    assert.match(body, /window\.__krishiApplyingCloudData = hasIncomingStamps/,
+        'suppression must be conditional: a legacy payload carrying no settingStamps is ' +
+        'better off stamped locally than left ordered by a stale clock'
+    );
+    assert.match(body, /finally\s*\{\s*window\.__krishiApplyingCloudData = false;/,
+        'the suppression flag must be cleared in a finally — a throw mid-apply would leave ' +
+        'every later settings write unclocked for the rest of the session'
+    );
+});
+
+// ── Mock results must union, not pick a winner ──────────────────────────────────
+//
+// The merge used to keep whichever side's array was longer and discard the other side
+// whole: a phone with 3 mock results and a tablet with 2 merged to 3, and the tablet's two
+// were gone permanently. recordMockScore() pushes {acc, ts}, so `ts` is a real identity and
+// these union exactly like timingLog.
+
+/** Runs the real mockScores block out of mergeCloudAndLocalData() against two devices. */
+function mergeMockScores(localScores, cloudScores) {
+    const body = functionBody('mergeCloudAndLocalData');
+    const from = body.indexOf('let localMockScores');
+    assert.ok(from > 0, 'the mockScores merge block was renamed — update this test');
+    const marker = '.slice(-scoreCap);';
+    const to = body.indexOf(marker, from);
+    assert.ok(to > from, 'mockScores is no longer capped by scoreCap — update this test');
+    const src = body.slice(from, to + marker.length);
+    const merged = {};
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', src)(
+        { mockScores: localScores }, { mockScores: cloudScores }, merged
+    );
+    return merged.mockScores;
+}
+
+test('mockScores unions both devices instead of discarding the shorter history', () => {
+    const phone = [{ acc: 55, ts: 1 }, { acc: 60, ts: 2 }, { acc: 65, ts: 3 }];
+    const tablet = [{ acc: 70, ts: 4 }, { acc: 75, ts: 5 }];
+
+    const merged = mergeMockScores(phone, tablet);
+    assert.deepEqual(merged.map(s => s.acc), [55, 60, 65, 70, 75],
+        'every result from both devices must survive, in chronological order'
+    );
+
+    // Same inputs, roles swapped: the outcome must not depend on which side is longer.
+    assert.deepEqual(mergeMockScores(tablet, phone).map(s => s.acc), [55, 60, 65, 70, 75],
+        'the merge must be symmetric; longest-wins was the bug'
+    );
+});
+
+test('mockScores merge is idempotent and keeps equal accuracies apart', () => {
+    const once = mergeMockScores([{ acc: 80, ts: 10 }], [{ acc: 90, ts: 20 }]);
+    const twice = mergeMockScores(once, once);
+    assert.deepEqual(twice, once, 'merging the merged result must not duplicate or drop rows');
+
+    // Two tests both scored 75%: keying on the value would collapse them into one.
+    const dupes = mergeMockScores([{ acc: 75, ts: 1 }], [{ acc: 75, ts: 2 }]);
+    assert.equal(dupes.length, 2, 'two distinct results with the same accuracy must both survive');
+});
+
+test('mockScores keeps pre-ts legacy entries from both devices', () => {
+    // Before the Growth Chart, recordMockScore pushed a bare number.
+    const merged = mergeMockScores([70, 80], [55, { acc: 95, ts: 900 }]);
+    assert.equal(merged.length, 3,
+        "each side's legacy entries are keyed by ordinal, so the longer side's extras survive " +
+        'while the shared ordinals dedupe'
+    );
+    assert.equal(merged[merged.length - 1].acc, 95, 'the stamped entry is the newest');
+    assert.ok(merged.slice(0, -1).every(s => (s && s.ts) == null),
+        'legacy entries carry no ts, so they must sort to the front as the oldest'
+    );
+});
+
+test('mockScores cap keeps the newest and can never shrink either device', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ acc: 50 + i, ts: i + 1 }));
+    const extra = [{ acc: 99, ts: 5000 }];
+
+    const merged = mergeMockScores(many, extra);
+    assert.ok(merged.length >= many.length,
+        'a merge must never return fewer results than a device already had'
+    );
+    assert.equal(merged[merged.length - 1].acc, 99, 'the newest result must survive the cap');
+    assert.ok(merged.every((s, i, a) => i === 0 || (s.ts || 0) >= (a[i - 1].ts || 0)),
+        'the cap keeps the tail, so the array must be chronological or it drops the newest'
+    );
+});
+
+test('the longest-wins mockScores merge is gone', () => {
+    const body = functionBody('mergeCloudAndLocalData');
+    assert.doesNotMatch(body, /localMockScores\.length\s*>=\s*cloudMockScores\.length/,
+        'the longest-wins ternary is back: it discards one device\'s entire mock history'
+    );
+    assert.match(body, /scoreMap\.set\(scoreKey\(s\), s\)/,
+        'mockScores must merge through an identity map like timingLog does'
+    );
+});
+

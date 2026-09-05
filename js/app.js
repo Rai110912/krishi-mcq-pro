@@ -4899,6 +4899,30 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     // (the peer now held 'true', so local always won and re-pushed its own stale value).
     // Each toggle therefore carries its own timestamp and merges on that clock alone.
     const SETTING_STAMPS_KEY = 'krishi_setting_stamps';
+
+    // Storage key -> payload field for every setting the cloud merge orders on its own
+    // per-field clock. The scalar toggles got clocks first; the object config packs (home
+    // layout, appearance, planner, goals, sound, last practice setup) were left on the
+    // document clock, which meant they could never travel DOWN from a peer at all.
+    const STAMPED_SETTING_KEYS = {
+        'krishi_dark':                       'dark',
+        'krishi_battery_saver':              'batterySaver',
+        'krishi_haptic_enabled':             'hapticEnabled',
+        'krishi_elite_animations':           'eliteAnimations',
+        'krishi_difficulty_bias':            'difficultyBias',
+        'krishi_intensity_mode':             'intensityMode',
+        'krishi_active_plan_mode':           'activePlanMode',
+        'krishi_retry_delay':                'retryDelay',
+        'krishi_home_settings':              'homeSettings',
+        'krishi_appearance_settings':        'appearanceSettings',
+        'krishi_custom_appearance_settings': 'customAppearanceSettings',
+        'krishi_planner_settings':           'plannerSettings',
+        'krishi_goal_settings':              'goalSettings',
+        'krishi_last_practice_config':       'lastPracticeConfig',
+        'krishi_sound_enabled':              'soundEnabled',
+        'krishi_sound_muted':                'soundMuted',
+        'krishi_sound_volume':               'soundVolume'
+    };
     function getSettingStamps() {
         const s = safeJsonParse(KrishiStorage.getItem(SETTING_STAMPS_KEY), {});
         return (s && typeof s === 'object' && !Array.isArray(s)) ? s : {};
@@ -4911,6 +4935,41 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         } catch (e) { /* a failed stamp must never block the setting itself */ }
     }
     window.stampSetting = stampSetting;
+
+    // The clock must be taken on EVERY write, and this bug was born from a rule that had to
+    // be remembered at each write site: the 17 stamped keys are written from 10 different
+    // functions. So the stamp is taken at the storage boundary once instead — a writer added
+    // later is covered without anyone remembering to, and removeItem counts too (a
+    // reset-to-defaults is a write, and its clock is what stops the peer's copy winning).
+    // Properties are mutated rather than the object replaced: js/krishi_idb.js declares
+    // `const KrishiStorage` at script scope, so app.js resolves that binding and not
+    // window.KrishiStorage — reassigning the global would leave every caller on the original.
+    (function installSettingStampHook() {
+        const store = window.KrishiStorage;
+        if (!store || store.__krishiStampHooked) return;
+        const rawSetItem = store.setItem;
+        const rawRemoveItem = store.removeItem;
+        function stampFor(key) {
+            const field = STAMPED_SETTING_KEYS[key];
+            if (!field) return;
+            // Suppressed while applyAllAppData() installs a peer's values: those arrive with
+            // the peer's own clocks, and re-stamping them Date.now() would claim this device
+            // authored the change and push it straight back out.
+            if (window.__krishiApplyingCloudData) return;
+            stampSetting(field);
+        }
+        store.setItem = function (key) {
+            const result = rawSetItem.apply(store, arguments);
+            stampFor(key);
+            return result;
+        };
+        store.removeItem = function (key) {
+            const result = rawRemoveItem.apply(store, arguments);
+            stampFor(key);
+            return result;
+        };
+        store.__krishiStampHooked = true;
+    })();
 
     function toggleDarkMode(){
         document.documentElement.classList.toggle('dark');
@@ -18492,6 +18551,15 @@ ${text}`;
         if (!qbankPersistScheduled) noteQbankPersistOutcome(false);
         
         if (syncSelectiveLogs) {
+            // Values below arrive with the peer's own write clocks, so the storage-boundary
+            // stamp hook must stand down: stamping them Date.now() would claim this device
+            // authored them and push them straight back out, and the merged clocks written at
+            // the end of this block would be the only thing undoing it. Suppressed ONLY when
+            // authoritative stamps actually came with the data — a legacy payload that has
+            // none is better off stamped locally than left ordered by a stale clock.
+            const hasIncomingStamps = !!(data.settingStamps && typeof data.settingStamps === 'object');
+            window.__krishiApplyingCloudData = hasIncomingStamps;
+            try {
             // Save extra config lists
             if (Array.isArray(data.examProfiles)) setJSONArraySafely('krishi_exam_profiles', data.examProfiles, 'examProfiles');
             if (data.homeSettings) KrishiStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
@@ -18540,6 +18608,9 @@ ${text}`;
                     KrishiStorage.setItem(key, data[field]);
                 }
             });
+            } finally {
+                window.__krishiApplyingCloudData = false;
+            }
         }
         
         // Reload state into active memory (no DOM involvement)
@@ -18800,15 +18871,38 @@ ${text}`;
             .sort((a, b) => logTime(b) - logTime(a))
             .slice(0, 2000); // Prevent unbounded growth in Firebase 1MB doc
 
-        // Mock Scores merging.
-        // Entries are plain numbers (KrishiStorageManager.recordMockScore pushes an
-        // accuracy value), so `score.id || score.timestamp` was undefined for every
-        // element and the Map collapsed the whole history into one value. Numbers carry
-        // no identity, so merge by keeping the longer history — this is monotone and can
-        // never shrink the record, which is what actually destroyed data.
+        // Mock Scores merging - union by `ts`, exactly like timingLog above.
+        // The old code kept whichever side's array was LONGER and threw the other away
+        // whole, so a phone with 3 mock results and a tablet with 2 merged to the phone's 3
+        // and the tablet's two results were gone for good. That was justified in a comment
+        // claiming entries are "plain numbers" carrying no identity — untrue since
+        // recordMockScore() started pushing {acc, ts} (js/app.js:17073), and
+        // normalizeMockScores() gives even legacy numbers that shape on load.
+        // `ts` is a real identity, so these union like every other history list.
         let localMockScores = Array.isArray(local.mockScores) ? local.mockScores : [];
         let cloudMockScores = Array.isArray(cloud.mockScores) ? cloud.mockScores : [];
-        merged.mockScores = (localMockScores.length >= cloudMockScores.length ? localMockScores : cloudMockScores).slice(-20);
+        // Pre-`ts` entries genuinely have no identity: two 75% results are indistinguishable,
+        // and keying them on their value would collapse them — the very loss being fixed.
+        // They are keyed by their ordinal among that side's legacy entries instead. Both
+        // sides hold the identical merged array after one sync, so those ordinals line up
+        // from then on and the union stays idempotent.
+        let legacyOrdinal = 0;
+        const scoreTs = s => ((s && typeof s === 'object' && typeof s.ts === 'number') ? s.ts : null);
+        const scoreKey = s => { const t = scoreTs(s); return (t !== null) ? 'ts:' + t : 'legacy:' + (legacyOrdinal++); };
+        const scoreMap = new Map();
+        legacyOrdinal = 0;
+        cloudMockScores.forEach(s => { if (s !== null && s !== undefined) scoreMap.set(scoreKey(s), s); });
+        legacyOrdinal = 0;
+        localMockScores.forEach(s => { if (s !== null && s !== undefined) scoreMap.set(scoreKey(s), s); });
+        // Chronological, oldest first (recordMockScore pushes), so the cap keeps the tail.
+        // Legacy entries sort to the front: they predate `ts`, so they ARE the oldest.
+        // The cap never goes below the longer input, which preserves the one useful property
+        // the old longest-wins merge had — a merge can never shrink the record. Both sides
+        // hold the same length after the merge, so this cannot ratchet upward either.
+        const scoreCap = Math.max(20, localMockScores.length, cloudMockScores.length);
+        merged.mockScores = Array.from(scoreMap.values())
+            .sort((a, b) => (scoreTs(a) || 0) - (scoreTs(b) || 0))
+            .slice(-scoreCap);
 
         // Practice Recent merging - Unique by timestamp, sorted, keep latest 50
         let localPracticeRecent = local.practiceRecent || [];
@@ -18823,11 +18917,33 @@ ${text}`;
         const cloudUpdatedAt = cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function'
             ? cloud.updatedAt.toMillis()
             : (typeof cloud.updatedAt === 'number' ? cloud.updatedAt : 0);
+        // The DOCUMENT clock. collectAllAppData() rewrites `updatedAt` to Date.now() on every
+        // read, so this is structurally almost always false and anything ordered by it alone
+        // can never travel down from a peer — local simply always wins. It survives only as
+        // the fallback for a field with no per-field stamp on either side (values written
+        // before settingStamps existed). Every stamped setting resolves via takeCloudFor().
         let useCloud = cloudUpdatedAt > (local.updatedAt || 0);
-        merged.homeSettings = useCloud ? (cloud.homeSettings || local.homeSettings) : (local.homeSettings || cloud.homeSettings);
-        merged.appearanceSettings = useCloud ? (cloud.appearanceSettings || local.appearanceSettings) : (local.appearanceSettings || cloud.appearanceSettings);
-        merged.customAppearanceSettings = useCloud ? (cloud.customAppearanceSettings || local.customAppearanceSettings) : (local.customAppearanceSettings || cloud.customAppearanceSettings);
-        merged.plannerSettings = useCloud ? (cloud.plannerSettings || local.plannerSettings) : (local.plannerSettings || cloud.plannerSettings);
+
+        const localStamps = (local.settingStamps && typeof local.settingStamps === 'object') ? local.settingStamps : {};
+        const cloudStamps = (cloud.settingStamps && typeof cloud.settingStamps === 'object') ? cloud.settingStamps : {};
+        const mergedStamps = {};
+        // Per-field clock. Also accumulates the surviving stamp into mergedStamps as it goes:
+        // a field that is resolved but whose clock is not carried forward gets compared
+        // against a stale stamp on the next merge and flips straight back, so the two steps
+        // are deliberately impossible to do separately.
+        function takeCloudFor(field) {
+            const ls = Number(localStamps[field] || 0);
+            const cs = Number(cloudStamps[field] || 0);
+            const stamp = Math.max(ls, cs);
+            if (stamp > 0) mergedStamps[field] = stamp;
+            if (cs !== ls) return cs > ls;   // per-field clock decides
+            return useCloud;                  // no stamps to compare: legacy document clock
+        }
+
+        merged.homeSettings = takeCloudFor('homeSettings') ? (cloud.homeSettings || local.homeSettings) : (local.homeSettings || cloud.homeSettings);
+        merged.appearanceSettings = takeCloudFor('appearanceSettings') ? (cloud.appearanceSettings || local.appearanceSettings) : (local.appearanceSettings || cloud.appearanceSettings);
+        merged.customAppearanceSettings = takeCloudFor('customAppearanceSettings') ? (cloud.customAppearanceSettings || local.customAppearanceSettings) : (local.customAppearanceSettings || cloud.customAppearanceSettings);
+        merged.plannerSettings = takeCloudFor('plannerSettings') ? (cloud.plannerSettings || local.plannerSettings) : (local.plannerSettings || cloud.plannerSettings);
 
         // Profile identity carries its own edit timestamp, so it merges on its own clock
         const localProfileStamp = Number((local.userProfile && local.userProfile.updatedAt) || 0);
@@ -18840,13 +18956,13 @@ ${text}`;
             merged.userProfile = cloud.userProfile;
         }
 
-        merged.soundEnabled = useCloud ? (cloud.soundEnabled ?? local.soundEnabled) : (local.soundEnabled ?? cloud.soundEnabled);
-        merged.soundMuted = useCloud ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
-        merged.soundVolume = useCloud ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
+        merged.soundEnabled = takeCloudFor('soundEnabled') ? (cloud.soundEnabled ?? local.soundEnabled) : (local.soundEnabled ?? cloud.soundEnabled);
+        merged.soundMuted = takeCloudFor('soundMuted') ? (cloud.soundMuted ?? local.soundMuted) : (local.soundMuted ?? cloud.soundMuted);
+        merged.soundVolume = takeCloudFor('soundVolume') ? (cloud.soundVolume ?? local.soundVolume) : (local.soundVolume ?? cloud.soundVolume);
 
-        // Object config packs — same document-clock LWW as the interface configs above.
-        merged.goalSettings = useCloud ? (cloud.goalSettings || local.goalSettings) : (local.goalSettings || cloud.goalSettings);
-        merged.lastPracticeConfig = useCloud ? (cloud.lastPracticeConfig || local.lastPracticeConfig) : (local.lastPracticeConfig || cloud.lastPracticeConfig);
+        // Object config packs — same per-field clock as the interface configs above.
+        merged.goalSettings = takeCloudFor('goalSettings') ? (cloud.goalSettings || local.goalSettings) : (local.goalSettings || cloud.goalSettings);
+        merged.lastPracticeConfig = takeCloudFor('lastPracticeConfig') ? (cloud.lastPracticeConfig || local.lastPracticeConfig) : (local.lastPracticeConfig || cloud.lastPracticeConfig);
 
         // Custom subjects merge through their own CRDT log, exactly like bookmarks. A plain
         // union can only ever grow the list, so a removal on one device was silently undone
@@ -18870,28 +18986,14 @@ ${text}`;
         (local.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
         merged.layoutBackups = Array.from(layoutMap.values());
 
-        // Scalar toggles. These merge on their own per-field clock (settingStamps), NOT on
-        // the document clock: collectAllAppData() rewrites `updatedAt` to Date.now() on
-        // every read, so `useCloud` is essentially always false and the cloud side could
-        // never win. That is what stopped a dark-mode OFF from ever reaching the peer while
-        // the initial OFF->ON still appeared to work.
-        // Where neither side has a stamp yet (settings written before this existed, or
-        // toggles with no UI setter) fall back to the old document-clock behaviour.
-        // Assigned only when defined — an undefined value in a Firestore write throws.
-        const localStamps = (local.settingStamps && typeof local.settingStamps === 'object') ? local.settingStamps : {};
-        const cloudStamps = (cloud.settingStamps && typeof cloud.settingStamps === 'object') ? cloud.settingStamps : {};
-        const mergedStamps = {};
+        // Scalar toggles. Same per-field clock as every config pack above — this is what
+        // stopped a dark-mode OFF from ever reaching the peer while the initial OFF->ON still
+        // appeared to work (the peer held no value, so `local ?? cloud` had to fall through).
         ['dark', 'batterySaver', 'hapticEnabled', 'eliteAnimations',
          'difficultyBias', 'intensityMode', 'activePlanMode', 'retryDelay'].forEach(k => {
-            const ls = Number(localStamps[k] || 0);
-            const cs = Number(cloudStamps[k] || 0);
-            let takeCloud;
-            if (cs !== ls) takeCloud = cs > ls;       // per-field clock decides
-            else takeCloud = useCloud;                 // no stamps to compare: legacy path
-            const v = takeCloud ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
+            const v = takeCloudFor(k) ? (cloud[k] ?? local[k]) : (local[k] ?? cloud[k]);
+            // Assigned only when defined — an undefined value in a Firestore write throws.
             if (v !== undefined) merged[k] = v;
-            const stamp = Math.max(ls, cs);
-            if (stamp > 0) mergedStamps[k] = stamp;
         });
         merged.settingStamps = mergedStamps;
 

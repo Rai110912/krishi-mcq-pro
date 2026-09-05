@@ -10,8 +10,9 @@
     {
       "name": "krishi-source-preview",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5500"],
-      "port": 5500
+      "runtimeArgs": ["-u", "-c", "import os, http.server, socketserver; port=int(os.environ.get('PORT','5500')); socketserver.TCPServer.allow_reuse_address=True; print('serving on', port, flush=True); socketserver.TCPServer(('', port), http.server.SimpleHTTPRequestHandler).serve_forever()"],
+      "port": 5500,
+      "autoPort": true
     }
   ]
 }

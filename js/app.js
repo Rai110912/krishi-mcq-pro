@@ -6948,6 +6948,9 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         state.selectedOption = null;
         state.answered = false;
         state.sessionResults = [];
+        // Question ids whose answer was reached with an assist (50:50). Read at grading time to cap
+        // the FSRS grade; per session, so an assist never follows a card into the next one.
+        state.assistedIds = {};
         state.isMock = isMock;
         state.totalQuestions = questions.length;
         state.sessionId = Date.now(); // Track active session to prevent race conditions
@@ -7040,9 +7043,35 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
 
     // ==================== MCQ GAMEPLAY ====================
     let questionStartTime = Date.now();
-    function startQuestionTimer() { 
-        questionStartTime = Date.now(); 
-        
+
+    // Time the app spent backgrounded during the current question. The elapsed figure feeds two very
+    // different consumers: the analytics timings (state.totalTimeSpent / state.timeSpentArray), which
+    // must stay literally true, and the FSRS grade, which must not — the grade is derived from seconds
+    // alone (<=5s Easy, <=15s Good, >15s Hard), so a phone call mid-question pushed the elapsed time
+    // past the Hard threshold and had the scheduler re-serve tomorrow a card the learner knew cold.
+    // Only the grade subtracts this.
+    let questionAwayMs = 0;
+    let questionHiddenSince = 0;
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') {
+            questionHiddenSince = Date.now();
+        } else if (questionHiddenSince) {
+            questionAwayMs += Date.now() - questionHiddenSince;
+            questionHiddenSince = 0;
+        }
+    });
+
+    // The seconds an FSRS grade may be derived from: wall clock minus time the app was off screen.
+    function gradingSeconds(secondsSpent) {
+        let away = questionAwayMs + (questionHiddenSince ? Date.now() - questionHiddenSince : 0);
+        return Math.max(1, secondsSpent - Math.round(away / 1000));
+    }
+
+    function startQuestionTimer() {
+        questionStartTime = Date.now();
+        questionAwayMs = 0;
+        questionHiddenSince = 0;
+
         // Setup per-question limit timer if configured
         if (state.perQuestionTimerInterval) {
             clearInterval(state.perQuestionTimerInterval);
@@ -7521,7 +7550,17 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         }));
 
         if (window.KrishiSM2Engine && !state.isMock) {
-            window.KrishiSM2Engine.recordAnswer(q.id || q.q, isCorrect, secondsSpent);
+            // The scheduler's only input was the clock, which let two false signals through. A 50:50
+            // assisted answer left two options standing, so a coin-flip click 3 seconds later graded
+            // Easy(3) and sent a brand new card 6 days away — on the one question the learner had just
+            // admitted they could not answer unaided. maxGrade is the cap the flashcard swiper already
+            // uses for its self-rated swipes; a wrong answer is grade 0 already, so the cap can only
+            // ever trim. The seconds are the on-screen seconds, not the wall clock (see gradingSeconds).
+            let assisted = !!(state.assistedIds && state.assistedIds[String(q.id || q.q)]);
+            window.KrishiSM2Engine.recordAnswer(
+                q.id || q.q, isCorrect, gradingSeconds(secondsSpent),
+                assisted ? { maxGrade: 1 } : undefined
+            );
         }
 
         // Hide or show explanation container
@@ -17984,8 +18023,13 @@ document.querySelectorAll('button').forEach(btn => {
             ? window.KrishiSM2Engine.getNewQuestions(allQ).filter(q => !mistakes.has(String(q.id || q.q)))
             : [];
 
+        // getDueQuestions() hands these back most-overdue-first, so the 15-cap below now takes the 15
+        // cards closest to being forgotten. Shuffling BEFORE the cap is exactly what turned the cap
+        // into a lottery, so the due half is deliberately left in urgency order here — only the new
+        // card draw is shuffled, and only the final presentation order is (which cannot change WHICH
+        // cards were selected). A due-only session therefore also serves the most urgent cards first,
+        // so an interrupted session still got the reps that mattered most.
         if (typeof shuffle === 'function') {
-            pool = shuffle(pool);
             newQs = shuffle(newQs);
         }
 
@@ -25577,6 +25621,14 @@ window.krishiHandleBack = function krishiHandleBack() {
         }
 
         fiftyUsedIndex = st.currentIndex;
+        // Tell the scheduler this answer was assisted. fiftyUsedIndex lives in this IIFE and is reset
+        // the moment the question changes, so the flag is stamped on the session state by question id
+        // where checkAnswer() can still read it. Without it the grade came from elapsed seconds alone:
+        // two options left, a 3 second click, Easy(3), and a new card scheduled 6 days out.
+        try {
+            if (!st.assistedIds) st.assistedIds = {};
+            st.assistedIds[String(q.id || q.q)] = true;
+        } catch(e) {}
         setFiftyEnabled(false);
         sound('click');
         toast(removeCount === 2 ? '➗ Two wrong options removed.' : '➗ One wrong option removed.');

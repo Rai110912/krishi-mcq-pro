@@ -548,3 +548,71 @@ test('startSmartPracticeMode refuses to start a session with an empty pool', () 
     const guard = /if\s*\(\s*!pool\.length\s*\)|pool\.length\s*===\s*0\s*\)/.exec(body.slice(0, call));
     assert.ok(guard, 'no empty-pool guard between the mode dispatch and setupMCQSession(pool, ...)');
 });
+
+// ==================== SPACED REVIEW SCHEDULING SIGNALS ====================
+// The FSRS engine itself is unit-tested in tests/sm2.test.js. What cannot run under Node is the app
+// side that feeds it: which due cards a capped session keeps, and what the grade is derived from.
+// Both were silently wrong in ways no assertion in either file would have caught.
+
+/** Source of one 4-space-indented inner function of the app IIFE, up to where the next one starts. */
+function fnSrc(src, name) {
+    const start = src.indexOf('function ' + name + '(');
+    assert.ok(start > 0, 'js/app.js: function ' + name + '() is gone - update tests/boot_contract.test.js');
+    const end = src.indexOf('\n    function ', start + 1);
+    return src.slice(start, end > 0 ? end : src.length);
+}
+
+// getDueQuestions() returns the whole backlog most-overdue-first and startSpacedReview() caps it at
+// 15. It used to shuffle before that cap, which turned the cap into a lottery: with 200 cards due you
+// got a random 15, then a fresh random 15 tomorrow, so a card three months overdue had no better
+// chance of a rep than one first due today - and it could lose that draw every single day while the
+// backlog grew. Interleaving AFTER the cap is fine; it cannot change which cards were selected.
+test('startSpacedReview caps the due pool by urgency, never by shuffle', () => {
+    const body = fnSrc(APP_CODE, 'startSpacedReview');
+    const cap = body.indexOf('pool = pool.slice(0, 15)');
+    assert.ok(cap > 0, 'the 15-card due cap is gone from startSpacedReview() - re-check this contract');
+    assert.ok(
+        !/pool\s*=\s*shuffle\(\s*pool\s*\)/.test(body.slice(0, cap)),
+        'startSpacedReview() shuffles the due pool before capping it at 15, so the cap keeps 15 cards ' +
+        'at random and the most overdue card can lose that draw every day forever'
+    );
+});
+
+// The scheduler's only input was the clock (<=5s Easy, <=15s Good, >15s Hard), and two false signals
+// rode in on it. First: 50:50 leaves two options standing, so a coin-flip click three seconds later
+// graded Easy(3) and pushed a brand new card six days out - on the one question the learner had just
+// admitted they could not answer unaided. fiftyUsedIndex lives in a separate IIFE and is unreachable
+// from the grading path, so the assist has to be stamped on the session state by question id.
+test('a 50:50 assist is recorded and caps the grade of the answer it produced', () => {
+    assert.match(APP_CODE, /assistedIds\[String\(q\.id \|\| q\.q\)\]\s*=\s*true/,
+        'fiftyFifty() no longer stamps the assist onto the session state, so the scheduler cannot tell ' +
+        'a coin flip between two options from actual recall');
+    assert.match(fnSrc(APP_CODE, 'setupMCQSession'), /state\.assistedIds\s*=\s*\{\s*\}/,
+        'setupMCQSession() does not reset state.assistedIds, so one 50:50 keeps capping grades in ' +
+        'every later session');
+
+    const graded = fnSrc(APP_CODE, 'submitMCQAnswer');
+    const at = graded.indexOf('KrishiSM2Engine.recordAnswer(');
+    assert.ok(at > 0, 'submitMCQAnswer() no longer feeds KrishiSM2Engine.recordAnswer()');
+    const call = graded.slice(at, at + 220);
+    assert.match(call, /maxGrade/,
+        'the graded answer path passes no maxGrade, so a 50:50-assisted guess still earns the full ' +
+        'Easy interval and disappears for six days');
+    assert.match(call, /assisted/,
+        'recordAnswer() gets a maxGrade that is not derived from the assist flag');
+});
+
+// Second false signal: the grade came off the wall clock, so a phone call or a lock screen mid-question
+// pushed the elapsed time past the Hard threshold on a card the learner knew cold - and FSRS obediently
+// re-served it tomorrow. gradingSeconds() subtracts the time the app was off screen. Only the grade
+// subtracts it; state.totalTimeSpent / timeSpentArray must stay literally true for analytics.
+test('the FSRS grade is derived from on-screen seconds, reset for each question', () => {
+    assert.match(APP_CODE, /function gradingSeconds\(/,
+        'gradingSeconds() is gone, so the grade is back on raw wall-clock time and a backgrounded ' +
+        'phone re-schedules a known card as Hard');
+    assert.match(fnSrc(APP_CODE, 'submitMCQAnswer'), /recordAnswer\(\s*[\s\S]{0,80}?gradingSeconds\(/,
+        'recordAnswer() is being handed the raw elapsed seconds instead of gradingSeconds(...)');
+    assert.match(fnSrc(APP_CODE, 'startQuestionTimer'), /questionAwayMs\s*=\s*0/,
+        'startQuestionTimer() does not clear questionAwayMs, so time spent off screen during one ' +
+        'question keeps being subtracted from every answer after it');
+});

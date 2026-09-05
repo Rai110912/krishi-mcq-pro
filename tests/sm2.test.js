@@ -244,3 +244,26 @@ test('dueCount counts only cards a session can serve, so the badge cannot over-p
         delete window.getPracticeIdSet;
     }
 });
+
+// Every caller caps this list - startSpacedReview() keeps 15 - so bank order made the cap a lottery:
+// with 200 cards due you got a random 15, and a fresh random 15 tomorrow, which means a card overdue
+// by three months had no better chance of a rep than one first due today and could lose that draw
+// every single day while the backlog grew. Urgency is the entire point of a schedule.
+test('due cards come back most overdue first, so a capped session takes the most urgent', () => {
+    localStorage.setItem('krishi_sm2', '{}');
+    seed('fresh',   { status: 'scheduled', nextReview: Date.now() - 60 * 1000 });
+    seed('ancient', { status: 'scheduled', nextReview: Date.now() - 90 * DAY_MS });
+    seed('midway',  { status: 'scheduled', nextReview: Date.now() - 7 * DAY_MS });
+    seed('later',   { status: 'scheduled', nextReview: Date.now() + 5 * DAY_MS });
+
+    // Bank order deliberately disagrees with urgency order, least urgent first.
+    const pool = [{ id: 'fresh' }, { id: 'later' }, { id: 'midway' }, { id: 'ancient' }];
+    assert.deepStrictEqual(
+        Engine.getDueQuestions(pool).map(q => q.id),
+        ['ancient', 'midway', 'fresh'],
+        'getDueQuestions() is not ordered by nextReview, so a capped session picks arbitrary cards'
+    );
+
+    // The ordering only matters because callers slice it - that is the behaviour being pinned.
+    assert.deepStrictEqual(Engine.getDueQuestions(pool).slice(0, 2).map(q => q.id), ['ancient', 'midway']);
+});

@@ -912,7 +912,7 @@ class KrishiSM2Engine {
         const now = todayEnd.getTime();
 
         const mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
-        return allQuestions.filter(q => {
+        const due = allQuestions.filter(q => {
             const qId = q.id || q.q;
             const rec = data[qId];
             if (!rec) return false;
@@ -922,6 +922,18 @@ class KrishiSM2Engine {
             // Due strictly by schedule — a just-failed question (nextReview = tomorrow)
             // is no longer force-shown today via a sticky status==='due' flag.
             return rec.nextReview && rec.nextReview <= now;
+        });
+
+        // Most overdue first. Every caller caps this list — startSpacedReview() takes 15 — and in bank
+        // order that cap was a lottery: a card 60 days overdue had exactly the same chance of making
+        // the cut as one first due today, and losing that lottery each day meant it was never reviewed
+        // at all while the backlog kept growing. Urgency is the whole point of the schedule: the card
+        // closest to being forgotten is the one the rep is worth spending on. nextReview is a
+        // millisecond stamp derived from lastAnswered, so real ties are vanishingly rare; where they
+        // do occur Array#sort is stable and bank order breaks them.
+        return due.sort((a, b) => {
+            const ra = data[a.id || a.q], rb = data[b.id || b.q];
+            return (ra.nextReview || 0) - (rb.nextReview || 0);
         });
     }
 

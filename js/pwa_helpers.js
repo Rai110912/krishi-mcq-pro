@@ -565,14 +565,53 @@ window.KrishiPreCachePriorityManager = KrishiPreCachePriorityManager;
 
 class KrishiSM2Engine {
     static STORAGE_KEY = 'krishi_sm2';
+    static DAILY_LOG_KEY = 'krishi_sm2_daily_log';
+
+    // KrishiStorage.init() copies every krishi_* key out of native localStorage into its own
+    // IndexedDB store and then DELETES the localStorage copy (krishi_idb.js:88-96). This
+    // engine read and wrote localStorage directly, so on every boot after an answer its
+    // entire store disappeared from where it looks. Verified live: KrishiStorage held 2
+    // scheduling records while _getData() returned 0.
+    //
+    // The consequences were not limited to sync. getDueQuestions()/getStats() saw an empty
+    // schedule, recordAnswer() rebuilt each record from reviews:0 (losing difficulty,
+    // stability and lapses), and collectAllAppData() pushed `sm2: {}` up. Nothing was
+    // destroyed in the cloud — the merge unions by question id — but the spacing only ever
+    // came back because applyAllAppData() writes the cloud copy back down, so a signed-out
+    // or offline student lost their review schedule on every single launch.
+    //
+    // One store from here on. localStorage stays as a fallback for the window before
+    // KrishiStorage has loaded, and _getData() folds any leftover localStorage blob in
+    // rather than picking one copy over the other.
+    static _store() {
+        return window.KrishiStorage || localStorage;
+    }
 
     static _getData() {
         let data = {};
         let dataMigrated = false;
         try {
-            const raw = localStorage.getItem(this.STORAGE_KEY);
+            const raw = this._store().getItem(this.STORAGE_KEY);
             data = raw ? JSON.parse(raw) : {};
-            
+
+            // A blob may still be sitting in native localStorage: written by this engine
+            // before the update, or written this session before KrishiStorage came up.
+            // UNION the two per record instead of choosing a side — the KrishiStorage copy
+            // is the older pre-boot snapshot and the localStorage one is whatever was
+            // answered after init deleted it, so either alone drops real reviews. Newest
+            // lastAnswered wins, the same rule the cloud merge uses.
+            const strays = this._drainStrayLocalStorage(this.STORAGE_KEY);
+            if (strays) {
+                Object.entries(strays).forEach(([id, rec]) => {
+                    if (!rec) return;
+                    const held = data[id];
+                    if (!held || (rec.lastAnswered || 0) > (held.lastAnswered || 0)) {
+                        data[id] = rec;
+                    }
+                });
+                dataMigrated = true;
+            }
+
             Object.values(data).forEach(item => {
                 if (item.nextReviewDate && !item.nextReview) {
                     item.nextReview = new Date(item.nextReviewDate).getTime();
@@ -585,10 +624,10 @@ class KrishiSM2Engine {
             });
         if (dataMigrated) this._saveData(data);
     } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.migrate', e); }
-        
+
         // Backward compatibility migration from legacy krishi_review
         try {
-            let legacyRaw = localStorage.getItem('krishi_review');
+            let legacyRaw = this._store().getItem('krishi_review');
             if (legacyRaw) {
                 let legacyData = JSON.parse(legacyRaw);
                 if (legacyData && typeof legacyData === 'object' && !Array.isArray(legacyData)) {
@@ -611,17 +650,40 @@ class KrishiSM2Engine {
                         this._saveData(data);
                     }
                 }
-                localStorage.removeItem('krishi_review');
+                this._store().removeItem('krishi_review');
+                if (window.KrishiStorage) { try { localStorage.removeItem('krishi_review'); } catch(e){} }
             }
         } catch(e) {
-            localStorage.removeItem('krishi_review');
+            this._store().removeItem('krishi_review');
         }
         return data;
     }
 
+    /**
+     * Reads and clears a stray native-localStorage copy of a key this engine owns.
+     * Returns the parsed object, or null when there was nothing there.
+     *
+     * Only ever called when KrishiStorage is present: without it localStorage IS the store
+     * and draining it would delete the live data.
+     */
+    static _drainStrayLocalStorage(key) {
+        if (!window.KrishiStorage) return null;
+        let parsed = null;
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return null;
+            parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = null;
+        } catch(e) { parsed = null; }
+        // Removed either way: an unparseable blob is not recoverable and leaving it behind
+        // means re-reading the same garbage on every _getData() call.
+        try { localStorage.removeItem(key); } catch(e) {}
+        return parsed;
+    }
+
     static _saveData(data) {
         try {
-            localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+            this._store().setItem(this.STORAGE_KEY, JSON.stringify(data));
         } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.save', e); }
     }
 
@@ -807,26 +869,38 @@ class KrishiSM2Engine {
     static recordDailyReview(isCorrect = null) {
         let log = {};
         try {
-        log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
+        log = JSON.parse(this._store().getItem(this.DAILY_LOG_KEY) || '{}');
+        // Same store split as the schedule itself: this log lived in localStorage, which
+        // KrishiStorage.init() empties, so getRetentionRate() read 0% after every boot.
+        const strays = this._drainStrayLocalStorage(this.DAILY_LOG_KEY);
+        if (strays) {
+            Object.entries(strays).forEach(([day, rec]) => {
+                if (!rec) return;
+                const held = log[day];
+                // Per-day counters, so the larger tally is the more complete one rather
+                // than one side overwriting the other.
+                if (!held || (rec.total || 0) > (held.total || 0)) log[day] = rec;
+            });
+        }
     } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_read', e); }
-        
+
         const dateStr = new Date().toISOString().split('T')[0];
         if (!log[dateStr]) log[dateStr] = { total: 0, correct: 0 };
-        
+
         // If we are just recording a review attempt
         if (isCorrect !== null) {
             log[dateStr].total += 1;
             if (isCorrect) log[dateStr].correct += 1;
         }
-        
+
         try {
-            localStorage.setItem('krishi_sm2_daily_log', JSON.stringify(log));
+            this._store().setItem(this.DAILY_LOG_KEY, JSON.stringify(log));
         } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_write', e); }
     }
 
     static getRetentionRate() {
         try {
-            let log = JSON.parse(localStorage.getItem('krishi_sm2_daily_log') || '{}');
+            let log = JSON.parse(this._store().getItem(this.DAILY_LOG_KEY) || '{}');
             const dateStr = new Date().toISOString().split('T')[0];
             let today = log[dateStr];
             if (!today || today.total === 0) return 0;

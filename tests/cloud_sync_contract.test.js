@@ -423,3 +423,595 @@ test('the longest-wins mockScores merge is gone', () => {
     );
 });
 
+// ── A capped list has two trim sites, and they must agree ───────────────────────
+//
+// The cloud merge unioned practiceRecent to 50 while saveRecentPracticeSessionLog() cut it
+// back to 10, so the first session finished after a sync deleted 40 entries — the peer
+// device's older sessions first, since the list is newest-first. The union was real and then
+// immediately undone, which is why cross-device practice history looked like it appeared and
+// then vanished. Both sites now read one constant.
+
+/** Runs the real practiceRecent block out of mergeCloudAndLocalData() against two devices. */
+function mergePracticeRecent(localList, cloudList) {
+    const body = functionBody('mergeCloudAndLocalData');
+    const from = body.indexOf('let localPracticeRecent');
+    assert.ok(from > 0, 'the practiceRecent merge block was renamed — update this test');
+    const marker = 'PRACTICE_RECENT_CAP);';
+    const to = body.indexOf(marker, from);
+    assert.ok(to > from,
+        'the practiceRecent merge no longer caps with PRACTICE_RECENT_CAP — a raw number here ' +
+        'is the exact drift this test exists to catch'
+    );
+    const src = body.slice(from, to + marker.length);
+    const merged = {};
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', 'PRACTICE_RECENT_CAP', src)(
+        { practiceRecent: localList }, { practiceRecent: cloudList }, merged, practiceRecentCap()
+    );
+    return merged.practiceRecent;
+}
+
+/** The single declared cap, read out of the source so the tests cannot hardcode a stale one. */
+function practiceRecentCap() {
+    const m = /const\s+PRACTICE_RECENT_CAP\s*=\s*(\d+)\s*;/.exec(APP_JS);
+    assert.ok(m, 'js/app.js: const PRACTICE_RECENT_CAP was removed or renamed');
+    return Number(m[1]);
+}
+
+/** Runs the real saveRecentPracticeSessionLog() body against a starting list. */
+function appendPracticeSession(existing, item) {
+    const body = functionBody('saveRecentPracticeSessionLog');
+    let stored = JSON.stringify(existing);
+    const store = {
+        getItem: () => stored,
+        setItem: (_k, v) => { stored = v; }
+    };
+    // eslint-disable-next-line no-new-func
+    new Function('KrishiStorage', 'PRACTICE_RECENT_CAP', 'item', body.slice(1, -1))(
+        store, practiceRecentCap(), item
+    );
+    return JSON.parse(stored);
+}
+
+test('one constant caps practiceRecent in both the writer and the merge', () => {
+    const declarations = APP_JS.match(/const\s+PRACTICE_RECENT_CAP\s*=/g) || [];
+    assert.equal(declarations.length, 1,
+        'PRACTICE_RECENT_CAP must be declared exactly once; a second copy is a second number ' +
+        'that can drift'
+    );
+
+    const writer = functionBody('saveRecentPracticeSessionLog');
+    assert.match(writer, /slice\(0,\s*PRACTICE_RECENT_CAP\)/,
+        'saveRecentPracticeSessionLog() must trim to PRACTICE_RECENT_CAP — the hardcoded ' +
+        'slice(0, 10) is what threw away the merged history'
+    );
+    assert.doesNotMatch(writer, /slice\(0,\s*\d+\)/,
+        'a numeric literal is back in the writer; it can no longer be kept in step with the merge'
+    );
+
+    const body = functionBody('mergeCloudAndLocalData');
+    const line = /merged\.practiceRecent\s*=.*$/m.exec(body);
+    assert.ok(line, 'merged.practiceRecent assignment not found');
+    assert.match(line[0], /PRACTICE_RECENT_CAP/,
+        'the merge must cap practiceRecent with the same constant the writer trims to'
+    );
+});
+
+test('a finished session no longer deletes the history the merge just gained', () => {
+    const cap = practiceRecentCap();
+    const phone = Array.from({ length: 10 }, (_, i) => ({
+        id: 'sess_p' + i, timestamp: 2000 + i, accuracy: 70, correct: 7, total: 10, mode: 'Phone'
+    }));
+    const tablet = Array.from({ length: 10 }, (_, i) => ({
+        id: 'sess_t' + i, timestamp: 1000 + i, accuracy: 60, correct: 6, total: 10, mode: 'Tablet'
+    }));
+
+    const merged = mergePracticeRecent(phone, tablet);
+    assert.equal(merged.length, 20, 'both devices\' sessions must survive the union');
+
+    // The step that used to undo it: one more practice session on the phone.
+    const after = appendPracticeSession(merged, {
+        id: 'sess_new', timestamp: 9999, accuracy: 90, correct: 9, total: 10, mode: 'Phone'
+    });
+    assert.equal(after.length, 21,
+        'the writer trimmed the union back down — this is the bug, and 10 here means it is back'
+    );
+    assert.equal(after[0].id, 'sess_new', 'the new session goes to the front (newest-first)');
+    assert.ok(after.some(s => s.mode === 'Tablet'),
+        'the peer device\'s sessions must still be there after practising locally'
+    );
+    assert.ok(cap >= 20,
+        'the cap must leave room for two devices\' worth of sessions, or the union is pointless'
+    );
+});
+
+test('practiceRecent stays newest-first and bounded at the shared cap', () => {
+    const cap = practiceRecentCap();
+    let list = [];
+    for (let i = 0; i < cap + 15; i++) {
+        list = appendPracticeSession(list, { id: 'sess_' + i, timestamp: i, accuracy: 50, correct: 5, total: 10, mode: 'M' });
+    }
+    assert.equal(list.length, cap, 'the writer must still enforce a bound');
+    assert.equal(list[0].id, 'sess_' + (cap + 14), 'the newest session must be first');
+    assert.ok(list.every((s, i, a) => i === 0 || s.timestamp <= a[i - 1].timestamp),
+        'newest-first order is what the UI slice(0, 5) and the merge sort both rely on'
+    );
+
+    // Merging a full list with itself must not grow or reorder it.
+    assert.deepEqual(mergePracticeRecent(list, list), list,
+        'the practiceRecent merge must be idempotent at the cap'
+    );
+});
+
+test('mockScores and timingLog writers hold their merged length instead of draining', () => {
+    // These two look like the same cap mismatch but lose nothing: a single shift() after a
+    // single push cannot walk an over-long array back down, so they sit at whatever the merge
+    // produced. Lowering their merge caps to "fix" the mismatch would delete real history.
+    const recorder = APP_JS.slice(APP_JS.indexOf('recordQuestionTime: function'), APP_JS.indexOf('loadTimingData: function'));
+    assert.match(recorder, /_timingLog\.length\s*>\s*500\)\s*_timingLog\.shift\(\)/,
+        'timingLog still trims with one shift() per push; if this became a while/splice drain it ' +
+        'would grind the merged 2000 back to 500 and thrash against the cloud every sync'
+    );
+    assert.match(recorder, /_mockTestScores\.length\s*>\s*10\)\s*_mockTestScores\.shift\(\)/,
+        'mockScores still trims with one shift() per push - see above'
+    );
+});
+
+// ── A union cannot delete, so deletions need tombstones ─────────────────────────
+//
+// examProfiles unions by `p.id` and syllabusCustom by `s.subject`. A union only ever grows,
+// so deleteProfileDirectly() / deleteCustomSubject() removed the row locally and the next
+// merge with a peer that still held it handed it straight back. customSubjects already had a
+// CRDT log for exactly this; these two now use the same {action, timestamp, _rev} records.
+
+/** The four places a payload field has to appear or it silently never travels. */
+const ROUND_TRIP = [
+    ['examProfilesLog', 'krishi_exam_profiles_log'],
+    ['syllabusCustomLog', 'krishi_syllabus_custom_log']
+];
+
+test('tombstone logs are wired through all four sync stages', () => {
+    for (const [field] of ROUND_TRIP) {
+        assert.match(functionBody('collectAllAppData'), new RegExp('payload\\.' + field + '\\s*='),
+            'collectAllAppData() never reads ' + field + ', so the tombstones stay on this device'
+        );
+        assert.match(functionBody('applyAllAppData'), new RegExp('data\\.' + field),
+            'applyAllAppData() never writes ' + field + ' down, so this device would keep only ' +
+            'its own records and the union would resurrect every row the peer deleted'
+        );
+        assert.match(functionBody('mergeCloudAndLocalData'), new RegExp('merged\\.' + field + '\\s*='),
+            'mergeCloudAndLocalData() must carry ' + field + ' forward or it is dropped on write-back'
+        );
+        // dark/batterySaver were already lost exactly this way: merged correctly, then never
+        // shipped because the delta writer did not list them.
+        assert.match(functionBody('getDifferentialSyncDelta'), new RegExp("'" + field + "'"),
+            field + ' is missing from getDifferentialSyncDelta()\'s keysToCheck, so a deletion ' +
+            'would merge correctly on this device and never be sent to the other one'
+        );
+    }
+});
+
+test('every tombstoned list has a log key and an identity matching its merge key', () => {
+    const spec = APP_JS.slice(APP_JS.indexOf('const TOMBSTONE_LISTS'), APP_JS.indexOf('function tombstoneIdsOf'));
+    assert.match(spec, /'krishi_exam_profiles':\s*\{[^}]*idOf:\s*p\s*=>\s*\(p && p\.id\)/,
+        'examProfiles tombstones must key on p.id - the merge keys profileMap on p.id, and an ' +
+        'id mismatch means the tombstone names a row the merge cannot find'
+    );
+    assert.match(spec, /'krishi_syllabus_custom':\s*\{[^}]*idOf:\s*s\s*=>\s*\(s && s\.subject\)/,
+        'syllabusCustom tombstones must key on s.subject to match syllabusMap'
+    );
+    for (const [, logKey] of ROUND_TRIP) {
+        assert.ok(spec.includes("'" + logKey + "'"), 'log key ' + logKey + ' is not declared');
+        assert.ok(!APP_JS.includes("TOMBSTONE_LISTS['" + logKey + "']?."),
+            'the log key must not itself be a tombstoned list or writing the log recurses'
+        );
+    }
+});
+
+/** Runs one real tombstoned-list block out of mergeCloudAndLocalData(). */
+function mergeTombstonedList(field, localState, cloudState) {
+    const body = functionBody('mergeCloudAndLocalData');
+    const start = field === 'examProfiles' ? 'let localProfiles' : 'let localSyllabus';
+    const endMarker = 'merged.' + field + ' = Array.from(';
+    const from = body.indexOf(start);
+    assert.ok(from > 0, 'the ' + field + ' merge block was renamed — update this test');
+    const to = body.indexOf(endMarker, from);
+    assert.ok(to > from, field + ' is no longer built from a Map — update this test');
+    const src = body.slice(from, body.indexOf(';', to) + 1);
+    assert.match(src, /mergeCRDTLogs\(/,
+        field + ' does not consult a CRDT log, so a deletion there can still be resurrected'
+    );
+    const merged = {};
+    // eslint-disable-next-line no-new-func
+    const crdt = new Function('localLog', 'cloudLog', functionBody('mergeCRDTLogs').slice(1, -1));
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', 'mergeCRDTLogs', src)(
+        localState, cloudState, merged, crdt
+    );
+    return merged;
+}
+
+test('a deleted exam profile stays deleted after merging with a peer that still has it', () => {
+    const keep = { id: 'profile_1', name: 'Kept', active: true };
+    const gone = { id: 'profile_2', name: 'Deleted' };
+
+    // Phone deleted profile_2; the tablet's copy of the cloud still lists it.
+    const merged = mergeTombstonedList('examProfiles',
+        { examProfiles: [keep], examProfilesLog: { profile_2: { action: 'remove', timestamp: 200, _rev: 1 } } },
+        { examProfiles: [keep, gone], examProfilesLog: {} }
+    );
+
+    assert.deepEqual(merged.examProfiles.map(p => p.id), ['profile_1'],
+        'the union handed the deleted profile back — this is the whole bug'
+    );
+    assert.equal(merged.examProfilesLog.profile_2.action, 'remove',
+        'the tombstone must be carried forward, or the next merge resurrects the row again'
+    );
+});
+
+test('a re-added profile beats an older tombstone', () => {
+    const again = { id: 'profile_2', name: 'Back' };
+    const merged = mergeTombstonedList('examProfiles',
+        { examProfiles: [again], examProfilesLog: { profile_2: { action: 'add', timestamp: 900, _rev: 2 } } },
+        { examProfiles: [], examProfilesLog: { profile_2: { action: 'remove', timestamp: 200, _rev: 1 } } }
+    );
+    assert.deepEqual(merged.examProfiles.map(p => p.id), ['profile_2'],
+        'the newer add must win, or deleting something once bans it forever'
+    );
+});
+
+test('a deleted syllabus subject stays deleted', () => {
+    const merged = mergeTombstonedList('syllabusCustom',
+        { syllabusCustom: [{ subject: 'Agronomy', topics: [] }], syllabusCustomLog: { Horticulture: { action: 'remove', timestamp: 500, _rev: 1 } } },
+        { syllabusCustom: [{ subject: 'Agronomy', topics: [] }, { subject: 'Horticulture', topics: [] }], syllabusCustomLog: {} }
+    );
+    assert.deepEqual(merged.syllabusCustom.map(s => s.subject), ['Agronomy'],
+        'deleteCustomSubject() must survive a merge with a peer that still has the subject'
+    );
+});
+
+test('tombstones only remove; a list with no log merges exactly as before', () => {
+    const a = { id: 'p1' }, b = { id: 'p2' };
+    const merged = mergeTombstonedList('examProfiles',
+        { examProfiles: [a] }, { examProfiles: [b] }
+    );
+    assert.deepEqual(merged.examProfiles.map(p => p.id).sort(), ['p1', 'p2'],
+        'with no tombstones on either side the union must be untouched — legacy payloads have ' +
+        'no log at all and must not lose rows'
+    );
+});
+
+/** Runs the real recordTombstoneDiff() against a stubbed store. */
+function runDiff(startingLog, beforeIds, afterIds) {
+    let saved = JSON.stringify(startingLog);
+    const store = { getItem: () => saved, setItem: (_k, v) => { saved = v; } };
+    // eslint-disable-next-line no-new-func
+    new Function('KrishiStorage', 'safeJsonParse', 'spec', 'beforeIds', 'afterIds',
+        functionBody('recordTombstoneDiff').slice(1, -1)
+    )(store, (s, f) => { try { return JSON.parse(s); } catch (e) { return f; } },
+      { logKey: 'k' }, beforeIds, afterIds);
+    return JSON.parse(saved);
+}
+
+test('the tombstone record is derived from the diff, not written at each delete site', () => {
+    const log = runDiff({}, ['p1', 'p2', 'p3'], ['p1']);
+    assert.equal(log.p2.action, 'remove', 'a row that disappeared must get a remove record');
+    assert.equal(log.p3.action, 'remove');
+    assert.equal(log.p1, undefined, 'a row that survived unchanged must not be logged at all');
+
+    const added = runDiff({}, ['p1'], ['p1', 'p4']);
+    assert.equal(added.p4.action, 'add',
+        'adds are logged too: an add record is the only thing that can beat a stale tombstone ' +
+        'still sitting on a peer'
+    );
+});
+
+test('re-recording the same state does not bump the tombstone clock', () => {
+    const first = runDiff({}, ['p1', 'p2'], ['p1']);
+    const again = runDiff(first, ['p1', 'p2'], ['p1']);
+    assert.deepEqual(again, first,
+        'an unchanged record must keep its original timestamp and _rev, or every save would ' +
+        'refresh the clock and a genuine re-add on the peer could never win'
+    );
+
+    const flipped = runDiff(first, ['p1'], ['p1', 'p2']);
+    assert.equal(flipped.p2.action, 'add', 'a real change must still be recorded');
+    assert.ok(flipped.p2._rev > first.p2._rev, '_rev must advance so same-millisecond edits order');
+});
+
+test('the diff reads the old ids before the write and covers removeItem', () => {
+    const hook = APP_JS.slice(APP_JS.indexOf('function installSettingStampHook'), APP_JS.indexOf('function toggleDarkMode'));
+
+    assert.match(hook, /const rawGetItem = store\.getItem/,
+        'the hook must capture getItem: the previous ids have to be read before the write ' +
+        'lands, or the diff compares the new list against itself and records nothing'
+    );
+    for (const fn of ['setItem', 'removeItem']) {
+        const block = hook.slice(hook.indexOf('store.' + fn + ' = function'));
+        const beforeIdx = block.indexOf('beforeIds');
+        const writeIdx = block.indexOf(fn === 'setItem' ? 'rawSetItem.apply' : 'rawRemoveItem.apply');
+        assert.ok(beforeIdx > 0 && beforeIdx < writeIdx,
+            'store.' + fn + ' must read the old ids BEFORE calling through to the real ' + fn
+        );
+    }
+    assert.match(hook, /recordTombstoneDiff\(spec, beforeIds, \[\]\)/,
+        'removeItem must record a tombstone for every row: resetHomeCustomizer() wipes ' +
+        'krishi_exam_profiles that way, and the cloud used to put all of them back'
+    );
+});
+
+test('applyAllAppData() suppresses tombstone diffing unconditionally', () => {
+    const body = functionBody('applyAllAppData');
+    assert.match(body, /window\.__krishiApplyingCloudList\s*=\s*true/,
+        'the merged list legitimately differs from the local one, so diffing it would mint ' +
+        "records claiming this device authored the peer's edits"
+    );
+    assert.doesNotMatch(body, /__krishiApplyingCloudList\s*=\s*hasIncomingStamps/,
+        'this flag must NOT be tied to hasIncomingStamps: a legacy payload carries no stamps ' +
+        'but still needs tombstone diffing switched off while it is applied'
+    );
+    assert.match(body, /finally\s*\{[^}]*__krishiApplyingCloudList\s*=\s*false/,
+        'the flag must clear in a finally, or one throw leaves every later deletion unrecorded'
+    );
+});
+
+/** The single declared layout cap, read out of the source rather than hardcoded here. */
+function layoutBackupCap() {
+    const m = /const\s+LAYOUT_BACKUP_CAP\s*=\s*(\d+)\s*;/.exec(APP_JS);
+    assert.ok(m, 'js/app.js: const LAYOUT_BACKUP_CAP was removed or renamed');
+    return Number(m[1]);
+}
+
+/** Runs the real layoutBackups block out of mergeCloudAndLocalData(). */
+function mergeLayoutBackups(localList, cloudList) {
+    const body = functionBody('mergeCloudAndLocalData');
+    const from = body.indexOf('const layoutKey =');
+    assert.ok(from > 0, 'the layoutBackups merge block was renamed — update this test');
+    const marker = 'LAYOUT_BACKUP_CAP);';
+    const to = body.indexOf(marker, from);
+    assert.ok(to > from,
+        'the layoutBackups merge no longer caps with LAYOUT_BACKUP_CAP — an uncapped union ' +
+        'here grows the cloud document forever, which is the bug this test exists to catch'
+    );
+    const merged = {};
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', 'LAYOUT_BACKUP_CAP', body.slice(from, to + marker.length))(
+        { layoutBackups: localList }, { layoutBackups: cloudList }, merged, layoutBackupCap()
+    );
+    return merged.layoutBackups;
+}
+
+/** Runs the real saveHomeSettings() backup-capture path against a starting list. */
+function captureLayoutBackup(existing, oldSettings) {
+    const body = functionBody('saveHomeSettings');
+    const store = {
+        krishi_layout_backups: JSON.stringify(existing),
+        krishi_home_settings: JSON.stringify(oldSettings)
+    };
+    // eslint-disable-next-line no-new-func
+    new Function('KrishiStorage', 'LAYOUT_BACKUP_CAP', 'settings', body.slice(1, -1))(
+        {
+            getItem: k => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = v; }
+        },
+        layoutBackupCap(),
+        { widgets: ['new'] }
+    );
+    return JSON.parse(store.krishi_layout_backups);
+}
+
+const pt = (ts, tag) => ({ timestamp: ts, time: tag, settings: { widgets: [tag] } });
+
+test('one constant caps layoutBackups in both the writer and the merge', () => {
+    assert.equal((APP_JS.match(/const\s+LAYOUT_BACKUP_CAP\s*=/g) || []).length, 1,
+        'exactly one declaration: two would be free to drift apart again'
+    );
+
+    const writer = functionBody('saveHomeSettings');
+    assert.match(writer, /LAYOUT_BACKUP_CAP/,
+        'saveHomeSettings() must trim to the shared constant'
+    );
+    assert.doesNotMatch(writer, /slice\(0,\s*\d+\)/,
+        'a bare slice(0, 3) is back in the writer — that literal is what drifted from the merge'
+    );
+
+    const mergeBlock = functionBody('mergeCloudAndLocalData');
+    const line = mergeBlock.slice(mergeBlock.indexOf('merged.layoutBackups ='));
+    assert.match(line.slice(0, 260), /LAYOUT_BACKUP_CAP/,
+        'the merge must cap with the constant, not a literal and not "no cap at all"'
+    );
+});
+
+test('the layoutBackups union no longer grows without limit', () => {
+    const cap = layoutBackupCap();
+    const phone = [pt(300, 'p3'), pt(200, 'p2'), pt(100, 'p1')];
+    const tablet = [pt(305, 't3'), pt(205, 't2'), pt(105, 't1')];
+
+    const merged = mergeLayoutBackups(phone, tablet);
+    assert.equal(merged.length, cap,
+        'two devices holding ' + phone.length + ' points each merged to ' + merged.length +
+        '; uncapped this kept every recovery point either device ever captured, each one ' +
+        'carrying a full home-layout snapshot, in a document budgeted at ~900 KB'
+    );
+
+    // Merging the result back in must not grow it again — otherwise every sync ratchets up.
+    const again = mergeLayoutBackups(merged, phone.concat(tablet));
+    assert.equal(again.length, cap, 'the merge must be idempotent at the cap');
+});
+
+test('the cap keeps the NEWEST recovery points and numbers them #1 first', () => {
+    const merged = mergeLayoutBackups([pt(100, 'old')], [pt(900, 'newest'), pt(500, 'mid')]);
+    assert.deepEqual(merged.map(b => b.timestamp), [900, 500, 100],
+        'Array.from(map.values()) came out cloud-first then local-appended, so the list was ' +
+        'in arbitrary order after a sync and renderBackupLayouts() labels purely by array ' +
+        'index — "#1 Recovery Point" could be the oldest one'
+    );
+
+    const cap = layoutBackupCap();
+    const many = Array.from({ length: cap + 4 }, (_, i) => pt((i + 1) * 10, 'b' + i));
+    const capped = mergeLayoutBackups([], many);
+    assert.deepEqual(
+        capped.map(b => b.timestamp),
+        many.map(b => b.timestamp).sort((a, b) => b - a).slice(0, cap),
+        'an unsorted list capped with slice() keeps an arbitrary ' + cap + ', not the newest'
+    );
+});
+
+test('a layout edit no longer keeps an arbitrary 3 of a re-inflated list', () => {
+    const cap = layoutBackupCap();
+    const merged = mergeLayoutBackups([pt(300, 'p3'), pt(200, 'p2')], [pt(305, 't3'), pt(205, 't2')]);
+    const after = captureLayoutBackup(merged, { widgets: ['previous'] });
+
+    assert.equal(after.length, cap, 'the writer trims to the same cap the merge produced');
+    assert.equal(after[0].settings.widgets[0], 'previous',
+        'the newest entry is the layout that was just replaced'
+    );
+    assert.deepEqual(after.slice(1).map(b => b.timestamp), [305, 300],
+        'and the survivors are the newest of the merged union, not whichever ones happened ' +
+        'to sit at the front of an unsorted array'
+    );
+});
+
+test('the writer sorts before trimming instead of trusting its input order', () => {
+    // Exactly what an already-stored list looks like on a device that synced under the old
+    // uncapped, unsorted merge: 6 points, cloud-first then local-appended.
+    const scrambled = [pt(105, 't1'), pt(305, 't3'), pt(100, 'p1'), pt(300, 'p3'), pt(205, 't2'), pt(200, 'p2')];
+    const after = captureLayoutBackup(scrambled, { widgets: ['previous'] });
+
+    assert.equal(after.length, layoutBackupCap());
+    assert.deepEqual(after.slice(1).map(b => b.timestamp), [305, 300],
+        'slice() takes the FRONT of the array, so without a sort this kept timestamp 105 — ' +
+        'the oldest of the six — and destroyed 305 and 300. Verified live before the sort ' +
+        'was added: survivors were t1(105) and t3(305).'
+    );
+    assert.ok(after.every((b, i) => i === 0 || after[i - 1].timestamp >= b.timestamp),
+        'the stored list must come out newest-first so the next trim is also correct'
+    );
+});
+
+test('renderBackupLayouts() numbers by array position, so it sorts first', () => {
+    const body = functionBody('renderBackupLayouts');
+    assert.match(body, /#\$\{idx \+ 1\} Recovery Point/,
+        'the label is pure array index — if this changed, this test can go'
+    );
+    const sortIdx = body.search(/\.sort\(\(a, b\) => \(b\.timestamp \|\| 0\) - \(a\.timestamp \|\| 0\)\)/);
+    assert.ok(sortIdx > 0,
+        'a legacy list stored before the writer and merge were sorted is in arbitrary order, ' +
+        'and would be rendered with the oldest recovery point labelled "#1"'
+    );
+    assert.ok(sortIdx < body.indexOf('backups.forEach'),
+        'the sort has to happen before the list is rendered'
+    );
+    assert.match(body, /backups\.slice\(\)\.sort\(/,
+        'sort a copy: this is a read path and must not silently rewrite what is stored'
+    );
+});
+
+test('layoutBackups is still wired through all four sync stages', () => {
+    assert.match(functionBody('collectAllAppData'), /payload\.layoutBackups\s*=/);
+    assert.match(functionBody('applyAllAppData'), /data\.layoutBackups/);
+    assert.match(functionBody('mergeCloudAndLocalData'), /merged\.layoutBackups\s*=/);
+    assert.match(functionBody('getDifferentialSyncDelta'), /'layoutBackups'/,
+        'omitting it from keysToCheck is the same failure mode dark/batterySaver had'
+    );
+});
+
+/** Runs the real SM2 block out of mergeCloudAndLocalData(). */
+function mergeSm2(localSm2, cloudSm2) {
+    const body = functionBody('mergeCloudAndLocalData');
+    const from = body.indexOf('let sm2Map =');
+    assert.ok(from > 0, 'the sm2 merge block was renamed — update this test');
+    const marker = 'merged.sm2 = sm2Map;';
+    const to = body.indexOf(marker, from);
+    assert.ok(to > from, 'merged.sm2 is no longer built from sm2Map — update this test');
+    const merged = {};
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', body.slice(from, to + marker.length))(
+        { sm2: localSm2 }, { sm2: cloudSm2 }, merged
+    );
+    return merged.sm2;
+}
+
+const sm2rec = f => Object.assign({ reviews: 1, lapses: 0, difficulty: 5, stability: 1, interval: 2 }, f);
+
+test('the sm2 merge is a union of question ids', () => {
+    const merged = mergeSm2(
+        { 'q-phone': sm2rec({ lastAnswered: 100 }) },
+        { 'q-tablet': sm2rec({ lastAnswered: 200 }) }
+    );
+    assert.deepEqual(Object.keys(merged).sort(), ['q-phone', 'q-tablet']);
+});
+
+test('the later answer wins the whole FSRS tuple', () => {
+    const older = sm2rec({ lastAnswered: 1000, difficulty: 3, stability: 9, interval: 30 });
+    const newer = sm2rec({ lastAnswered: 2000, difficulty: 7, stability: 2, interval: 1 });
+
+    for (const [label, l, c, expect] of [
+        ['cloud newer', older, newer, 7],
+        ['local newer', newer, older, 7]
+    ]) {
+        const got = mergeSm2({ q: l }, { q: c });
+        assert.equal(got.q.difficulty, expect, label + ': the newer record must win');
+        assert.equal(got.q.stability, 2,
+            label + ': and it must win as a whole — difficulty, stability, interval and ' +
+            'nextReview are one coupled FSRS state, so a per-field max would produce a ' +
+            'state neither device ever computed'
+        );
+    }
+});
+
+test('reviews and lapses can never go backwards across two devices', () => {
+    // Three answers on the phone, one later answer on the tablet.
+    const phone  = sm2rec({ lastAnswered: 1000, reviews: 3, lapses: 2 });
+    const tablet = sm2rec({ lastAnswered: 9000, reviews: 1, lapses: 0 });
+
+    const merged = mergeSm2({ q: phone }, { q: tablet });
+    assert.equal(merged.q.lastAnswered, 9000, 'the later answer still wins the record');
+    assert.equal(merged.q.reviews, 3,
+        'the tablet\'s later answer used to take the whole record and drop reviews 3 -> 1, ' +
+        'un-mastering the question: reviews >= 4 is half the mastery gate'
+    );
+    assert.equal(merged.q.lapses, 2, 'lapses is a pure tally too and feeds leech suspension');
+});
+
+test('a tie keeps handing the record to the cloud, on purpose', () => {
+    // Not a bug to flip. A strictly newer record already wins from either side, so `>=` only
+    // decides exact ties — and a tie means both devices hold the same record from a previous
+    // sync, or two never-answered seeds with no lastAnswered at all (0 == 0). Handing those
+    // to local would let a fresh install beat the real history in the cloud.
+    const merged = mergeSm2(
+        { q: sm2rec({ lastAnswered: 0, difficulty: 5, status: 'new' }) },
+        { q: sm2rec({ lastAnswered: 0, difficulty: 8, status: 'scheduled' }) }
+    );
+    assert.equal(merged.q.difficulty, 8, 'the cloud copy wins an untimestamped tie');
+    assert.match(functionBody('mergeCloudAndLocalData'),
+        /\(cVal\.lastAnswered \|\| 0\) >= \(lVal\.lastAnswered \|\| 0\)/,
+        'if this ever becomes `>`, re-read the comment above it first'
+    );
+});
+
+test('the SM2 engine no longer reads or writes native localStorage', () => {
+    const helpers = fs.readFileSync(path.join(ROOT, 'js', 'pwa_helpers.js'), 'utf8');
+    const cls = helpers.slice(helpers.indexOf('class KrishiSM2Engine'));
+
+    // The only permitted native-localStorage touches: the _store() fallback for the window
+    // before KrishiStorage loads, and _drainStrayLocalStorage() which exists to clear it.
+    const drainFrom = cls.indexOf('static _drainStrayLocalStorage');
+    const drainTo = cls.indexOf('static _saveData');
+    assert.ok(drainFrom > 0 && drainTo > drainFrom, 'js/pwa_helpers.js: _drainStrayLocalStorage went missing');
+
+    const outside = (cls.slice(0, drainFrom) + cls.slice(drainTo))
+        .split('\n')
+        .filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
+        .filter(l => /localStorage\.(getItem|setItem)\(/.test(l));
+
+    assert.deepEqual(outside, [],
+        'KrishiStorage.init() deletes every krishi_* key from native localStorage, so a ' +
+        'direct read here comes back null and a direct write is invisible to the sync. ' +
+        'Found: ' + JSON.stringify(outside)
+    );
+    assert.match(cls.slice(0, drainFrom), /return window\.KrishiStorage \|\| localStorage;/,
+        'the fallback must stay: without KrishiStorage loaded, localStorage IS the store'
+    );
+});
+

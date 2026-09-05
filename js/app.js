@@ -4889,6 +4889,44 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
     window.syncSettingsToCloud = syncSettingsToCloud;
 
+    // Cross-device history caps.
+    //
+    // Every capped history list has TWO trim sites: the writer that appends locally, and
+    // the cloud merge that unions two devices. When the two numbers disagree the smaller
+    // one silently deletes whatever the larger one just gained. practiceRecent merged to
+    // 50 but saveRecentPracticeSessionLog() hard-truncated to 10, so the first session
+    // finished after a sync threw 40 of them away — the peer device's older sessions
+    // first, because the list is ordered newest-first. One constant read by both sites is
+    // the only arrangement in which the two cannot drift apart again.
+    //
+    // mockScores (writer 10 / merge 20) and timingLog (writer 500 / merge 2000) are left
+    // alone deliberately: both writers trim with a single shift() after a single push, so
+    // they hold at whatever length the merge produced instead of grinding back down, and
+    // nothing is lost. Lowering their merge caps to match would delete real history on
+    // the next sync, which is the opposite of this fix.
+    const PRACTICE_RECENT_CAP = 50;
+
+    // layoutBackups is the same two-trim-sites problem pointing the other way: the writer
+    // hard-truncates with slice(0, 3) but the merge had NO cap at all, so the union grew
+    // without limit. Every distinct recovery point either device ever captured stayed in
+    // the cloud document forever, and each one carries a full copy of the home-layout
+    // settings object — straight into the ~900 KB doc budget the backup meter measures.
+    // Locally it also thrashed: a pull re-inflated the list past 3, the next layout edit
+    // cut it back to 3, the pull after that put them all back.
+    //
+    // Because the merge cap is currently infinity, "raise the writer to match the merge"
+    // (the practiceRecent fix) is not available here — a finite number has to be
+    // introduced, and 3 is the number the writer and the Settings list were already built
+    // around. That is safe here and would NOT be safe for mockScores/timingLog: these are
+    // auto-captured undo points that saveHomeSettings() already destroys with a hard
+    // slice(0, 3) on the very next edit, not history the user asked to keep.
+    //
+    // The sort is part of the fix, not cosmetics. Array.from(map.values()) came out in
+    // "cloud order, then local-only entries appended", and renderBackupLayouts() labels by
+    // array index — so after a sync "#1 Recovery Point" could be the oldest one, and an
+    // uncapped-then-capped list would have kept an arbitrary 3 rather than the newest 3.
+    const LAYOUT_BACKUP_CAP = 3;
+
     // Per-setting write clocks.
     //
     // The document-level `updatedAt` cannot order an individual toggle: collectAllAppData()
@@ -4936,6 +4974,62 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
     window.stampSetting = stampSetting;
 
+    // Deletion tombstones for the id-keyed lists.
+    //
+    // mergeCloudAndLocalData() unions examProfiles by `p.id` and syllabusCustom by
+    // `s.subject`, and a union can only ever grow: delete an exam profile on the phone and
+    // the tablet — which still holds it — hands it straight back on the next sync. The
+    // delete looked like it worked, then the row reappeared minutes later. customSubjects
+    // already solved exactly this with a CRDT log, so these reuse its {action, timestamp,
+    // _rev} record shape and the same mergeCRDTLogs() ordering.
+    //
+    // `idOf` MUST return the same identity the merge keys on, or the tombstone names a row
+    // the merge cannot find and the deletion silently does nothing.
+    const TOMBSTONE_LISTS = {
+        'krishi_exam_profiles':   { logKey: 'krishi_exam_profiles_log',   field: 'examProfilesLog',   idOf: p => (p && p.id) },
+        'krishi_syllabus_custom': { logKey: 'krishi_syllabus_custom_log', field: 'syllabusCustomLog', idOf: s => (s && s.subject) }
+    };
+
+    function tombstoneIdsOf(spec, raw) {
+        const out = [];
+        try {
+            const arr = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+            if (!Array.isArray(arr)) return out;
+            arr.forEach(item => {
+                const id = spec.idOf(item);
+                if (id !== undefined && id !== null && id !== '') out.push(String(id));
+            });
+        } catch (e) { /* unparseable means "no known ids", never a wave of tombstones */ }
+        return out;
+    }
+
+    // Records are DERIVED by diffing the list against what was stored a moment ago, rather
+    // than written by hand at each delete site. deleteProfileDirectly() and
+    // deleteCustomSubject() are not the only writers — resetHomeCustomizer() wipes the key
+    // outright and the JSON importer replaces the list wholesale — and a delete path added
+    // later would otherwise skip the log with nothing to catch it. `add` records are kept
+    // as well as `remove`: they are the only thing that lets a re-add beat an older
+    // tombstone still sitting on a peer.
+    function recordTombstoneDiff(spec, beforeIds, afterIds) {
+        try {
+            if (!beforeIds.length && !afterIds.length) return;
+            const log = safeJsonParse(KrishiStorage.getItem(spec.logKey), {}) || {};
+            const before = new Set(beforeIds);
+            const after = new Set(afterIds);
+            const now = Date.now();
+            let touched = false;
+            const write = (id, action) => {
+                const prev = log[id];
+                if (prev && prev.action === action) return;   // already recorded, keep its clock
+                log[id] = { action: action, timestamp: now, _rev: ((prev && prev._rev) || 0) + 1 };
+                touched = true;
+            };
+            before.forEach(id => { if (!after.has(id)) write(id, 'remove'); });
+            after.forEach(id => { if (!before.has(id)) write(id, 'add'); });
+            if (touched) KrishiStorage.setItem(spec.logKey, JSON.stringify(log));
+        } catch (e) { /* never block the edit itself */ }
+    }
+
     // The clock must be taken on EVERY write, and this bug was born from a rule that had to
     // be remembered at each write site: the 17 stamped keys are written from 10 different
     // functions. So the stamp is taken at the storage boundary once instead — a writer added
@@ -4949,6 +5043,7 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         if (!store || store.__krishiStampHooked) return;
         const rawSetItem = store.setItem;
         const rawRemoveItem = store.removeItem;
+        const rawGetItem = store.getItem;
         function stampFor(key) {
             const field = STAMPED_SETTING_KEYS[key];
             if (!field) return;
@@ -4958,14 +5053,25 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             if (window.__krishiApplyingCloudData) return;
             stampSetting(field);
         }
-        store.setItem = function (key) {
+        store.setItem = function (key, value) {
+            // The old ids have to be read BEFORE the write lands, or the diff compares the
+            // new list against itself and no deletion is ever recorded.
+            const spec = TOMBSTONE_LISTS[key];
+            const beforeIds = (spec && !window.__krishiApplyingCloudList) ? tombstoneIdsOf(spec, rawGetItem.call(store, key)) : null;
             const result = rawSetItem.apply(store, arguments);
             stampFor(key);
+            if (beforeIds) recordTombstoneDiff(spec, beforeIds, tombstoneIdsOf(spec, value));
             return result;
         };
         store.removeItem = function (key) {
+            // A removeItem IS a deletion of every row the list held; resetHomeCustomizer()
+            // wipes krishi_exam_profiles this way, and without these records the cloud put
+            // every deleted profile straight back.
+            const spec = TOMBSTONE_LISTS[key];
+            const beforeIds = (spec && !window.__krishiApplyingCloudList) ? tombstoneIdsOf(spec, rawGetItem.call(store, key)) : null;
             const result = rawRemoveItem.apply(store, arguments);
             stampFor(key);
+            if (beforeIds) recordTombstoneDiff(spec, beforeIds, []);
             return result;
         };
         store.__krishiStampHooked = true;
@@ -7423,8 +7529,11 @@ if (state.isMock) {
         if (listRaw) {
             try { listArr = JSON.parse(listRaw); } catch(ex) {}
         }
+        if (!Array.isArray(listArr)) listArr = [];
         listArr.unshift(item);
-        listArr = listArr.slice(0, 10); // store last 10
+        // Newest-first, same order the cloud merge produces, so this keeps the newest
+        // PRACTICE_RECENT_CAP of the union rather than the newest of this device alone.
+        listArr = listArr.slice(0, PRACTICE_RECENT_CAP);
         KrishiStorage.setItem('krishi_practice_recent', JSON.stringify(listArr));
     }
 
@@ -14268,7 +14377,13 @@ document.querySelectorAll('button').forEach(btn => {
                     settings: parsedOld
                 };
                 backups.unshift(backupItem);
-                if (backups.length > 3) backups = backups.slice(0, 3);
+                // Sort BEFORE trimming. slice() takes the front of the array, so trimming
+                // by position only drops the oldest points if the array is genuinely
+                // newest-first — and the writer does not get to assume that about its own
+                // input. Fed a list in the arbitrary order the old uncapped merge produced,
+                // this kept a timestamp-105 entry and threw away 300 and 200.
+                backups.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                if (backups.length > LAYOUT_BACKUP_CAP) backups = backups.slice(0, LAYOUT_BACKUP_CAP);
                 KrishiStorage.setItem('krishi_layout_backups', JSON.stringify(backups));
             } catch(e){}
         }
@@ -14291,6 +14406,12 @@ document.querySelectorAll('button').forEach(btn => {
             `;
             return;
         }
+
+        // The "#N Recovery Point" label below is pure array position, so this list has to be
+        // newest-first to mean anything. saveHomeSettings() and the cloud merge both store it
+        // that way now, but a list captured before they did is in arbitrary order and would
+        // still be numbered with the oldest point as "#1".
+        backups = backups.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         backups.forEach((b, idx) => {
             let divObj = document.createElement('div');
@@ -18377,11 +18498,15 @@ ${text}`;
             
             // config data packs
             payload.examProfiles = safeJsonParse(KrishiStorage.getItem('krishi_exam_profiles'), []);
+            // Deletion tombstones travel with the lists they describe. Without them the
+            // union in mergeCloudAndLocalData() can only grow and a delete never propagates.
+            payload.examProfilesLog = safeJsonParse(KrishiStorage.getItem(TOMBSTONE_LISTS['krishi_exam_profiles'].logKey), {});
             payload.homeSettings = safeJsonParse(KrishiStorage.getItem('krishi_home_settings'), {});
             payload.appearanceSettings = safeJsonParse(KrishiStorage.getItem('krishi_appearance_settings'), {});
             payload.customAppearanceSettings = safeJsonParse(KrishiStorage.getItem('krishi_custom_appearance_settings'), {});
             payload.plannerSettings = safeJsonParse(KrishiStorage.getItem('krishi_planner_settings'), {});
             payload.syllabusCustom = safeJsonParse(KrishiStorage.getItem('krishi_syllabus_custom'), []);
+            payload.syllabusCustomLog = safeJsonParse(KrishiStorage.getItem(TOMBSTONE_LISTS['krishi_syllabus_custom'].logKey), {});
             payload.timingLog = safeJsonParse(KrishiStorage.getItem('krishi_timingLog'), []);
             payload.mockScores = safeJsonParse(KrishiStorage.getItem('krishi_mockScores'), []);
             payload.practiceRecent = safeJsonParse(KrishiStorage.getItem('krishi_practice_recent'), []);
@@ -18559,6 +18684,12 @@ ${text}`;
             // none is better off stamped locally than left ordered by a stale clock.
             const hasIncomingStamps = !!(data.settingStamps && typeof data.settingStamps === 'object');
             window.__krishiApplyingCloudData = hasIncomingStamps;
+            // Tombstone diffing stands down for the WHOLE block, unconditionally: the merged
+            // list legitimately differs from what this device held, so diffing it would mint
+            // add/remove records claiming this device authored the peer's edits — including a
+            // fresh 'remove' for every row the peer deleted, which would then outlive any
+            // later re-add. A legacy payload with no settingStamps still needs this off.
+            window.__krishiApplyingCloudList = true;
             try {
             // Save extra config lists
             if (Array.isArray(data.examProfiles)) setJSONArraySafely('krishi_exam_profiles', data.examProfiles, 'examProfiles');
@@ -18591,6 +18722,15 @@ ${text}`;
             if (data.customSubjectsLog && typeof data.customSubjectsLog === 'object') {
                 KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(data.customSubjectsLog));
             }
+            // The merged tombstones must land too. Skipping them would leave this device
+            // holding only its own records, so the next merge would not see the peer's
+            // deletions and the union would put every one of those rows back.
+            if (data.examProfilesLog && typeof data.examProfilesLog === 'object') {
+                KrishiStorage.setItem(TOMBSTONE_LISTS['krishi_exam_profiles'].logKey, JSON.stringify(data.examProfilesLog));
+            }
+            if (data.syllabusCustomLog && typeof data.syllabusCustomLog === 'object') {
+                KrishiStorage.setItem(TOMBSTONE_LISTS['krishi_syllabus_custom'].logKey, JSON.stringify(data.syllabusCustomLog));
+            }
             // Persist the merged write clocks, otherwise the next merge on this device
             // compares the incoming value against a stale stamp and flips it straight back.
             if (data.settingStamps && typeof data.settingStamps === 'object') {
@@ -18610,6 +18750,7 @@ ${text}`;
             });
             } finally {
                 window.__krishiApplyingCloudData = false;
+                window.__krishiApplyingCloudList = false;
             }
         }
         
@@ -18820,31 +18961,69 @@ ${text}`;
         });
         merged.streak = mergedStreak;
         
-        // Spaced Repetition (SM2) merge - Keep most advanced learning state
+        // Spaced Repetition (SM2) merge - last answer wins the record, counters take the max.
+        //
+        // Picking the whole record by lastAnswered is right: the FSRS state is a coupled
+        // tuple (difficulty, stability, retrievability, interval, nextReview) and taking a
+        // per-field max across two devices would produce a state neither of them ever
+        // computed. But `reviews` and `lapses` are not part of that computation — they are
+        // pure tallies that can only ever go up, and `reviews >= 4` is half the mastery gate.
+        // Answer a question three times on the phone and once on the tablet and the tablet's
+        // later answer used to win the whole record, dropping reviews 3 -> 1 and un-mastering
+        // it. Status is left as the winner's; recomputing it here would be re-implementing
+        // the engine inside the merge, and the next answer recomputes it anyway.
+        //
+        // The `>=` is deliberate and is NOT a bug to flip. A strictly newer record already
+        // wins from either side, so `>=` only decides exact ties — and a tie means the two
+        // devices are holding the same record from a previous sync. Handing ties to local
+        // instead would be worse: a freshly installed device with seeded, never-answered
+        // records (no lastAnswered at all, so 0 == 0) would beat the real history in the
+        // cloud rather than pull it down.
         let sm2Map = { ...(cloud.sm2 || {}), ...(local.sm2 || {}) };
         Object.keys(sm2Map).forEach(key => {
             let cVal = cloud.sm2?.[key];
             let lVal = local.sm2?.[key];
             if (cVal && lVal) {
-                sm2Map[key] = ((cVal.lastAnswered || 0) >= (lVal.lastAnswered || 0)) ? cVal : lVal;
+                const winner = ((cVal.lastAnswered || 0) >= (lVal.lastAnswered || 0)) ? cVal : lVal;
+                sm2Map[key] = {
+                    ...winner,
+                    reviews: Math.max(cVal.reviews || 0, lVal.reviews || 0),
+                    lapses: Math.max(cVal.lapses || 0, lVal.lapses || 0)
+                };
             }
         });
         merged.sm2 = sm2Map;
 
-        // Custom Exam profiles merging - Unique by id
+        // Custom Exam profiles merging - Unique by id, then the deletion log on top. The
+        // union alone can only grow, so deleteProfileDirectly() was undone by any peer that
+        // still held the profile; the tombstone is the only thing that can shrink the list.
         let localProfiles = local.examProfiles || [];
         let cloudProfiles = cloud.examProfiles || [];
         let profileMap = new Map();
         cloudProfiles.forEach(p => { if (p) profileMap.set(p.id, p); });
         localProfiles.forEach(p => { if (p) profileMap.set(p.id, p); });
+        const mergedProfileLog = mergeCRDTLogs(local.examProfilesLog, cloud.examProfilesLog);
+        Object.entries(mergedProfileLog).forEach(([id, info]) => {
+            // Only 'remove' acts here: an 'add' is already represented by the row itself
+            // being present in one of the two lists, and mergeCRDTLogs() has already let the
+            // newer of add/remove win, so a re-add simply never reaches this branch.
+            if (info && info.action === 'remove') profileMap.delete(id);
+        });
+        merged.examProfilesLog = mergedProfileLog;
         merged.examProfiles = Array.from(profileMap.values());
 
-        // Custom syllabus merging - Unique by subject
+        // Custom syllabus merging - Unique by subject, same tombstone treatment:
+        // deleteCustomSubject() splices a subject out and the peer used to hand it back.
         let localSyllabus = local.syllabusCustom || [];
         let cloudSyllabus = cloud.syllabusCustom || [];
         let syllabusMap = new Map();
         cloudSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
         localSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
+        const mergedSyllabusLog = mergeCRDTLogs(local.syllabusCustomLog, cloud.syllabusCustomLog);
+        Object.entries(mergedSyllabusLog).forEach(([subject, info]) => {
+            if (info && info.action === 'remove') syllabusMap.delete(subject);
+        });
+        merged.syllabusCustomLog = mergedSyllabusLog;
         merged.syllabusCustom = Array.from(syllabusMap.values());
         
         // Study Logs (timingLog) merging.
@@ -18904,14 +19083,16 @@ ${text}`;
             .sort((a, b) => (scoreTs(a) || 0) - (scoreTs(b) || 0))
             .slice(-scoreCap);
 
-        // Practice Recent merging - Unique by timestamp, sorted, keep latest 50
+        // Practice Recent merging - Unique by id/timestamp, newest first, capped at
+        // PRACTICE_RECENT_CAP — the same constant saveRecentPracticeSessionLog() trims to,
+        // so a finished session can no longer undo what this union just gained.
         let localPracticeRecent = local.practiceRecent || [];
         let cloudPracticeRecent = cloud.practiceRecent || [];
         let recentMap = new Map();
         const recentKey = (item, i) => (item.id ?? item.timestamp ?? ('c:' + JSON.stringify(item)));
         cloudPracticeRecent.forEach((item, i) => { if (item) recentMap.set(recentKey(item, i), item); });
         localPracticeRecent.forEach((item, i) => { if (item) recentMap.set(recentKey(item, i), item); });
-        merged.practiceRecent = Array.from(recentMap.values()).sort((a,b) => (b.timestamp||0) - (a.timestamp||0)).slice(0, 50);
+        merged.practiceRecent = Array.from(recentMap.values()).sort((a,b) => (b.timestamp||0) - (a.timestamp||0)).slice(0, PRACTICE_RECENT_CAP);
 
         // For audio and interface configs, use Last Write Wins
         const cloudUpdatedAt = cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function'
@@ -18980,11 +19161,17 @@ ${text}`;
         merged.customSubjectsLog = mergedSubjectLog;
         merged.customSubjects = Array.from(subjectSet);
 
+        // Layout recovery points - unique by timestamp, newest first, capped at
+        // LAYOUT_BACKUP_CAP: the same constant saveHomeSettings() trims to. Without the cap
+        // this union grew forever in the cloud doc; without the sort the cap would keep an
+        // arbitrary 3 and renderBackupLayouts() would number the oldest one "#1".
         const layoutKey = b => ((b && (b.timestamp ?? b.id)) ?? JSON.stringify(b));
         const layoutMap = new Map();
         (cloud.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
         (local.layoutBackups || []).forEach(b => { if (b) layoutMap.set(layoutKey(b), b); });
-        merged.layoutBackups = Array.from(layoutMap.values());
+        merged.layoutBackups = Array.from(layoutMap.values())
+            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+            .slice(0, LAYOUT_BACKUP_CAP);
 
         // Scalar toggles. Same per-field clock as every config pack above — this is what
         // stopped a dark-mode OFF from ever reaching the peer while the initial OFF->ON still
@@ -19011,8 +19198,8 @@ ${text}`;
             // customQuestions is intentionally omitted — it is synced to the Firestore
             // qbank subcollection by syncQbankToChunks(), never inline in the users doc.
             'streak', 'stats', 'achievements', 'sm2', 'progression',
-            'examProfiles', 'homeSettings', 'appearanceSettings',
-            'customAppearanceSettings', 'plannerSettings', 'syllabusCustom',
+            'examProfiles', 'examProfilesLog', 'homeSettings', 'appearanceSettings',
+            'customAppearanceSettings', 'plannerSettings', 'syllabusCustom', 'syllabusCustomLog',
             'timingLog', 'mockScores', 'practiceRecent',
             'soundEnabled', 'soundMuted', 'soundVolume',
             // dark and batterySaver were missing here, so even once the merge carried them

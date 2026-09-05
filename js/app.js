@@ -4279,14 +4279,45 @@ scheduleMidnightCloudVault();
         }
     }
 
+    /**
+     * Makes a daily snapshot write-safe, and degrades it rather than losing it.
+     *
+     * This wrote collectAllAppData() RAW: no compression, no size assertion, and no strip of
+     * customQuestions — a sixth writer that had drifted away from prepareCloudPayload().
+     * Firestore hard-limits a document to 1 MiB, so for exactly the heavy user this safety net
+     * exists for, the midnight snapshot failed on the limit with nothing but a console.warn,
+     * every night, for as long as the bank stayed large.
+     *
+     * Compress first, drop the bank only if that was not enough. That order matters: a
+     * snapshot is far more useful with the question bank in it, and the compressed fields are
+     * usually where the bytes actually are (a 3,000-record sm2 map measures 671 KB raw and
+     * 24 KB compressed). A bank-free snapshot is already a supported shape — vaultEntryOf()
+     * reports qCount -1 for it and the row reads "bank not included" — so dropping the bank
+     * degrades this snapshot instead of losing the whole day.
+     */
+    function prepareVaultSnapshot(snapshot, dateStr) {
+        snapshot.vaultDate = dateStr;
+        snapshot.vaultTimestamp = Date.now();
+        compressUnboundedFields(snapshot);
+        if (!payloadFitsCloudDoc(snapshot) && snapshot.customQuestions !== undefined) {
+            const dropped = Array.isArray(snapshot.customQuestions) ? snapshot.customQuestions.length : 0;
+            delete snapshot.customQuestions;
+            // The live bank is still synced to users/{uid}/qbank/chunk_N, so it is not lost —
+            // but this dated snapshot can no longer roll the bank back to how it looked today.
+            console.warn('[Midnight Vault] Snapshot over the ' +
+                Math.round(FIRESTORE_DOC_SOFT_LIMIT / 1024) + ' KB document limit; stored ' +
+                'without the ' + dropped + '-question bank. Progress data is complete.');
+        }
+        assertPayloadFits(snapshot, 'Midnight vault snapshot ' + dateStr);
+        return snapshot;
+    }
+
     async function performMidnightVaultBackup(dateStr) {
         const uid = getCloudUID();
         if (!uid || !firebaseApp) return;
         try {
             const firestore = firebase.firestore(firebaseApp);
-            const snapshot = collectAllAppData();
-            snapshot.vaultDate = dateStr;
-            snapshot.vaultTimestamp = Date.now();
+            const snapshot = prepareVaultSnapshot(collectAllAppData(), dateStr);
             await firestore.collection('users').doc(uid).collection('backups').doc(dateStr).set(snapshot, { merge: true });
             KrishiStorage.setItem('krishi_last_vault_date', dateStr);
             console.log('[Midnight Vault] Cloud backup snapshot created for:', dateStr);
@@ -4294,6 +4325,16 @@ scheduleMidnightCloudVault();
             // reported as failed because the bookkeeping after it did not.
             try { await recordVaultIndexEntry(firestore, uid, dateStr, snapshot); } catch(e) { console.warn('[Midnight Vault] Index update failed:', e); }
         } catch(e) {
+            if (isPayloadTooBigError(e)) {
+                // Over the limit even without the bank, which means the users/{uid} document is
+                // over it too and handlePayloadTooBigError() has already said so on the sync
+                // path — a second toast here would only repeat it. Stamped as done anyway:
+                // scheduleMidnightCloudVault() runs on every successful sync, so leaving the
+                // date unstamped retries a write that cannot succeed, all day, every cycle.
+                KrishiStorage.setItem('krishi_last_vault_date', dateStr);
+                console.warn('[Midnight Vault] Skipped for ' + dateStr + ':', e.message);
+                return;
+            }
             console.warn('[Midnight Vault] Failed:', e);
         }
     }
@@ -4444,6 +4485,14 @@ scheduleMidnightCloudVault();
             if (!doc.exists) throw new Error('That snapshot no longer exists in the cloud.');
             const d = doc.data() || {};
 
+            // Snapshots are written through prepareVaultSnapshot(), which LZ-compresses the
+            // same fields the users/{uid} document compresses. Decoded through the shared
+            // decoder rather than guarded field by field: a guard can only ever SKIP a
+            // compressed field, i.e. quietly restore a snapshot minus the review schedule and
+            // report success. Type-driven, so a snapshot written before compression — every
+            // one already in the cloud — passes through untouched.
+            decompressCloudFields(d, 'Vault');
+
             // The bank is only written to IndexedDB once hydration proves localData is authoritative
             // (see saveData()). Restoring it before then would leave the questions in memory only and
             // let the pending hydration overwrite them - so this waits rather than half-restoring the
@@ -4453,10 +4502,11 @@ scheduleMidnightCloudVault();
             }
 
             const applied = applyVaultSnapshot(d);
-            // Type-guarded like the timingLog line below it. The vault writes
-            // collectAllAppData() raw, so this is an object today — but sm2 is now on the
-            // compressed-field list for the users/{uid} document, and handing a compressed
-            // string to _saveData() would overwrite the whole review schedule with it.
+            // Shape-guarded as well as decoded. decompressCloudFields() above turns a
+            // compressed sm2 back into a map, but a snapshot whose sm2 is neither — truncated,
+            // hand-edited, written by a build that stored it as an array — must not reach
+            // _saveData(), which validates nothing and would overwrite the entire review
+            // schedule with whatever it is handed.
             if (d.sm2 && typeof d.sm2 === 'object' && !Array.isArray(d.sm2) && window.KrishiSM2Engine) { window.KrishiSM2Engine._saveData(d.sm2); applied.push('sm2'); }
             if (Array.isArray(d.timingLog) && isSafeIncomingCollection(d.timingLog, timingLog, 'vault.timingLog')) { timingLog = d.timingLog; applied.push('timingLog'); }
             const ms = Array.isArray(d.mockTestScores) ? d.mockTestScores : (Array.isArray(d.mockScores) ? d.mockScores : null);
@@ -4988,11 +5038,45 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     // _rev} record shape and the same mergeCRDTLogs() ordering.
     //
     // `idOf` MUST return the same identity the merge keys on, or the tombstone names a row
-    // the merge cannot find and the deletion silently does nothing.
+    // the merge cannot find and the deletion silently does nothing. It may return an ARRAY
+    // when one row owns several identities, which the syllabus now does: the subject is one
+    // tombstone and each of its topics is another, because the merge converges topics
+    // individually and a union can no more delete a topic than it could a subject.
     const TOMBSTONE_LISTS = {
         'krishi_exam_profiles':   { logKey: 'krishi_exam_profiles_log',   field: 'examProfilesLog',   idOf: p => (p && p.id) },
-        'krishi_syllabus_custom': { logKey: 'krishi_syllabus_custom_log', field: 'syllabusCustomLog', idOf: s => (s && s.subject) }
+        'krishi_syllabus_custom': {
+            logKey: 'krishi_syllabus_custom_log', field: 'syllabusCustomLog',
+            idOf: s => (s && s.subject)
+                ? [s.subject].concat((Array.isArray(s.topics) ? s.topics : [])
+                    .filter(t => t && t.name)
+                    .map(t => syllabusTopicId(s.subject, t.name)))
+                : []
+        }
     };
+
+    /**
+     * A topic's identity inside the subject log. One place that names a topic, so the
+     * tombstone writer and mergeSyllabusSubject() cannot disagree about what a topic is.
+     *
+     * The subject's own id stays the BARE subject name: tombstones written by earlier builds
+     * are keyed that way, and re-keying them would resurrect every subject a user has ever
+     * deleted. A topic therefore needs an id that no subject name can equal, and a
+     * JSON-encoded triple is unambiguous for any name a user can type — no separator
+     * character to collide with, and readable in the stored log when something goes wrong.
+     */
+    function syllabusTopicId(subject, topicName) {
+        return JSON.stringify(['t', String(subject), String(topicName)]);
+    }
+
+    /** Reads a topic id back, and only for the subject asked about. */
+    function syllabusTopicNameOf(id, subject) {
+        if (typeof id !== 'string' || id.charAt(0) !== '[') return null;
+        try {
+            const parts = JSON.parse(id);
+            if (!Array.isArray(parts) || parts[0] !== 't' || parts[1] !== subject) return null;
+            return parts[2];
+        } catch (e) { return null; }
+    }
 
     function tombstoneIdsOf(spec, raw) {
         const out = [];
@@ -5000,8 +5084,10 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             const arr = (typeof raw === 'string') ? JSON.parse(raw) : raw;
             if (!Array.isArray(arr)) return out;
             arr.forEach(item => {
-                const id = spec.idOf(item);
-                if (id !== undefined && id !== null && id !== '') out.push(String(id));
+                const ids = spec.idOf(item);
+                (Array.isArray(ids) ? ids : [ids]).forEach(id => {
+                    if (id !== undefined && id !== null && id !== '') out.push(String(id));
+                });
             });
         } catch (e) { /* unparseable means "no known ids", never a wave of tombstones */ }
         return out;
@@ -16367,7 +16453,60 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
         return JSON.parse(JSON.stringify(DEFAULT_AGRI_SYLLABUS));
     }
 
+    /**
+     * Stamps `updatedAt` on the subjects and topics whose content actually changed.
+     *
+     * Stamped at the writer rather than at each edit site, for the reason the setting clocks
+     * moved into the storage hook: there are six writers today — add subject, add topic,
+     * delete topic, status change, weight change and resetSubjectData()'s bulk reset to
+     * Pending — and a seventh added later would ship unstamped rows that lose every merge
+     * without anyone noticing.
+     *
+     * Only CHANGED rows are stamped. Stamping the whole array on every save would make the
+     * last device to touch the planner win every topic, which is the whole-subject overwrite
+     * mergeSyllabusSubject() exists to end, reproduced one level down.
+     *
+     * The baseline is getSyllabusData(), not the raw stored key, so a device that has never
+     * saved compares against the defaults it was just handed. Otherwise the first edit on a
+     * fresh install would stamp all four default subjects and every topic in them with
+     * Date.now() and beat the real statuses waiting in the cloud.
+     */
+    function stampSyllabusChanges(next) {
+        if (!Array.isArray(next)) return next;
+        const now = Date.now();
+        let prev = [];
+        try { prev = getSyllabusData(); } catch (e) { prev = []; }
+        if (!Array.isArray(prev)) prev = [];
+        const prevSubs = new Map();
+        prev.forEach(s => { if (s && s.subject) prevSubs.set(s.subject, s); });
+        // `updatedAt` is excluded from the comparison itself, or a stamp would read as a change
+        // on the next save and re-stamp forever.
+        const unchanged = (a, b, key) => JSON.stringify(a[key]) === JSON.stringify(b[key]);
+
+        next.forEach(sub => {
+            if (!sub || !sub.subject) return;
+            const old = prevSubs.get(sub.subject);
+            const oldTopics = new Map();
+            if (old && Array.isArray(old.topics)) {
+                old.topics.forEach(t => { if (t && t.name) oldTopics.set(t.name, t); });
+            }
+            (Array.isArray(sub.topics) ? sub.topics : []).forEach(t => {
+                if (!t || !t.name) return;
+                const oldT = oldTopics.get(t.name);
+                if (!oldT || !unchanged(t, oldT, 'status')) t.updatedAt = now;
+            });
+            // Deleting a topic does not change the subject row; that removal travels as a
+            // tombstone, and stamping the subject for it would hand this device the peer's
+            // weightage edit as a bonus.
+            if (!old || !unchanged(sub, old, 'weightage')) sub.updatedAt = now;
+        });
+        return next;
+    }
+
     function saveSyllabusData(data) {
+        // Stamped BEFORE the write, or the diff compares the new list against itself and
+        // nothing is ever marked as changed.
+        stampSyllabusChanges(data);
         KrishiStorage.setItem('krishi_syllabus_custom', JSON.stringify(data));
         calculateSyllabusPercentages();
     }
@@ -18827,6 +18966,45 @@ ${text}`;
         }
     }
 
+    /**
+     * Converges one syllabus subject that both devices hold.
+     *
+     * Topics are unioned by name; the subject's own fields (weightage) come from whichever
+     * side was edited more recently. Both decisions read `updatedAt`, stamped by
+     * stampSyllabusChanges() on exactly the rows whose content changed.
+     *
+     * Topic status is a clock decision and NOT a max of STATUS_WEIGHTS. 'Weak' scores 20 and
+     * 'Completed' scores 100, but marking a finished chapter Weak again is a deliberate edit a
+     * user makes after a bad practice run — taking the higher weight would undo it from the
+     * other device every time they synced.
+     *
+     * A topic with no `updatedAt` is one nothing has touched since stamping was added. It
+     * loses to a stamped one, which is correct: the stamped side is the only one holding
+     * evidence that a person made a choice. Two unstamped copies tie and local keeps its own,
+     * the same outcome as before this function existed.
+     */
+    function mergeSyllabusSubject(cloudSub, localSub, log) {
+        const newer = ((localSub.updatedAt || 0) >= (cloudSub.updatedAt || 0)) ? localSub : cloudSub;
+        const subject = localSub.subject;
+        const topics = new Map();
+        (Array.isArray(cloudSub.topics) ? cloudSub.topics : []).forEach(t => {
+            if (t && t.name) topics.set(t.name, t);
+        });
+        (Array.isArray(localSub.topics) ? localSub.topics : []).forEach(t => {
+            if (!t || !t.name) return;
+            const held = topics.get(t.name);
+            if (!held || (t.updatedAt || 0) >= (held.updatedAt || 0)) topics.set(t.name, t);
+        });
+        // A union can only grow, so deleteCustomTopic() needs the same tombstone the subject
+        // list has had since deleteCustomSubject() started getting its rows handed back.
+        Object.entries(log || {}).forEach(([id, info]) => {
+            if (!info || info.action !== 'remove') return;
+            const name = syllabusTopicNameOf(id, subject);
+            if (name !== null) topics.delete(name);
+        });
+        return { ...newer, subject: subject, topics: Array.from(topics.values()) };
+    }
+
     function mergeCloudAndLocalData(cloud) {
         cloud = cloud || {};
         // Normalize the compressed fields BEFORE anything reads them, and do it on the
@@ -18849,23 +19027,17 @@ ${text}`;
         // decoded before the sm2 block, because `{ ...someString }` does not fail loudly —
         // it silently produces {0:'ᯡ', 1:'ç', ...} and writes that to the engine as the
         // user's entire review schedule.
-        const decodeCompressed = (field, empty) => {
-            if (typeof cloud[field] !== 'string') return;
-            if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
-                throw new Error('[Sync] Cannot read compressed ' + field + ': LZString unavailable. Sync skipped to protect existing history.');
-            }
-            try {
-                cloud[field] = JSON.parse(LZString.decompressFromUTF16(cloud[field]) || empty);
-            } catch (e) {
-                console.error('[Sync] Decompression failed for ' + field, e);
-                throw new Error('[Sync] Corrupt compressed ' + field + '. Sync skipped to protect existing history.');
-            }
-        };
+        //
+        // The decode itself lives in decompressCloudFields(), next to the encoder, and is
+        // shared with restoreFromCloudVault(). One encoder with a decoder per reader is how a
+        // field gets added to COMPRESSED_CLOUD_FIELDS and reaches one reader as a string.
+        decompressCloudFields(cloud, 'Sync');
+        // Coercion is separate from decoding on purpose: the merge wants an array for these
+        // three whether the document carried one or not, and the vault restore must NOT have
+        // an absent field turned into an empty one.
         ['timingLog', 'mockScores', 'customQuestions'].forEach(field => {
-            decodeCompressed(field, '[]');
             if (!Array.isArray(cloud[field])) cloud[field] = [];
         });
-        decodeCompressed('sm2', '{}');
         if (cloud.sm2 !== undefined &&
             (!cloud.sm2 || typeof cloud.sm2 !== 'object' || Array.isArray(cloud.sm2))) {
             cloud.sm2 = {};
@@ -19077,14 +19249,26 @@ ${text}`;
         merged.examProfilesLog = mergedProfileLog;
         merged.examProfiles = Array.from(profileMap.values());
 
-        // Custom syllabus merging - Unique by subject, same tombstone treatment:
-        // deleteCustomSubject() splices a subject out and the peer used to hand it back.
+        // Custom syllabus merging — subjects unique by name, and TOPICS converged INSIDE each
+        // subject rather than one side's whole subject object being taken.
+        //
+        // `localSyllabus.forEach(s => syllabusMap.set(s.subject, s))` handed local the entire
+        // subject, topics and all. Add three chapters to Agronomy on the phone and two on the
+        // tablet and the merge kept three and destroyed two — on BOTH devices, because the
+        // merge result is written straight back down to each of them. The syllabus is
+        // hand-typed and has no other copy anywhere.
         let localSyllabus = local.syllabusCustom || [];
         let cloudSyllabus = cloud.syllabusCustom || [];
-        let syllabusMap = new Map();
-        cloudSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
-        localSyllabus.forEach(s => { if (s) syllabusMap.set(s.subject, s); });
         const mergedSyllabusLog = mergeCRDTLogs(local.syllabusCustomLog, cloud.syllabusCustomLog);
+        let syllabusMap = new Map();
+        cloudSyllabus.forEach(s => { if (s && s.subject) syllabusMap.set(s.subject, s); });
+        localSyllabus.forEach(s => {
+            if (!s || !s.subject) return;
+            const held = syllabusMap.get(s.subject);
+            syllabusMap.set(s.subject, held ? mergeSyllabusSubject(held, s, mergedSyllabusLog) : s);
+        });
+        // Subject-level tombstones. The log also holds topic ids now; those are JSON triples
+        // and can never equal a subject key, so this delete simply misses them.
         Object.entries(mergedSyllabusLog).forEach(([subject, info]) => {
             if (info && info.action === 'remove') syllabusMap.delete(subject);
         });
@@ -19461,6 +19645,18 @@ ${text}`;
         }
     }
 
+    // The same measurement as a question rather than a throw. prepareVaultSnapshot() has to
+    // DECIDE between a full snapshot and one without the question bank, and deciding that by
+    // catching an exception makes the ordinary fallback read like an error path.
+    //
+    // Unmeasurable returns true, matching assertPayloadFits()'s stance: a payload that cannot
+    // be stringified is not evidence of size, and acting on it would drop the user's bank out
+    // of the snapshot on a guess.
+    function payloadFitsCloudDoc(payload) {
+        try { return JSON.stringify(payload).length <= FIRESTORE_DOC_SOFT_LIMIT; }
+        catch (e) { return true; }
+    }
+
     // Turns the hard payload-size stop from a silent "Sync failed" into an
     // actionable message: without this, heavy users permanently lose backup
     // with no hint that trimming timing history / mock results resumes it.
@@ -19567,6 +19763,65 @@ ${text}`;
             });
             if (touched) payload.isCompressed = true;
         }
+        return payload;
+    }
+
+    // Every field any writer may have compressed, and the empty value each decodes to when the
+    // blob is unreadable. `customQuestions` is not compressed on write any more — it left the
+    // document for the qbank subcollection — but documents written before that move still hold
+    // it as a string, so it stays decodable.
+    //
+    // `sm2` is a MAP keyed by question id: '[]' here would hand the review schedule an array,
+    // and `{ ...[] }` spreads without complaint.
+    function decompressibleCloudFields() {
+        return { timingLog: '[]', mockScores: '[]', customQuestions: '[]', sm2: '{}' };
+    }
+
+    /**
+     * Reverses compressUnboundedFields() in place. The decoder for every reader.
+     *
+     * It lives beside the encoder deliberately. Two readers used to exist with one of them
+     * decoding nothing: mergeCloudAndLocalData() had its own inline decode loop while
+     * restoreFromCloudVault() read the snapshot raw. That was survivable only because the
+     * vault wrote raw documents — the moment the vault started compressing (it had to; it was
+     * failing Firestore's 1 MiB limit) a second decoder would have had to be remembered, and
+     * `{ ...aCompressedString }` does not throw. It silently yields {0:'ᯡ', 1:'ç', ...} and
+     * that gets written down as the user's data.
+     *
+     * Driven off each field's actual TYPE rather than off the `isCompressed` flag, so a
+     * document written by an older build (raw arrays, no flag) still reads back correctly.
+     *
+     * Absent fields are left ABSENT. The vault restore distinguishes "this snapshot has no
+     * question bank" from "this snapshot has an empty bank", and turning the first into the
+     * second would blank the bank while restoring a backup.
+     */
+    function decompressCloudFields(payload, label) {
+        if (!payload) return payload;
+        const empties = decompressibleCloudFields();
+        Object.keys(empties).forEach(field => {
+            if (typeof payload[field] !== 'string') return;
+            if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
+                throw new Error('[' + label + '] Cannot read compressed ' + field +
+                    ': LZString unavailable. Skipped to protect existing history.');
+            }
+            try {
+                const blob = payload[field];
+                // An empty field is nothing to decode. A NON-empty blob that decompresses to
+                // nothing is truncated or was never an LZ blob at all, and folding that into
+                // `|| empties[field]` would quietly turn it into an empty list/map. Harmless in
+                // the merge, where the union keeps the local side — destructive in the vault
+                // restore, which hands sm2 straight to _saveData() and would replace the whole
+                // review schedule with {}. Measured: LZString.decompressFromUTF16() returns ''
+                // rather than throwing for a string it cannot read.
+                const text = (blob === '') ? empties[field] : LZString.decompressFromUTF16(blob);
+                if (!text) throw new Error('decompressed to nothing');
+                payload[field] = JSON.parse(text);
+            } catch (e) {
+                console.error('[' + label + '] Decompression failed for ' + field, e);
+                throw new Error('[' + label + '] Corrupt compressed ' + field +
+                    '. Skipped to protect existing history.');
+            }
+        });
         return payload;
     }
 

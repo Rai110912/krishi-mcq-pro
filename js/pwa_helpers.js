@@ -18,6 +18,65 @@ window.krishiLogSilent = function (context, err) {
 };
 window.krishiGetSilentFailures = function () { return KRISHI_SILENT_FAILURE_LOG.slice(); };
 
+// ─── krishi_* keys owned by this file ──────────────────────────────────────
+// KrishiStorage.init() copies every krishi_* key out of native localStorage into its own
+// IndexedDB store and then DELETES the localStorage copy (krishi_idb.js:88-96). Three keys
+// in this file were read from and written to native localStorage directly, so on every boot
+// each one came back null — the value had been moved out from under it:
+//
+//   • krishi_pwa_dismissed       — "Later" on the install banner is supposed to hold for 7
+//                                  days. The read at boot saw null, so the banner returned
+//                                  on the very next launch.
+//   • krishi_last_delta_sync_time — the delta-question sync restarted from timestamp 0 every
+//                                  launch: the full merge ran again and the "syncing new
+//                                  questions" HUD appeared even when nothing was new.
+//   • krishi_active_cache_name    — the OTA version check read null, wrote the CURRENT server
+//                                  version and returned, so the one launch that follows a
+//                                  deploy — the launch where it matters — never announced the
+//                                  update or reloaded for it.
+//
+// Same shape as KrishiSM2Engine._getData()/_drainStrayLocalStorage(): read both stores,
+// resolve, persist the winner to KrishiStorage, drain the stray copy. Never a blind choice of
+// one side, because a value written this session (before KrishiStorage came up, or by an
+// older build) lives only in localStorage while the pre-boot copy lives only in KrishiStorage.
+function krishiReadStoredKey(key, resolve) {
+    const store = window.KrishiStorage;
+    // Without KrishiStorage, localStorage IS the store — reading both and draining one would
+    // delete the live value.
+    if (!store) {
+        try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
+    let held = null;
+    let stray = null;
+    try { held = store.getItem(key); } catch (e) {}
+    try { stray = localStorage.getItem(key); } catch (e) {}
+    if (stray === null) return held;
+    // Drained either way, or every read re-merges the same copy and the two stores never
+    // converge.
+    try { localStorage.removeItem(key); } catch (e) {}
+    const winner = (held === null) ? stray
+        : (typeof resolve === 'function' ? resolve(held, stray) : stray);
+    if (winner !== held) krishiWriteStoredKey(key, winner);
+    return winner;
+}
+
+function krishiWriteStoredKey(key, value) {
+    const store = window.KrishiStorage || localStorage;
+    try { store.setItem(key, String(value)); }
+    catch (e) { window.krishiLogSilent && krishiLogSilent('storedKey.write:' + key, e); }
+}
+
+// Resolver for the two clock-valued keys. Without it the stray copy wins by default, which is
+// right for a version name (localStorage always holds the newer one, by construction) but
+// wrong for a timestamp: a 7-day dismissal or a delta cursor must never move backwards.
+function krishiNewerTimestamp(held, stray) {
+    return ((parseInt(stray, 10) || 0) > (parseInt(held, 10) || 0)) ? stray : held;
+}
+
+window.krishiReadStoredKey = krishiReadStoredKey;
+window.krishiWriteStoredKey = krishiWriteStoredKey;
+window.krishiNewerTimestamp = krishiNewerTimestamp;
+
 function initLiveOTAUpdateEngine() {
     let isApplyingOTA = false;
 
@@ -39,9 +98,11 @@ function initLiveOTAUpdateEngine() {
             const meta = await res.json();
             if (!meta || !meta.cacheName) return;
 
-            const activeCache = localStorage.getItem('krishi_active_cache_name');
+            // Same store on the read and the write, or the comparison below is always
+            // "no active cache yet" on the first check of every launch.
+            const activeCache = krishiReadStoredKey('krishi_active_cache_name');
             if (!activeCache) {
-                localStorage.setItem('krishi_active_cache_name', meta.cacheName);
+                krishiWriteStoredKey('krishi_active_cache_name', meta.cacheName);
                 return;
             }
 
@@ -55,7 +116,7 @@ function initLiveOTAUpdateEngine() {
                     showToast('⚡ Instant OTA Update: New questions & features active!', 4000);
                 }
 
-                localStorage.setItem('krishi_active_cache_name', meta.cacheName);
+                krishiWriteStoredKey('krishi_active_cache_name', meta.cacheName);
 
                 if ('serviceWorker' in navigator) {
                     navigator.serviceWorker.getRegistrations().then(regs => {
@@ -253,7 +314,7 @@ function initPWAInstallFlow() {
         const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
         if (isStandalone) return;
 
-        const dismissedTime = localStorage.getItem('krishi_pwa_dismissed');
+        const dismissedTime = krishiReadStoredKey('krishi_pwa_dismissed', krishiNewerTimestamp);
         if (dismissedTime && Date.now() - parseInt(dismissedTime) < 7 * 24 * 60 * 60 * 1000) {
             return;
         }
@@ -296,7 +357,7 @@ function initPWAInstallFlow() {
 
         laterBtn.onclick = () => {
             banner.style.transform = 'translateX(-50%) translateY(180%)';
-            localStorage.setItem('krishi_pwa_dismissed', Date.now());
+            krishiWriteStoredKey('krishi_pwa_dismissed', Date.now());
         };
 
         if (isIOS) {
@@ -409,7 +470,7 @@ async function checkAndSyncDeltaQuestions() {
         const data = await res.json();
         if (!data || !data.added_questions || !Array.isArray(data.added_questions) || data.added_questions.length === 0) return;
 
-        const lastSyncedTime = parseInt(localStorage.getItem('krishi_last_delta_sync_time') || '0', 10);
+        const lastSyncedTime = parseInt(krishiReadStoredKey('krishi_last_delta_sync_time', krishiNewerTimestamp) || '0', 10);
         if (data.timestamp && data.timestamp <= lastSyncedTime) {
             console.log('[DeltaSync] No new delta questions available. Current timestamp:', lastSyncedTime);
             return;
@@ -430,7 +491,7 @@ async function checkAndSyncDeltaQuestions() {
         const newItemsToInsert = mergeResult.inserted;
 
         if (data.timestamp) {
-            localStorage.setItem('krishi_last_delta_sync_time', String(data.timestamp));
+            krishiWriteStoredKey('krishi_last_delta_sync_time', String(data.timestamp));
         }
 
         if (newItemsToInsert.length > 0) {

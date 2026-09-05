@@ -74,32 +74,86 @@ test('prepareCloudPayload() compresses the unbounded arrays and asserts the size
         'field compressed on write but not decoded on read reaches the merge as a string.');
 });
 
-test('every compressed field is decoded again on the way in', () => {
-    const merge = functionBody('mergeCloudAndLocalData');
+/** The `{ field: emptyValue }` map decompressCloudFields() drives off. */
+function decompressibleCloudFields() {
+    const body = functionBody('decompressibleCloudFields');
+    const out = {};
+    const re = /(\w+)\s*:\s*'([^']*)'/g;
+    let m;
+    while ((m = re.exec(body))) out[m[1]] = m[2];
+    return out;
+}
 
-    // Two decode shapes exist on purpose: array-shaped fields share a loop that also
-    // coerces with Array.isArray(), and sm2 is decoded on its own because it is a map.
-    const arrayList = merge.match(/\[([^\]]*)\]\.forEach\(field => \{\s*\r?\n\s*decodeCompressed/);
-    assert.ok(arrayList, 'the array-shaped decode loop was restructured - update this test');
-    const loopFields = arrayList[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+test('every compressed field is decoded again on the way in', () => {
+    const decodable = decompressibleCloudFields();
 
     compressedCloudFields().forEach(field => {
-        const decoded = loopFields.includes(field) ||
-            new RegExp('decodeCompressed\\(\\s*[\'"]' + field + '[\'"]').test(merge);
-        assert.ok(decoded,
-            field + ' is compressed on write but never decoded in mergeCloudAndLocalData(). ' +
-            'The merge would then read a compressed string: `{ ...aString }` does not throw, ' +
-            'it silently yields {0:"a",1:"b",...} and that gets written down as the ' +
-            'user\'s data.');
+        assert.ok(Object.prototype.hasOwnProperty.call(decodable, field),
+            field + ' is compressed on write but never decoded on read. A reader would then ' +
+            'get a compressed string: `{ ...aString }` does not throw, it silently yields ' +
+            '{0:"a",1:"b",...} and that gets written down as the user\'s data.');
     });
 
-    // sm2 is a map, not an array, so it must not be swept into the array coercion: the
-    // Array.isArray() guard there would replace a decoded schedule with [].
-    assert.ok(!loopFields.includes('sm2'),
-        'sm2 is an object keyed by question id. Coercing it with Array.isArray() blanks the ' +
-        'whole review schedule.');
-    assert.match(merge, /decodeCompressed\(\s*'sm2'\s*,\s*'\{\}'\s*\)/,
-        'sm2 must decode with an object fallback - \'[]\' would hand the sm2 union an array.');
+    // The empty value each field falls back to when its blob is unreadable has to match the
+    // SHAPE the readers use it as. sm2 is a map keyed by question id; '[]' here would hand the
+    // sm2 union an array, and `{ ...[] }` spreads without complaint.
+    assert.equal(decodable.sm2, '{}',
+        'sm2 is an object keyed by question id, not a list - an array fallback blanks the ' +
+        'whole review schedule into {0:...,1:...}');
+    ['timingLog', 'mockScores', 'customQuestions'].forEach(f => {
+        assert.equal(decodable[f], '[]', f + ' is a list and its fallback must be one');
+    });
+
+    // The decode is type-driven, not flag-driven: documents written before a field joined
+    // COMPRESSED_CLOUD_FIELDS carry a raw array and no isCompressed flag, and every one of
+    // those is already in the cloud.
+    const decoder = functionBody('decompressCloudFields');
+    assert.match(decoder, /typeof payload\[field\] !== 'string'/,
+        'a raw (already-decoded) field must pass through untouched, or every document written ' +
+        'by an older build fails to read');
+    assert.match(decoder, /decompressibleCloudFields\(\)/,
+        'the decoder must drive off the shared field map, not an inline copy of it');
+
+    // A blob that decompresses to nothing must THROW, not fall back to the empty value.
+    // Measured live: LZString.decompressFromUTF16() returns '' for a string it cannot read, so
+    // `JSON.parse(decompress(blob) || '{}')` turned a truncated schedule into an empty one —
+    // survivable in the merge, where the union keeps the local side, and destructive in the
+    // vault restore, which hands sm2 straight to _saveData().
+    assert.match(decoder, /if \(!text\) throw/,
+        'an unreadable blob must be reported, not silently read as "the user had no data"');
+    assert.match(decoder, /\(blob === ''\) \? empties\[field\]/,
+        'an empty field is genuinely nothing to decode and must not be called corrupt');
+});
+
+test('there is exactly one decoder, and every reader of a cloud document goes through it', () => {
+    // One encoder with a decoder per reader is how sm2 reached a reader as a string in the
+    // first place: mergeCloudAndLocalData() had its own inline decode loop and
+    // restoreFromCloudVault() had none, which only survived because the vault wrote raw
+    // documents. The vault compresses now, so a forgotten second decoder is a silent
+    // corruption rather than a crash.
+    assert.match(functionBody('mergeCloudAndLocalData'), /decompressCloudFields\(cloud/,
+        'the sync merge must decode through the shared decoder');
+    assert.match(functionBody('restoreFromCloudVault'), /decompressCloudFields\(d/,
+        'the vault restore reads a document that prepareVaultSnapshot() compressed - reading ' +
+        'it raw restores {0:"a",1:"b",...} as the user\'s history and reports success');
+
+    assert.ok(APP_JS.indexOf('decodeCompressed') === -1,
+        'the old per-reader decode closure is back - it is the shape of the bug');
+});
+
+test('decoding is separate from coercion, because the two readers need different things', () => {
+    const merge = functionBody('mergeCloudAndLocalData');
+    // The merge wants an array for these three whether the document carried one or not.
+    assert.match(merge, /\['timingLog', 'mockScores', 'customQuestions'\]\.forEach/,
+        'the merge must still coerce its three list fields - a missing timingLog reaching the ' +
+        'concat as undefined throws mid-merge');
+
+    // The vault restore must NOT: applyVaultSnapshot() switches on hasOwnProperty, so turning
+    // an absent customQuestions into [] would blank the question bank while restoring a backup.
+    const decoder = functionBody('decompressCloudFields');
+    assert.ok(!/Array\.isArray/.test(decoder),
+        'coercion inside the shared decoder would make "this snapshot has no question bank" ' +
+        'indistinguishable from "this snapshot has an empty one"');
 });
 
 // ── The size the user is shown must be the size that is written ─────────────────
@@ -704,11 +758,26 @@ function mergeTombstonedList(field, localState, cloudState) {
     const merged = {};
     // eslint-disable-next-line no-new-func
     const crdt = new Function('localLog', 'cloudLog', functionBody('mergeCRDTLogs').slice(1, -1));
+    // The syllabus block delegates per-subject convergence to mergeSyllabusSubject(), which in
+    // turn names topics through syllabusTopicNameOf(). Both are lifted out of js/app.js the same
+    // way mergeCRDTLogs() is, so this runs the real merge rather than a copy of it that can rot.
     // eslint-disable-next-line no-new-func
-    new Function('local', 'cloud', 'merged', 'mergeCRDTLogs', src)(
-        localState, cloudState, merged, crdt
+    const topicNameOf = new Function('id', 'subject', functionBody('syllabusTopicNameOf').slice(1, -1));
+    // eslint-disable-next-line no-new-func
+    const mergeSub = new Function('cloudSub', 'localSub', 'log', 'syllabusTopicNameOf',
+        functionBody('mergeSyllabusSubject').slice(1, -1));
+    // eslint-disable-next-line no-new-func
+    new Function('local', 'cloud', 'merged', 'mergeCRDTLogs', 'mergeSyllabusSubject', src)(
+        localState, cloudState, merged, crdt,
+        (c, l, log) => mergeSub(c, l, log, topicNameOf)
     );
     return merged;
+}
+
+/** The id a topic tombstone is written under, read out of js/app.js so the test cannot drift. */
+function syllabusTopicId(subject, name) {
+    // eslint-disable-next-line no-new-func
+    return new Function('subject', 'topicName', functionBody('syllabusTopicId').slice(1, -1))(subject, name);
 }
 
 test('a deleted exam profile stays deleted after merging with a peer that still has it', () => {
@@ -748,6 +817,153 @@ test('a deleted syllabus subject stays deleted', () => {
     assert.deepEqual(merged.syllabusCustom.map(s => s.subject), ['Agronomy'],
         'deleteCustomSubject() must survive a merge with a peer that still has the subject'
     );
+});
+
+// ── The syllabus converges per TOPIC, not per subject ────────────────────────────
+
+/** The one subject both sides hold, after the real merge block ran. */
+function mergeOneSubject(localSub, cloudSub, localLog, cloudLog) {
+    const merged = mergeTombstonedList('syllabusCustom',
+        { syllabusCustom: [localSub], syllabusCustomLog: localLog || {} },
+        { syllabusCustom: [cloudSub], syllabusCustomLog: cloudLog || {} }
+    );
+    return merged.syllabusCustom.find(s => s.subject === localSub.subject) || { topics: [] };
+}
+
+const topic = (name, fields) => Object.assign({ name: name, status: 'Pending' }, fields);
+
+test('topics added on both devices are unioned, not overwritten by one side', () => {
+    // Three chapters typed into Agronomy on the phone, two on the tablet. The old merge did
+    // `localSyllabus.forEach(s => syllabusMap.set(s.subject, s))` — local's whole subject
+    // object won, so the tablet's two were destroyed on BOTH devices, and the syllabus is
+    // hand-typed with no other copy anywhere.
+    const sub = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil'), topic('Seed'), topic('Tillage')] },
+        { subject: 'Agronomy', topics: [topic('Irrigation'), topic('Weeds')] }
+    );
+    assert.deepEqual(sub.topics.map(t => t.name).sort(),
+        ['Irrigation', 'Seed', 'Soil', 'Tillage', 'Weeds'],
+        'the union of both sides — either side alone silently deletes hand-typed chapters'
+    );
+});
+
+test('a topic status is resolved by clock, never by the higher STATUS_WEIGHT', () => {
+    // 'Weak' scores 20 and 'Completed' scores 100, but marking a finished chapter Weak again
+    // is a deliberate edit after a bad practice run. Taking the higher weight would undo it
+    // from the other device on every sync.
+    const downgraded = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Weak', updatedAt: 9000 })] },
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Completed', updatedAt: 100 })] }
+    );
+    assert.equal(downgraded.topics[0].status, 'Weak',
+        'the newer edit wins even though it is the lower weight'
+    );
+
+    const upgraded = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Pending', updatedAt: 100 })] },
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Mastered', updatedAt: 9000 })] }
+    );
+    assert.equal(upgraded.topics[0].status, 'Mastered',
+        'and the cloud wins when the cloud is the newer side'
+    );
+});
+
+test('an unstamped topic loses to a stamped one, and two unstamped ties keep local', () => {
+    // No updatedAt means nothing has touched that row since stamping was added; the stamped
+    // side is the only one holding evidence that a person made a choice.
+    const stamped = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Pending' })] },
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Completed', updatedAt: 9000 })] }
+    );
+    assert.equal(stamped.topics[0].status, 'Completed', 'the stamped edit wins');
+
+    const tied = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Studying' })] },
+        { subject: 'Agronomy', topics: [topic('Soil', { status: 'Completed' })] }
+    );
+    assert.equal(tied.topics[0].status, 'Studying',
+        'two legacy copies tie and local keeps its own — the same outcome as before ' +
+        'mergeSyllabusSubject() existed'
+    );
+});
+
+test('a deleted topic stays deleted, and its tombstone cannot collide with a subject', () => {
+    const id = syllabusTopicId('Agronomy', 'Seed');
+    const sub = mergeOneSubject(
+        { subject: 'Agronomy', topics: [topic('Soil')] },
+        { subject: 'Agronomy', topics: [topic('Soil'), topic('Seed')] },
+        { [id]: { action: 'remove', timestamp: 500, _rev: 1 } }
+    );
+    assert.deepEqual(sub.topics.map(t => t.name), ['Soil'],
+        'a union can no more delete a topic than it could a subject — deleteCustomTopic() ' +
+        'needs the same tombstone'
+    );
+
+    // The subject-level sweep runs over the same log. A topic id is a JSON triple, so it can
+    // never equal a subject key and that delete simply misses it.
+    const survived = mergeTombstonedList('syllabusCustom',
+        { syllabusCustom: [{ subject: 'Agronomy', topics: [] }], syllabusCustomLog: { [id]: { action: 'remove', timestamp: 500, _rev: 1 } } },
+        { syllabusCustom: [{ subject: 'Agronomy', topics: [] }], syllabusCustomLog: {} }
+    );
+    assert.deepEqual(survived.syllabusCustom.map(s => s.subject), ['Agronomy'],
+        'deleting a topic must not delete the subject it lives in'
+    );
+});
+
+test('a topic tombstone only bites the subject it names', () => {
+    const sub = mergeOneSubject(
+        { subject: 'Horticulture', topics: [topic('Soil')] },
+        { subject: 'Horticulture', topics: [topic('Soil'), topic('Seed')] },
+        { [syllabusTopicId('Agronomy', 'Seed')]: { action: 'remove', timestamp: 500, _rev: 1 } }
+    );
+    assert.deepEqual(sub.topics.map(t => t.name).sort(), ['Seed', 'Soil'],
+        'two subjects may hold a chapter of the same name; deleting one must not delete the other'
+    );
+});
+
+test('the subject id stays the bare subject name', () => {
+    // Tombstones written by earlier builds are keyed that way. Re-keying subjects would stop
+    // matching them and resurrect every subject the user has ever deleted.
+    const spec = APP_JS.slice(APP_JS.indexOf("'krishi_syllabus_custom':"), APP_JS.indexOf("'krishi_syllabus_custom':") + 500);
+    assert.match(spec, /idOf: s => \(s && s\.subject\)\s*\r?\n?\s*\? \[s\.subject\]/,
+        'the first identity a syllabus row owns must be its bare subject name'
+    );
+    assert.match(functionBody('syllabusTopicId'), /JSON\.stringify\(\['t',/,
+        'a topic id must be unambiguous for any name a user can type — no separator character ' +
+        'that a chapter name could contain'
+    );
+    assert.match(functionBody('tombstoneIdsOf'), /Array\.isArray\(ids\) \? ids : \[ids\]/,
+        'one row now owns several identities (its subject plus one per topic), so idOf may ' +
+        'return an array'
+    );
+});
+
+test('stampSyllabusChanges() stamps only the rows whose content changed', () => {
+    const body = functionBody('stampSyllabusChanges');
+    // Stamping the whole array on every save would make the last device to open the planner
+    // win every topic — the whole-subject overwrite this all exists to end, one level down.
+    assert.match(body, /unchanged\(t, oldT, 'status'\)/,
+        'a topic is stamped on a status change, not unconditionally');
+    assert.match(body, /unchanged\(sub, old, 'weightage'\)/,
+        'a subject is stamped on a weightage change');
+    assert.match(body, /getSyllabusData\(\)/,
+        'the baseline must be getSyllabusData(), not the raw stored key: on a device that has ' +
+        'never saved, an empty baseline stamps all four DEFAULT_AGRI_SYLLABUS subjects with ' +
+        'Date.now() and beats the real statuses waiting in the cloud');
+
+    const writer = functionBody('saveSyllabusData');
+    assert.match(writer, /stampSyllabusChanges\(data\)[\s\S]*setItem\('krishi_syllabus_custom'/,
+        'stamped BEFORE the write, or the diff compares the new list against itself and ' +
+        'nothing is ever marked as changed'
+    );
+    // Six writers reach saveSyllabusData() today; stamping at each edit site instead would
+    // mean a seventh ships unstamped rows that lose every merge with nobody noticing.
+    ['submitCustomSyllabusSubject', 'addCustomTopicToSubject', 'updateCustomTopicStatus',
+     'updateCustomSubjectWeight', 'resetSubjectData'].forEach(fn => {
+        assert.match(functionBody(fn), /saveSyllabusData\(/,
+            fn + '() must persist through saveSyllabusData(), or its edit is never stamped ' +
+            'and always loses the merge');
+    });
 });
 
 test('tombstones only remove; a list with no log merges exactly as before', () => {
@@ -1260,18 +1476,19 @@ test('the cloud-vault restore will not hand a compressed sm2 to the engine', () 
     const line = (body.split(/\r?\n/).find(l => l.includes('KrishiSM2Engine._saveData')) || '');
     assert.ok(line, 'the vault restore no longer writes sm2 - update this test');
     assert.match(line, /typeof d\.sm2 === 'object'/,
-        'the vault stores collectAllAppData() raw, so d.sm2 is an object today - but sm2 is now ' +
-        'on COMPRESSED_CLOUD_FIELDS, and _saveData() does not validate. Passing the compressed ' +
-        'string would replace the entire review schedule with it, and nothing would throw.');
+        'decompressCloudFields() turns a compressed sm2 back into a map, but a snapshot whose ' +
+        'sm2 is neither — truncated, hand-edited, written by a build that stored it as a list — ' +
+        'must not reach _saveData(), which validates nothing and would replace the entire ' +
+        'review schedule with whatever it is handed.');
     assert.match(line, /!Array\.isArray\(d\.sm2\)/,
         'an array would be written down as a schedule keyed 0,1,2...');
 });
 
 test('a cloud sm2 of the wrong shape is normalised, not spread', () => {
     const merge = functionBody('mergeCloudAndLocalData');
-    const guardAt = merge.indexOf("decodeCompressed('sm2'");
+    const guardAt = merge.indexOf('decompressCloudFields(cloud');
     assert.ok(guardAt > -1, "the sm2 decode moved - update this test");
-    const guard = merge.slice(guardAt, guardAt + 400);
+    const guard = merge.slice(guardAt, guardAt + 700);
 
     assert.match(guard, /Array\.isArray\(cloud\.sm2\)/,
         'the union at merged.sm2 spreads cloud.sm2. An array spreads to {0:...,1:...} and a ' +
@@ -1280,4 +1497,87 @@ test('a cloud sm2 of the wrong shape is normalised, not spread', () => {
     assert.match(guard, /cloud\.sm2 = \{\}/, 'the fallback has to be an object, matching the union');
     assert.ok(merge.indexOf('...(cloud.sm2') > guardAt,
         'the guard must run BEFORE the union reads cloud.sm2, or it guards nothing');
+    // An ABSENT sm2 has to stay absent. Normalising it to {} would make the union
+    // `{ ...(cloud.sm2 || {}), ...local.sm2 }` no different, but getDifferentialSyncDelta()
+    // then sees a field the cloud document does not have and uploads an empty schedule.
+    assert.match(guard, /cloud\.sm2 !== undefined/,
+        'a document with no sm2 at all must not be given an empty one');
+});
+
+// ── The midnight vault is a sixth writer of a size-limited document ──────────────
+
+test('the midnight snapshot is compressed and size-checked like every other document write', () => {
+    const prep = functionBody('prepareVaultSnapshot');
+    // This wrote collectAllAppData() RAW: no compression, no assertion, no strip of
+    // customQuestions. Firestore hard-limits a document to 1 MiB, so for exactly the heavy
+    // user this safety net exists for, the nightly snapshot failed on the limit with nothing
+    // but a console.warn — every night, for as long as the bank stayed large.
+    assert.match(prep, /compressUnboundedFields\(snapshot\)/,
+        'the snapshot must go through the SAME compressor as the users/{uid} document, not a ' +
+        'second copy of the logic — that drift is what this bug was');
+    assert.match(prep, /assertPayloadFits\(snapshot/,
+        'and assert its own size, or it fails at Firestore instead of here');
+
+    assert.match(functionBody('performMidnightVaultBackup'), /prepareVaultSnapshot\(collectAllAppData\(\)/,
+        'the write path must not be able to reach .set() without going through the preparer');
+});
+
+test('the snapshot drops the question bank only after compression was not enough', () => {
+    const prep = functionBody('prepareVaultSnapshot');
+    const compressAt = prep.indexOf('compressUnboundedFields(snapshot)');
+    const dropAt = prep.indexOf('delete snapshot.customQuestions');
+    assert.ok(compressAt > -1 && dropAt > compressAt,
+        'compress FIRST. A snapshot is far more useful with the bank in it, and the compressed ' +
+        'fields are usually where the bytes are: a 3,000-record sm2 map measures 671 KB raw ' +
+        'and 24 KB compressed.'
+    );
+    assert.match(prep, /if \(!payloadFitsCloudDoc\(snapshot\)/,
+        'the drop must be conditional — an ordinary snapshot keeps its bank');
+    // vaultEntryOf() reports qCount -1 for a bank-free snapshot and the row reads "bank not
+    // included", so this degrades the snapshot instead of losing the whole day.
+    assert.match(functionBody('vaultEntryOf'), /-1/,
+        'a bank-free snapshot has to stay a supported shape in the vault index');
+});
+
+test('payloadFitsCloudDoc() asks the size question instead of throwing it', () => {
+    const body = functionBody('payloadFitsCloudDoc');
+    assert.match(body, /FIRESTORE_DOC_SOFT_LIMIT/,
+        'one limit, one constant — a second number here is how the meter and the write path ' +
+        'drifted apart before');
+    // Unmeasurable returns true, matching assertPayloadFits(): a payload that cannot be
+    // stringified is not evidence of size, and acting on it would drop the user's bank on a guess.
+    assert.match(body, /catch \(e\) \{ return true; \}/,
+        'an unstringifiable payload must not be treated as oversized');
+});
+
+test('a snapshot that is over the limit even without the bank stops retrying', () => {
+    const body = functionBody('performMidnightVaultBackup');
+    assert.match(body, /isPayloadTooBigError\(e\)/,
+        'the deterministic failure has to be told apart from a transient one');
+    const tooBigAt = body.indexOf('isPayloadTooBigError(e)');
+    const tail = body.slice(tooBigAt, tooBigAt + 900);
+    // scheduleMidnightCloudVault() runs on every successful sync, so leaving the date unstamped
+    // retries a write that cannot succeed, all day, every cycle.
+    assert.match(tail, /setItem\('krishi_last_vault_date', dateStr\)/,
+        'the date must still be stamped, or the impossible write is retried on every sync ' +
+        'for the rest of the day');
+    // Comments stripped: this branch explains in prose why it does NOT call the toast helper,
+    // and a substring search would find the explanation and read it as the call.
+    const code = tail.replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/handlePayloadTooBigError\(/.test(code),
+        'the users/{uid} document is over the limit too in that case and the sync path has ' +
+        'already told the user — a second toast from here only repeats it');
+});
+
+test('a snapshot that landed is not reported as failed because the bookkeeping after it was not', () => {
+    const body = functionBody('performMidnightVaultBackup');
+    const indexAt = body.indexOf('recordVaultIndexEntry');
+    assert.ok(indexAt > -1, 'the vault index write moved - update this test');
+    assert.match(body.slice(Math.max(0, indexAt - 120), indexAt + 200), /try \{ await recordVaultIndexEntry/,
+        'the pointer doc and the pruning are best-effort: they must not be able to take the ' +
+        'snapshot down with them'
+    );
+    assert.ok(body.indexOf("setItem('krishi_last_vault_date', dateStr)") < indexAt,
+        'the date is stamped once the snapshot itself is written, not once the index is'
+    );
 });

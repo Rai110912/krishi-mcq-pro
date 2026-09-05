@@ -2044,3 +2044,192 @@ test('the question bank chunks transfer in parallel', () => {
         'the metadata that makes the chunks discoverable must be written after them'
     );
 });
+
+// ── Advanced Setup (page-practice-config) ──────────────────────────────────────
+//
+// Every bug below was silent in the same way the sync bugs above were: the run started, the
+// page rendered, and the setting the user picked simply did not apply.
+
+/** The two statements in setupMCQSession() that own the activeConfig lifecycle. */
+function configLifecycleRunner() {
+    const body = functionBody('setupMCQSession');
+    const clear = /if \(state\.activeConfig && state\.activeConfig\.__sessionConsumed\) \{[\s\S]*?\n\s*\}/.exec(body);
+    const stamp = /if \(state\.activeConfig\) state\.activeConfig\.__sessionConsumed = true;/.exec(body);
+    assert.ok(clear, 'setupMCQSession() no longer clears a consumed activeConfig');
+    assert.ok(stamp, 'setupMCQSession() no longer stamps the config it is about to consume');
+    assert.ok(body.indexOf(clear[0]) < body.indexOf(stamp[0]),
+        'the clear must run before the stamp, or a config would be dropped the moment it arrives'
+    );
+    const fn = new Function('state', clear[0] + '\n' + stamp[0]);
+    return state => { fn(state); return state; };
+}
+
+test('an Advanced Setup config cannot leak into the next session', () => {
+    const startSession = configLifecycleRunner();
+
+    // Run 1: Advanced Setup hands over its own config.
+    const advanced = { feedback: 'end', negativeMarking: 'on', perQTimer: 'on', perQSec: 15 };
+    const state = startSession({ activeConfig: advanced });
+    assert.strictEqual(state.activeConfig, advanced, 'the config its own session brought must survive');
+    assert.strictEqual(advanced.__sessionConsumed, true, 'that config is now spoken for');
+
+    // Run 2: plain practice, "Fix My Mistakes", "Weakest Subject" - none of these set a config.
+    // This is the leak: answers stayed hidden (feedback:'end') and a 20% penalty applied with
+    // nothing on screen to explain it.
+    assert.strictEqual(startSession(state).activeConfig, null,
+        'a session that brings no config of its own must not inherit the last one'
+    );
+
+    // Run 3: a fresh config from any other caller is untouched.
+    const mock = { isMock: true, feedback: 'end' };
+    state.activeConfig = mock;
+    assert.strictEqual(startSession(state).activeConfig, mock, 'a freshly assigned config is this session\'s');
+});
+
+test('the config saved for next time never carries the session stamp', () => {
+    const body = functionBody('startAdvancedConfiguredPractice');
+    const stored = body.indexOf("KrishiStorage.setItem('krishi_last_practice_config'");
+    const adopted = body.indexOf('state.activeConfig = configObj');
+    assert.ok(stored > -1 && adopted > -1, 'startAdvancedConfiguredPractice() no longer does both');
+    assert.ok(stored < adopted,
+        'configObj is stringified into storage and then handed to state, so the stamp added ' +
+        'downstream can never reach the stored copy - reversing this would persist ' +
+        '__sessionConsumed and every restored config would be dropped on arrival'
+    );
+});
+test('the difficulty gate matches a bank that never stored a difficulty', () => {
+    const line = (APP_JS.split(/\r?\n/).find(l => /if \(difficulty !== 'all'/.test(l)) || '');
+    assert.ok(line, 'the difficulty gate in startAdvancedConfiguredPractice() moved - retarget this test');
+    // The gate `return`s to reject; turn it into a predicate.
+    const keeps = new Function('q', 'difficulty', line.replace(/return\s*;\s*$/, 'return false;') + '\nreturn true;');
+
+    // questions.json carries {id,q,opts,ans,expl,sub} and no difficulty at all, so every static
+    // question read undefined and a strict !== rejected all of them: all three non-"all" options
+    // produced an empty pool. Missing difficulty now reads as Medium, matching normalizeQuestion().
+    assert.strictEqual(keeps({}, 'Medium'), true, 'a question with no difficulty counts as Medium');
+    assert.strictEqual(keeps({}, 'Easy'), false, 'and only as Medium');
+
+    // Imported difficulties arrive with whatever casing and padding the source had.
+    assert.strictEqual(keeps({ difficulty: ' easy ' }, 'Easy'), true, 'both sides are trimmed and lowercased');
+    assert.strictEqual(keeps({ difficulty: 'HARD' }, 'Hard'), true, 'casing cannot decide a match');
+    assert.strictEqual(keeps({ difficulty: 'Easy' }, 'Hard'), false, 'a real mismatch still rejects');
+    assert.strictEqual(keeps({ difficulty: 'Easy' }, 'all'), true, '"Any difficulty mixed" gates nothing');
+});
+
+test('an empty pool names the setting that emptied it', () => {
+    const body = functionBody('startAdvancedConfiguredPractice');
+    assert.ok(!/No questions match your filter metrics/.test(body),
+        'the one-size-fits-all toast gave the user nothing to act on'
+    );
+    for (const counter of ['survivedCategory', 'survivedDifficulty']) {
+        assert.match(body, new RegExp(counter + '\\+\\+'), counter + ' must be tallied inside the filter');
+        assert.match(body, new RegExp(counter + ' === 0'), counter + ' must be read when the pool is empty');
+    }
+    const empty = body.slice(body.indexOf('if (pool.length === 0)'));
+    assert.strictEqual((empty.match(/showToast\(/g) || []).length, 3,
+        'three distinct causes - nothing in the subject/topic, nothing at that difficulty, ' +
+        'nothing left after the Include boxes - need three distinct messages'
+    );
+});
+
+test('a saved subject or topic that no longer exists falls back to "all"', () => {
+    // Without this the select ends up with value '' and selectedIndex -1: the control renders
+    // blank and every later filter compares questions against '', so Start always failed.
+    const setup = functionBody('openPracticeSetupPage');
+    assert.strictEqual((setup.match(/subSel\.selectedIndex === -1/g) || []).length, 2,
+        'both the preselected subject and the restored one need the guard'
+    );
+    const changed = functionBody('onPracticeSubjectChanged');
+    assert.match(changed, /topicSel\.selectedIndex === -1/, 'the topic select needs it too');
+    assert.ok(changed.indexOf('topicSel.value = targetTopicToSet') < changed.indexOf('topicSel.selectedIndex === -1'),
+        'the fallback has to run after the assignment it is correcting'
+    );
+});
+test('the subject and topic options cannot carry markup out of a question bank', () => {
+    // Subject and topic strings come from imported questions - OCR, paste, spreadsheet - so
+    // `Agro" onmouseover="x` used to close the value attribute early: a live handler landed on
+    // the <option> and the value truncated to "Agro", after which the filter matched nothing.
+    for (const [fn, sel, v] of [['openPracticeSetupPage', 'subSel', 'sub'], ['onPracticeSubjectChanged', 'topicSel', 'top']]) {
+        const body = functionBody(fn);
+        const opt = new RegExp(sel + '\\.innerHTML \\+= `<option value="\\$\\{escapeCreatorHtml\\(' + v + '\\)\\}">\\$\\{escapeCreatorHtml\\(' + v + '\\)\\}');
+        assert.match(body, opt, fn + '(): both the value and the label must be escaped');
+        assert.ok(!new RegExp('<option value="\\$\\{' + v + '\\}').test(body),
+            fn + '(): no raw interpolation may remain'
+        );
+    }
+});
+
+test('the two inclusion counts on the setup page are counted by the same rule', () => {
+    const body = functionBody('updateSizingDiagnosticsInSetup');
+    assert.match(body, /cnt-wrong'\)\.textContent = getValidWrongCount\(\)/, 'wrong answers exclude deleted ids');
+    assert.match(body, /cnt-bookmarks'\)\.textContent = getValidBookmarkedCount\(\)/,
+        'bookmarks must exclude them too - the raw .length promised questions the filter could ' +
+        'never pull, and made the two adjacent numbers mean different things'
+    );
+    assert.ok(!/localData\.bookmarked\.length/.test(body), 'no raw list length may remain here');
+});
+
+test('the setup number inputs are clamped to the bounds the markup advertises', () => {
+    const i = APP_JS.indexOf('const clampCfgNumber = (');
+    assert.ok(i > -1, 'clampCfgNumber() moved - retarget this test');
+    const open = APP_JS.indexOf('{', APP_JS.indexOf('=>', i));
+    let depth = 0, end = -1;
+    for (let j = open; j < APP_JS.length && end < 0; j++) {
+        if (APP_JS[j] === '{') depth++;
+        else if (APP_JS[j] === '}' && --depth === 0) end = j;
+    }
+    assert.ok(end > -1, 'unbalanced braces in clampCfgNumber()');
+    const clamp = new Function('input', 'min', 'max', 'fallback', APP_JS.slice(open + 1, end));
+
+    // min/max on a number <input> is validation metadata only, and this page has no form. A
+    // typed "-5" made the total timer silently never start (its `> 0` test failed while the
+    // dropdown still read "Limit overall time"), and a negative countdown put expectedEndTime
+    // in the past, auto-marking every question wrong on the first tick.
+    const el = v => ({ value: v });
+    const neg = el('-5');
+    assert.strictEqual(clamp(neg, 2, 180, 20), 2, 'a negative duration clamps up to the minimum');
+    assert.strictEqual(neg.value, 2, 'and the corrected value is written back so the fix is visible');
+    assert.strictEqual(clamp(el('9999'), 5, 300, 30), 300, 'an absurd countdown clamps down');
+    assert.strictEqual(clamp(el(''), 2, 180, 20), 20, 'a cleared field falls back to the default');
+    assert.strictEqual(clamp(el('abc'), 5, 300, 30), 30, 'so does an unparseable one');
+    assert.strictEqual(clamp(el('45'), 5, 300, 30), 45, 'a value in range passes through');
+    assert.strictEqual(clamp(null, 2, 180, 20), 20, 'a missing input is not a crash');
+});
+test('every off-scale Tailwind shade in index.html is declared in the config', () => {
+    // Tailwind only emits a rule for a shade it knows. `dark:text-indigo-455` and
+    // `dark:text-slate-350` produced no CSS at all, so the element kept whatever it inherited -
+    // no error, no warning, just the wrong colour. The config block exists precisely to back
+    // the off-scale shades this markup uses; these two had been added to the markup without it.
+    //
+    // Scope is index.html. js/app.js builds class strings too and still has its own undeclared
+    // shades; widening this test is a separate change.
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const SCALE = new Set([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]);
+    const COLORS = ['slate', 'gray', 'zinc', 'neutral', 'stone', 'red', 'orange', 'amber', 'yellow',
+        'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple',
+        'fuchsia', 'pink', 'rose'];
+
+    const cfgStart = html.indexOf('tailwind.config');
+    const cfgEnd = html.indexOf('boxShadow', cfgStart);
+    assert.ok(cfgStart > -1 && cfgEnd > cfgStart, 'the tailwind.config colour block moved - retarget this test');
+    const cfg = html.slice(cfgStart, cfgEnd);
+
+    const declared = {};
+    for (const c of COLORS) {
+        const m = new RegExp(c + '\\s*:\\s*\\{([^}]*)\\}').exec(cfg);
+        declared[c] = new Set(m ? [...m[1].matchAll(/(\d+)\s*:/g)].map(x => Number(x[1])) : []);
+    }
+
+    const missing = new Set();
+    for (const m of html.matchAll(new RegExp('-(' + COLORS.join('|') + ')-(\\d{2,3})\\b', 'g'))) {
+        const shade = Number(m[2]);
+        if (!SCALE.has(shade) && !declared[m[1]].has(shade)) missing.add(m[1] + '-' + shade);
+    }
+    assert.deepStrictEqual([...missing], [],
+        'these classes render nothing - add them to tailwind.config at index.html:46 or use a ' +
+        'shade on the default scale'
+    );
+
+    // The two that started this, pinned by name so a config rewrite cannot quietly drop them.
+    assert.ok(declared.indigo.has(455) && declared.slate.has(350), 'indigo-455 and slate-350 stay declared');
+});

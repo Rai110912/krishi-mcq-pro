@@ -6207,25 +6207,35 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         let previousVal = subSel.value;
         subSel.innerHTML = '<option value="all">All Subjects combined</option>';
         getAllSubjects().forEach(sub => {
-            subSel.innerHTML += `<option value="${sub}">${sub}</option>`;
+            // Escaped: subject names come from imported questions (OCR, paste, spreadsheet), so a
+            // name holding a quote used to close the value attribute early — `Agro" onmouseover="x`
+            // landed a live event handler on the <option> and truncated its value to "Agro", after
+            // which the filter below matched nothing and the run failed as "No questions match".
+            subSel.innerHTML += `<option value="${escapeCreatorHtml(sub)}">${escapeCreatorHtml(sub)}</option>`;
         });
         
         // Match selection
         if (preSelectedSubject !== 'all') {
             subSel.value = preSelectedSubject;
+            // A caller can pass a subject that no longer exists in the bank (a deep link from a
+            // deleted subject, or a stat card rendered before an import replaced the questions).
+            // Without this the select goes blank and every later filter compares against ''.
+            if (subSel.selectedIndex === -1) subSel.value = 'all';
         } else {
             subSel.value = 'all';
         }
-        
+
         onPracticeSubjectChanged(preSelectedTopic);
-        
-        // Load configurations
+
         // Load configurations
         let rawLast = KrishiStorage.getItem('krishi_last_practice_config');
         if (rawLast && preSelectedSubject === 'all') {
             try {
                 let conf = JSON.parse(rawLast);
+                // Same guard as above, for the saved config: the subject it names may have been
+                // deleted or renamed since the last run.
                 subSel.value = conf.subject || 'all';
+                if (subSel.selectedIndex === -1) subSel.value = 'all';
                 onPracticeSubjectChanged(conf.topic || 'all');
                 
                 document.getElementById('prac-cfg-difficulty').value = conf.difficulty || 'all';
@@ -6296,17 +6306,29 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         });
         
         [...uniqueTopics].sort().forEach(top => {
-            topicSel.innerHTML += `<option value="${top}">${top}</option>`;
+            topicSel.innerHTML += `<option value="${escapeCreatorHtml(top)}">${escapeCreatorHtml(top)}</option>`;
         });
-        
+
+        // A saved topic that no longer exists leaves the select with value '' and selectedIndex
+        // -1: the control renders blank (not even "All Topics combined") and startAdvanced-
+        // ConfiguredPractice() then compares every question against '', rejects all of them and
+        // reports "No questions match your filter metrics". Falling back to 'all' keeps the page
+        // usable after the questions behind a saved config are deleted or a new bank is imported.
         topicSel.value = targetTopicToSet;
+        if (topicSel.selectedIndex === -1) topicSel.value = 'all';
         updateSizingDiagnosticsInSetup();
     }
 
     function updateSizingDiagnosticsInSetup() {
         // Load metrics counting
+        //
+        // Bookmarks go through getValidBookmarkedCount() for the same reason wrong answers go
+        // through getValidWrongCount(): both lists hold ids, and deleting a question (or
+        // replacing the bank on import) leaves the id behind. The raw `.length` therefore
+        // over-reported — the label promised more bookmarked questions than the filter below
+        // could ever pull, and the two adjacent numbers were counted by different rules.
         document.getElementById('prac-cfg-cnt-wrong').textContent = getValidWrongCount();
-        document.getElementById('prac-cfg-cnt-bookmarks').textContent = localData.bookmarked.length;
+        document.getElementById('prac-cfg-cnt-bookmarks').textContent = getValidBookmarkedCount();
         document.getElementById('prac-cfg-cnt-custom').textContent = getCustomQuestions().length;
         
         // Count unattempted items
@@ -6316,14 +6338,31 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     }
 
     function startAdvancedConfiguredPractice() {
+        // `min`/`max` on a number <input> is validation metadata only — nothing enforces it
+        // outside a form submit, and this page has no form. A typed "-5" used to sail straight
+        // through: a negative Duration made the `> 0` test at the session timer fail, so the
+        // timer silently never started while the dropdown still read "Limit overall time"; a
+        // negative Countdown put expectedEndTime in the past, so every question auto-marked
+        // wrong on the first tick. Clamp to the bounds the markup already advertises
+        // (index.html:1430 and 1445) and write the corrected value back so the fix is visible
+        // rather than silent.
+        const clampCfgNumber = (input, min, max, fallback) => {
+            if (!input) return fallback;
+            let n = parseInt(input.value, 10);
+            if (!Number.isFinite(n)) n = fallback;
+            n = Math.min(max, Math.max(min, n));
+            if (String(n) !== String(input.value)) input.value = n;
+            return n;
+        };
+
         let subject = document.getElementById('prac-cfg-subject').value;
         let topic = document.getElementById('prac-cfg-topic').value;
         let difficulty = document.getElementById('prac-cfg-difficulty').value;
         let count = parseInt(document.getElementById('prac-cfg-count').value) || 20;
         let timer = document.getElementById('prac-cfg-timer').value;
-        let timerMin = parseInt(document.getElementById('prac-cfg-timer-min').value) || 20;
+        let timerMin = clampCfgNumber(document.getElementById('prac-cfg-timer-min'), 2, 180, 20);
         let perQTimer = document.getElementById('prac-cfg-per-q-timer').value;
-        let perQSec = parseInt(document.getElementById('prac-cfg-per-q-sec').value) || 30;
+        let perQSec = clampCfgNumber(document.getElementById('prac-cfg-per-q-sec'), 5, 300, 30);
         let negativeMarking = document.getElementById('prac-cfg-neg-marking').value;
         let feedback = document.getElementById('prac-cfg-feedback').value;
         let shuffleQs = document.getElementById('prac-cfg-shuffle-qs').checked;
@@ -6352,12 +6391,25 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         let bkSet = new Set(localData.bookmarked);
         let customSet = new Set(getCustomQuestions().map(q => q.id));
 
+        // Which gate rejected what, so the failure message below can name the setting to change
+        // instead of blaming "your filter metrics" as a whole.
+        let survivedCategory = 0;
+        let survivedDifficulty = 0;
+
         allQuestions.forEach(q => {
             // Apply category and difficulty gates
             if (subject !== 'all' && (q.sub || "").trim().toLowerCase() !== (subject || "").trim().toLowerCase()) return;
             if (topic !== 'all' && (q.topic || "").trim().toLowerCase() !== (topic || "").trim().toLowerCase()) return;
-            if (difficulty !== 'all' && q.difficulty !== difficulty) return;
-            
+            survivedCategory++;
+            // Normalised like the two gates above it, which this one used to skip. Two separate
+            // faults: a strict !== against a raw field meant "Easy" never matched "easy" or
+            // " Easy" from an import, and questions.json carries no `difficulty` at all — every
+            // static question reads undefined, so all three non-"all" options produced an empty
+            // pool and the page just said no questions matched. Missing difficulty defaults to
+            // 'Medium', the same default normalizeQuestion() stamps on imports (js/app.js:9674).
+            if (difficulty !== 'all' && (q.difficulty || 'Medium').trim().toLowerCase() !== (difficulty || "").trim().toLowerCase()) return;
+            survivedDifficulty++;
+
             // Check filters inclusions
             let isCustom = customSet.has(q.id);
             let isWrong = wrongSet.has(q.id);
@@ -6369,10 +6421,10 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             if (incBookmarks && isBookmarked) matchesInclusion = true;
             if (incCustom && isCustom) matchesInclusion = true;
             if (incUnattempted && isUnattempted) matchesInclusion = true;
-            
+
             // Default inclusion if filters are all off
             if (!incWrong && !incBookmarks && !incUnattempted && !incCustom) {
-                matchesInclusion = true; 
+                matchesInclusion = true;
             }
 
             if (matchesInclusion) {
@@ -6381,7 +6433,14 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         });
 
         if (pool.length === 0) {
-            showToast('No questions match your filter metrics. Adjust settings!');
+            let scope = topic !== 'all' ? `"${topic}"` : (subject !== 'all' ? `"${subject}"` : 'your question bank');
+            if (survivedCategory === 0) {
+                showToast(`No questions found in ${scope}. Pick a different subject or topic.`);
+            } else if (survivedDifficulty === 0) {
+                showToast(`No "${difficulty}" questions in ${scope}. Try "Any difficulty mixed".`);
+            } else {
+                showToast(`${survivedDifficulty} question(s) in ${scope}, but none match the "Include" boxes. Untick some.`);
+            }
             return;
         }
 
@@ -6532,13 +6591,20 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             state.perQuestionTimerInterval = null;
         }
 
-        // A plain practice run sets no activeConfig of its own, so without this it
-        // inherits the last one. After an Exam Simulation that means feedback:'end'
-        // and negativeMarking:'on' silently governing a practice session — answers
-        // and explanations stay hidden for no reason the user can see. Only a config
-        // that belongs to a mock is dropped, and only when this session is not one,
-        // so simulations, configured practice and Spaced Review keep theirs.
-        if (!isMock && state.activeConfig && state.activeConfig.isMock) {
+        // A session config belongs to exactly ONE session. Every caller that owns one assigns a
+        // fresh object immediately before calling here (js/app.js:6185, 6197, 6395, 6510, ...),
+        // so an unstamped config is this session's and a stamped one is a leftover.
+        //
+        // Only *mock* configs used to be dropped. A plain practice run sets no config of its own,
+        // so an Advanced Setup run leaked feedback:'end', negativeMarking:'on' and its
+        // per-question countdown into every later session that brought none — "Fix My Mistakes",
+        // "Weakest Subject", "Custom Only", plain practice. Answers stayed hidden and a 20%
+        // penalty applied with nothing on screen to explain why.
+        //
+        // resumeUnfinishedSession() is unaffected: it restores its own snapshot's activeConfig
+        // (js/app.js:1237) *after* this function returns, so the clear happens first and the
+        // right config lands second.
+        if (state.activeConfig && state.activeConfig.__sessionConsumed) {
             state.activeConfig = null;
         }
 
@@ -6552,6 +6618,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         state.isMock = isMock;
         state.totalQuestions = questions.length;
         state.sessionId = Date.now(); // Track active session to prevent race conditions
+        // Claim the config now, so the next session that brings none of its own starts clean.
+        if (state.activeConfig) state.activeConfig.__sessionConsumed = true;
         state.timerSec = timerSec;
         state.hybridHearts = 5; // Default 5 hearts for hybrid attempts
         

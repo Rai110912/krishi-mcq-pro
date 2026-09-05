@@ -46,8 +46,12 @@
                     colors: {
                         slate: {
                             150: '#eaeff5',
+                            250: '#d7dfe9',
+                            350: '#b0bccd',
+                            450: '#7c8ca2',
                             705: '#313e52',
                             750: '#293548',
+                            805: '#1d283a',
                             850: '#172032',
                             955: '#01040f'
                         },
@@ -56,9 +60,10 @@
                             450: '#22c58b',
                             650: '#058560'
                         },
-                        teal:   { 450: '#1cc3ac' },
-                        indigo: { 650: '#493fd7' },
+                        teal:   { 450: '#1cc3ac', 650: '#0e857b' },
+                        indigo: { 455: '#7177f4', 650: '#493fd7', 750: '#3d34b7' },
                         amber:  { 450: '#f8ae17' },
+                        red:    { 550: '#e63535', 650: '#cb2121' },
                         rose:   { 450: '#fb4d69' }
                     },
                     boxShadow: {
@@ -81,7 +86,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=bdrrxn2" rel="stylesheet">
+    <link href="./index.css?v=yov34ug" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2683,7 +2688,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v251-bdrrxn2 (202609051213)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v252-yov34ug (202609051259)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3963,14 +3968,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=bdrrxn2" defer></script>
-    <script src="./js/elite_3d_engine.js?v=bdrrxn2" defer></script>
-    <script src="./js/canvas_charts.js?v=bdrrxn2" defer></script>
+    <script src="./js/elite_animations_controller.js?v=yov34ug" defer></script>
+    <script src="./js/elite_3d_engine.js?v=yov34ug" defer></script>
+    <script src="./js/canvas_charts.js?v=yov34ug" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=bdrrxn2" defer></script>
-    <script src="./js/sqlite_db.js?v=bdrrxn2" defer></script>
-    <script src="./js/krishi_idb.js?v=bdrrxn2"></script>
-    <script src="./js/app.js?v=bdrrxn2" defer></script>
+    <script src="./js/pwa_helpers.js?v=yov34ug" defer></script>
+    <script src="./js/sqlite_db.js?v=yov34ug" defer></script>
+    <script src="./js/krishi_idb.js?v=yov34ug"></script>
+    <script src="./js/app.js?v=yov34ug" defer></script>
 
 
     <!--
@@ -3998,8 +4003,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=bdrrxn2" defer></script>
-    <script src="./js/voice_assistant.js?v=bdrrxn2" defer></script>
+<script src="./js/data_safety.js?v=yov34ug" defer></script>
+    <script src="./js/voice_assistant.js?v=yov34ug" defer></script>
 </body>
 </html>
 

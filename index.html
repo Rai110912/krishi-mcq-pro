@@ -86,7 +86,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=oz5ibno" rel="stylesheet">
+    <link href="./index.css?v=yafygh3" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -2733,7 +2733,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v255-oz5ibno (202609051539)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v256-yafygh3 (202609051734)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3456,16 +3456,58 @@
 
             <!-- TAB: MANAGE -->
             <div id="creator-panel-manage" class="hidden space-y-3">
+                <!-- Bank health. Collapsed by default, and only built while open: the stats pass walks
+                     the whole bank, and this panel re-renders on every keystroke of the search box. -->
+                <button id="manage-health-btn" onclick="toggleManageHealth()" class="w-full flex items-center gap-2 p-2 border rounded-xl text-[10px] font-bold pressable" style="border-color:var(--border);background:var(--card);">
+                    <span>🩺 Bank health</span>
+                    <span id="manage-health-summary" class="ml-auto font-normal opacity-75"></span>
+                    <span id="manage-health-caret">▸</span>
+                </button>
+                <div id="manage-health-card" class="hidden p-3 border rounded-xl space-y-2 text-[10px]" style="border-color:var(--border);background:var(--card);"></div>
+
+                <input id="manage-search" oninput="scheduleRenderQuestionList()" placeholder="🔎 Search question, options, explanation, topic, tags..." class="w-full p-2 border rounded-lg text-xs">
                 <div class="grid grid-cols-2 gap-2 text-xs">
-                    <input id="manage-search" oninput="scheduleRenderQuestionList()" placeholder="Search custom..." class="p-2 border rounded-lg">
-                    <select id="manage-filter-sub" onchange="scheduleRenderQuestionList()"></select>
+                    <select id="manage-filter-sub" onchange="scheduleRenderQuestionList(true)"></select>
+                    <select id="manage-sort" onchange="scheduleRenderQuestionList(true)">
+                        <option value="newest">🕒 Newest first</option>
+                        <option value="oldest">🕘 Oldest first</option>
+                        <option value="subject">🔤 Subject A→Z</option>
+                        <option value="repeats">🔥 Most repeated</option>
+                        <option value="shortest">📏 Shortest first</option>
+                    </select>
                 </div>
-                <div class="flex justify-between items-center text-[10px]">
-                    <button onclick="selectAllManage()" class="border px-2 py-1 rounded">Select All</button>
-                    <button onclick="deselectAllManage()" class="border px-2 py-1 rounded">Clear</button>
-                    <button onclick="deleteSelectedQuestions()" class="text-red-500 border px-2 py-1 rounded">Delete selection</button>
+
+                <!-- Quick filters, drawn by renderManageChips() with live counts so the work waiting in
+                     the bank (drafts, broken rows, unexplained answers) is visible without a scan. -->
+                <div id="manage-chips" class="flex flex-wrap gap-1.5"></div>
+
+                <!-- Bulk bar, hidden until something is ticked. A permanently visible "Delete
+                     selection" next to a selection the user cannot see is how a whole bank goes.
+                     flex-wrap with a full-width count so the four actions never squeeze on a phone. -->
+                <div id="manage-selection-bar" class="hidden flex-wrap items-center gap-2 p-2 border rounded-xl text-[10px]" style="border-color:var(--border);background:var(--card);">
+                    <span id="manage-selection-count" class="font-bold w-full"></span>
+                    <button onclick="openManageBulkEdit()" class="border px-2 py-1 rounded font-bold pressable" style="border-color:var(--border);" title="Change subject, topic, difficulty, status or tags on every selected question at once.">✏️ Bulk edit</button>
+                    <button onclick="exportSelectedManageQuestions()" class="border px-2 py-1 rounded font-bold pressable" style="border-color:var(--border);" title="Download only the ticked questions as a re-importable JSON file.">📤 Export</button>
+                    <button onclick="deselectAllManage()" class="ml-auto border px-2 py-1 rounded pressable" style="border-color:var(--border);">Clear</button>
+                    <button onclick="deleteSelectedQuestions()" class="border border-red-400 text-red-600 px-2 py-1 rounded font-bold pressable">🗑 Delete</button>
                 </div>
-                <button onclick="scanBankDuplicates()" class="w-full border rounded-lg py-2 text-[11px] font-bold pressable" style="border-color:var(--border);">🔍 Find duplicates in my bank</button>
+
+                <!-- Bulk edit form, drawn by openManageBulkEdit() over the current selection. -->
+                <div id="manage-bulk-edit" class="hidden"></div>
+
+                <!-- Undo strip for the last delete. Deletes are soft (q.deleted = true), so undo only
+                     has to flip the flag back on the ids the delete recorded. -->
+                <div id="manage-undo-bar" class="hidden items-center gap-2 p-2 border rounded-xl text-[10px]" style="border-color:var(--border);background:var(--card);">
+                    <span id="manage-undo-text" class="font-bold"></span>
+                    <button onclick="undoManageDelete()" class="ml-auto border px-2 py-1 rounded font-bold pressable" style="border-color:var(--border);">↩️ Undo</button>
+                </div>
+
+                <div class="flex gap-2 text-[10px]">
+                    <button id="manage-select-all-btn" onclick="selectAllManage()" class="flex-1 border rounded-lg py-1.5 font-bold pressable" style="border-color:var(--border);">☑ Select shown</button>
+                    <button id="manage-restore-all-btn" onclick="restoreAllManageTrash()" class="hidden flex-1 border rounded-lg py-1.5 font-bold pressable" style="border-color:var(--border);">♻️ Restore all</button>
+                    <button id="manage-dup-btn" onclick="scanBankDuplicates()" class="flex-1 border rounded-lg py-1.5 font-bold pressable" style="border-color:var(--border);">🔍 Duplicates</button>
+                    <button id="manage-trash-btn" onclick="toggleManageTrash()" class="flex-1 border rounded-lg py-1.5 font-bold pressable" style="border-color:var(--border);">🗑 Recycle bin</button>
+                </div>
                 <div id="dup-scan-panel" class="hidden space-y-2"></div>
                 <div id="question-list-container" class="space-y-2"></div>
                 <div id="manage-list-footer" class="pt-1 space-y-2">
@@ -4015,14 +4057,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=oz5ibno" defer></script>
-    <script src="./js/elite_3d_engine.js?v=oz5ibno" defer></script>
-    <script src="./js/canvas_charts.js?v=oz5ibno" defer></script>
+    <script src="./js/elite_animations_controller.js?v=yafygh3" defer></script>
+    <script src="./js/elite_3d_engine.js?v=yafygh3" defer></script>
+    <script src="./js/canvas_charts.js?v=yafygh3" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=oz5ibno" defer></script>
-    <script src="./js/sqlite_db.js?v=oz5ibno" defer></script>
-    <script src="./js/krishi_idb.js?v=oz5ibno"></script>
-    <script src="./js/app.js?v=oz5ibno" defer></script>
+    <script src="./js/pwa_helpers.js?v=yafygh3" defer></script>
+    <script src="./js/sqlite_db.js?v=yafygh3" defer></script>
+    <script src="./js/krishi_idb.js?v=yafygh3"></script>
+    <script src="./js/app.js?v=yafygh3" defer></script>
 
 
     <!--
@@ -4050,8 +4092,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=oz5ibno" defer></script>
-    <script src="./js/voice_assistant.js?v=oz5ibno" defer></script>
+<script src="./js/data_safety.js?v=yafygh3" defer></script>
+    <script src="./js/voice_assistant.js?v=yafygh3" defer></script>
 </body>
 </html>
 

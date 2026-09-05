@@ -38,6 +38,17 @@ function functionBody(name) {
     assert.fail('js/app.js: unbalanced braces while reading ' + name + '()');
 }
 
+/**
+ * Body of a function with its comments stripped. A `doesNotMatch` contract has to read code only:
+ * the comment explaining *why* confirm() was removed contains the word confirm(), so matching the
+ * raw body would fail on the very explanation of the fix.
+ */
+function codeOf(name) {
+    return functionBody(name)
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
+
 // ── Payload size guard on EVERY users/{uid} write ───────────────────────────────
 
 /** The single list that drives both compression on write and decoding on read. */
@@ -2944,4 +2955,450 @@ test('the web half guards with history and never touches the URL', () => {
     // leave), but it must come back on a timer or the button would stay dead afterwards.
     assert.match(web, /rearm\s*=\s*setTimeout\(function\(\)\s*\{\s*rearm\s*=\s*null;\s*pushGuard\(\);\s*\}/);
     assert.match(web, /pushGuard\(\);\s*$/, 'the guard has to be armed once at startup');
+});
+
+// ── Creator ▸ Manage tab ────────────────────────────────────────────────────────
+// Every bug below was silent: a mass delete that looked like a filtered one, three delete buttons
+// that did nothing at all inside the APK, an undo key written on every delete and never read, and
+// a tab counter frozen at 0 since it was written.
+
+test('"Select shown" selects the shown rows, not the whole bank', () => {
+    const body = codeOf('selectAllManage');
+    // getCustomQuestions() here is the bug: it returns the entire bank regardless of the search
+    // box, the subject filter and the chips, so three visible rows selected 500 and the next
+    // Delete took the bank.
+    assert.doesNotMatch(body, /getCustomQuestions\(\)/,
+        'selectAllManage() is back to selecting the whole bank instead of the filtered list');
+    assert.match(body, /manageListState\.filtered/);
+    // The ticks the user can see come from these checkboxes; a generic input[type=checkbox] sweep
+    // would also tick whatever a row's editor happens to contain.
+    assert.match(body, /input\[data-role="pick"\]/);
+    assert.match(body, /updateManageSelectionBar\(\)/);
+});
+
+test('the bulk bar names the selected rows the current filter is hiding', () => {
+    const body = functionBody('updateManageSelectionBar');
+    // A selection survives a filter change on purpose, so "12 selected" beside three visible ticks
+    // has to say where the other nine are - that count is the only warning before a bulk delete.
+    assert.match(body, /manageListState\.filtered/);
+    assert.match(body, /not shown by this filter/);
+    // Ids of questions that no longer exist must not sit in the selection inflating the count.
+    assert.match(body, /selectedManageQIds\s*=\s*selectedManageQIds\.filter/);
+});
+
+test('the Manage tab counter has a writer, and it runs before the tab is opened', () => {
+    const body = functionBody('updateManageCount');
+    assert.match(body, /getElementById\('manage-count'\)/,
+        'nothing writes #manage-count again - the tab label is back to a hard-coded (0)');
+    // Deleted rows are still in customQuestions (soft delete), so the label has to filter them out
+    // or it would count the recycle bin as part of the bank.
+    assert.match(body, /!q\.deleted/);
+    assert.match(functionBody('switchCreatorTab'), /updateManageCount\(\)/);
+    assert.match(functionBody('initCreatorPage'), /updateManageCount\(\)/);
+});
+
+test('no destructive Manage action goes through native confirm()', () => {
+    // confirm() returns false without asking anything inside the Android WebView - the same trap
+    // that made the old back button do nothing. Every one of these buttons was dead in the APK,
+    // which is the only place the bank is actually managed.
+    ['deleteSelectedQuestions', 'dupScanDeleteGroup', 'dupScanDeleteAll', 'restoreAllManageTrash'].forEach(name => {
+        const body = codeOf(name);
+        assert.doesNotMatch(body, /(^|[^.\w])confirm\s*\(/,
+            name + '() is back on native confirm() - the button does nothing in the APK');
+        assert.match(body, /manageConfirm\(/, name + '() no longer asks before deleting');
+    });
+    // And the shared wrapper must not "fall back" to confirm() when the dialog is missing: that
+    // would be an invisible no-op on Android, i.e. a delete button that silently does nothing.
+    const wrapper = codeOf('manageConfirm');
+    assert.doesNotMatch(wrapper, /(^|[^.\w])confirm\s*\(/);
+    assert.match(wrapper, /showConfirmDialog/);
+    assert.match(wrapper, /showToast\(/, 'a missing dialog must say so, not swallow the action');
+});
+
+test('the delete undo snapshot stores ids, and undo flips back exactly those', () => {
+    // It used to store a copy of the whole customQuestions array on every bulk delete - hundreds of
+    // KB for a real bank - and nothing anywhere ever read the key back.
+    const remember = codeOf('rememberManageDelete');
+    assert.match(remember, /krishi_last_manage_backup/);
+    assert.match(remember, /ids:\s*ids/);
+    assert.doesNotMatch(remember, /customQuestions/, 'the undo snapshot is copying the whole bank again');
+
+    const bank = [
+        { id: 1, deleted: true },   // deleted by this action -> restored
+        { id: 2, deleted: true },   // not in the snapshot     -> left in the bin
+        { id: 3, deleted: false }   // in the snapshot but already back -> not re-stamped
+    ];
+    let saved = 0, written = null;
+    const run = new Function('Storage', 'localData', 'hideManageUndoBar', 'showToast', 'saveData',
+        'scheduleRenderQuestionList', 'updatePracticePage',
+        functionBody('undoManageDelete').slice(1, -1));
+    run({ getJSON: () => ({ t: 1, ids: [1, 3] }), setJSON: (k, v) => { written = v; } },
+        { customQuestions: bank }, () => {}, () => {}, () => { saved++; }, () => {}, () => {});
+
+    assert.strictEqual(bank[0].deleted, false, 'the deleted question was not restored');
+    assert.ok(bank[0].updatedAt > 0, 'a restore has to bump updatedAt or the peer keeps its tombstone');
+    assert.strictEqual(bank[1].deleted, true, 'undo restored a question this delete never touched');
+    assert.strictEqual(bank[2].updatedAt, undefined, 'an already-restored row was re-stamped for nothing');
+    assert.strictEqual(saved, 1);
+    // Cleared, so a second Undo tap cannot resurrect rows deleted again in between.
+    assert.deepStrictEqual(written && written.ids, []);
+});
+
+test('search matches options, explanation, topic and tags - not just the question text', () => {
+    const cache = new Map();
+    // Both real bodies, so the tag path is exercised rather than stubbed: manageHaystack() calls
+    // manageTagsOf(), which routes every tag list through normalizeQuestionTags().
+    const normTags = tagNormalizer();
+    const tagsOf = new Function('normalizeQuestionTags', 'q',
+        functionBody('manageTagsOf').slice(1, -1)).bind(null, normTags);
+    const hay = new Function('manageSearchCache', 'manageTagsOf', 'q',
+        functionBody('manageHaystack').slice(1, -1)).bind(null, cache, tagsOf);
+    const q = {
+        id: 7, updatedAt: 100, q: 'Which nutrient is Urea?', sub: 'Soil Science',
+        topic: 'Fertilizers', expl: 'Urea carries 46% Nitrogen.',
+        opts: ['Potash', '<b>Nitrogen</b>', 'Phosphorus', ''],
+        // A string, not an array: that is what a CSV import hands over, and normalizeQuestionTags()
+        // is the one place that shape is fixed.
+        tags: 'kharif, PSC 2078'
+    };
+    const s = hay(q);
+    // A word you remember a question by usually lives in an option or the explanation. The old
+    // cache held q.q alone, so searching for any of these found nothing.
+    ['nitrogen', 'phosphorus', 'fertilizers', 'soil science', '46%', 'kharif', 'psc 2078'].forEach(t =>
+        assert.ok(s.includes(t), 'the haystack is missing "' + t + '"'));
+    assert.ok(!s.includes('<b>'), 'markup leaked into the search text');
+
+    // Fields are newline-joined so a match can never span two of them; terms are split on
+    // whitespace, so no single term can contain the separator.
+    assert.ok(!s.includes('urea? soil'), 'two fields ran together into one matchable string');
+
+    // Versioned on updatedAt: the inline editor rewrites a question in place, and a plain
+    // id -> text cache would keep matching the words the question no longer contains.
+    q.q = 'Which nutrient is Potash?';
+    q.opts = ['Potash'];
+    q.expl = '';
+    q.topic = '';
+    q.tags = [];
+    assert.ok(hay(q).includes('nitrogen'), 'the cache stopped being a cache');
+    q.updatedAt = 200;
+    const after = hay(q);
+    assert.ok(!after.includes('nitrogen'), 'an edited question still matches its old words');
+    assert.ok(!after.includes('kharif'), 'a removed tag still matches');
+});
+
+test('duplicating a question keeps the plain/HTML pair and cannot collide on id', () => {
+    const body = codeOf('duplicateCustomQuestion');
+    // `id: Date.now()` collided when two duplicates were made inside the same millisecond, and
+    // every id lookup in this tab (edit, delete, restore) then hit whichever came first.
+    assert.doesNotMatch(body, /id:\s*Date\.now\(\)\s*,/, 'the duplicate id is back to a bare Date.now()');
+    assert.match(body, /id:\s*Date\.now\(\)\s*\+\s*Math\.random\(\)/);
+    // normalizeQuestion() blanks a qHtml whose plain projection no longer equals q.q. The old copy
+    // appended " (Copy)" to q only, so the duplicate silently lost its formatting on the next save.
+    assert.match(body, /splitRichText\(/);
+    assert.match(body, /pair\.plain\s*===\s*plain/);
+});
+
+test('sorting the Manage list cannot reorder the saved bank', () => {
+    // manageListState.filtered is the `all` array itself when nothing is filtered out, and that
+    // array is localData.customQuestions - an in-place sort would reorder what gets saved.
+    const bank = [{ id: 3, updatedAt: 30 }, { id: 1, updatedAt: 10 }, { id: 2, updatedAt: 20 }];
+    const sort = new Function('manageListState', 'repeatCountOf', 'list',
+        functionBody('sortManageList').slice(1, -1));
+    const out = sort({ sort: 'newest' }, () => 1, bank);
+    assert.deepStrictEqual(out.map(q => q.id), [3, 2, 1]);
+    assert.deepStrictEqual(bank.map(q => q.id), [3, 1, 2], 'sortManageList() sorted the bank in place');
+    assert.deepStrictEqual(sort({ sort: 'oldest' }, () => 1, bank).map(q => q.id), [1, 2, 3]);
+});
+
+test('the recycle bin restores and never purges, and the editor keeps every id', () => {
+    // `deleted: true` IS the CRDT tombstone the union merge relies on. Splicing a row out of
+    // customQuestions would let the peer that still has it hand it straight back on the next sync.
+    ['restoreCustomQuestion', 'restoreAllManageTrash', 'toggleManageTrash'].forEach(name => {
+        const body = codeOf(name);
+        assert.doesNotMatch(body, /\.splice\(|customQuestions\s*=\s*/,
+            name + '() is removing rows from the bank - that breaks the delete tombstone');
+    });
+    // A restore has to bump updatedAt or the peer's tombstone wins and the question disappears again.
+    assert.match(codeOf('restoreCustomQuestion'), /deleted\s*=\s*false[\s\S]*updatedAt\s*=\s*Date\.now\(\)/);
+
+    const save = codeOf('saveManageRowEdit');
+    // validateCreatorEntry() also runs duplicate detection, which would match the question against
+    // itself and refuse every edit. validateImportQuestion() is what saveData() itself uses.
+    assert.doesNotMatch(save, /validateCreatorEntry\(/);
+    assert.match(save, /validateImportQuestion\(/);
+    // Object.assign onto the existing row, never a replacement object: the id is what the SM2
+    // engine keys a question's whole review history on.
+    assert.match(save, /Object\.assign\(q,\s*draft\)/);
+    assert.doesNotMatch(save, /draft\.id/, 'the inline editor is writing an id - that orphans the SM2 record');
+    // The pair invariant, applied here rather than left for normalizeQuestion() to notice a save later.
+    assert.match(save, /creatorPlainText\(q\.qHtml\)\s*!==\s*draft\.q/);
+    assert.match(save, /creatorPlainText\(q\.explHtml\)\s*!==\s*draft\.expl/);
+
+    // normalizeQuestion() resolves the answer from `correctAnswerIndex` before `ans`, so an edit
+    // that only writes `ans` is undone by the very next saveData(): the tick moved and reverted
+    // on its own. Verified against the real key order in that function.
+    const ansKeys = APP_JS.slice(APP_JS.indexOf('let ansKeys = ['), APP_JS.indexOf('];', APP_JS.indexOf('let ansKeys = [')));
+    assert.ok(ansKeys.indexOf("'correctAnswerIndex'") < ansKeys.indexOf("'ans'"),
+        'the alias no longer outranks ans - this contract can be simplified');
+    assert.match(save, /q\.correctAnswerIndex\s*=\s*draft\.ans/,
+        'saveManageRowEdit() leaves the stale correctAnswerIndex alias to win on the next save');
+});
+
+/**
+ * The real normalizeQuestionTags(), with the module-level cap injected as a parameter so this test
+ * follows the source instead of hard-coding the number next to it.
+ */
+function tagNormalizer() {
+    const cap = /const\s+MANAGE_TAG_MAX\s*=\s*(\d+)/.exec(APP_JS);
+    assert.ok(cap, 'MANAGE_TAG_MAX is gone - update tests/cloud_sync_contract.test.js');
+    return new Function('MANAGE_TAG_MAX', 'raw', functionBody('normalizeQuestionTags').slice(1, -1))
+        .bind(null, Number(cap[1]));
+}
+
+test('tags are coerced to a clean array whatever shape they arrive in', () => {
+    const norm = tagNormalizer();
+    // The shape that mattered: a CSV column is one string, and `raw.tags || []` handed it straight
+    // through - so every reader that does q.tags.forEach rendered one badge per character.
+    assert.deepStrictEqual(norm('kharif, PSC 2078'), ['kharif', 'PSC 2078']);
+    assert.deepStrictEqual(norm('a;b\nc'), ['a', 'b', 'c']);
+    assert.deepStrictEqual(norm(null), []);
+    assert.deepStrictEqual(norm(42), []);
+    assert.deepStrictEqual(norm(['  weeds  ', '']), ['weeds']);
+    // '#weeds' and 'weeds' are one tag: the row badges draw the hash themselves, and a bank holding
+    // both spellings could not be filtered by either.
+    assert.deepStrictEqual(norm(['#weeds', 'Weeds', 'WEEDS']), ['weeds']);
+    // Capped, so one bad import cannot put 400 tags on a row and blow the row layout apart.
+    const cap = Number(/const\s+MANAGE_TAG_MAX\s*=\s*(\d+)/.exec(APP_JS)[1]);
+    const many = norm(Array.from({ length: cap + 30 }, (_, i) => 't' + i));
+    assert.strictEqual(many.length, cap);
+    assert.ok(norm(['x'.repeat(400)])[0].length <= 40, 'a single tag is not length-capped');
+});
+
+test('normalizeQuestion routes tags through the normaliser and keeps them across a save', () => {
+    const body = functionBody('normalizeQuestion');
+    // saveData() re-runs normalizeQuestion() over the whole bank, so a key it does not copy is gone
+    // on the very next save - the trap that already ate importBatchId and repeatCount.
+    assert.match(body, /tags:\s*normalizeQuestionTags\(raw\.tags\)/,
+        'normalizeQuestion() is back to trusting raw.tags as-is');
+    assert.doesNotMatch(codeOf('normalizeQuestion'), /tags:\s*raw\.tags\s*\|\|\s*\[\]/);
+});
+
+test('the Tags column the CSV export writes is a column the CSV import reads back', () => {
+    const bundle = codeOf('buildQuestionBundle');
+    assert.match(bundle, /Status,Tags/, 'the CSV export dropped its Tags column');
+    // Export-then-reimport is the normal backup round trip. Writing a column no importer maps means
+    // the file looks complete and silently loses every tag on the way back in.
+    const csvIn = codeOf('parseCSVQuestions');
+    assert.match(csvIn, /cl === "tags"/, 'parseCSVQuestions() has no mapping for the Tags column');
+    assert.match(csvIn, /colMap\.tags !== -1.*raw\.tags = cols\[colMap\.tags\]/s,
+        'the mapped Tags column is never read into the row');
+});
+
+/** The real commitManageBulkEdit(), with every global it touches injected and recorded. */
+function bulkCommitter(brokenIds) {
+    const broken = new Set(brokenIds || []);
+    const log = { saved: 0, closed: 0, toasts: [], cache: new Map() };
+    log.cache.set('seed', 1);
+    const raw = new Function(
+        'manageTagsOf', 'normalizeQuestionTags', 'manageSearchCache', 'manageIssuesOf',
+        'closeManageBulkEdit', 'saveData', 'scheduleRenderQuestionList', 'updateManageSelectionBar',
+        'showToast', 'updatePracticePage', 'picked', 'patch',
+        functionBody('commitManageBulkEdit').slice(1, -1));
+    const norm = tagNormalizer();
+    const tagsOf = new Function('normalizeQuestionTags', 'q',
+        functionBody('manageTagsOf').slice(1, -1)).bind(null, norm);
+    log.run = (picked, patch) => raw(
+        tagsOf, norm, log.cache,
+        q => (broken.has(q.id) ? ['Needs 2 options.'] : []),
+        () => { log.closed++; }, () => { log.saved++; }, () => {}, () => {},
+        m => log.toasts.push(String(m)), () => {}, picked, patch);
+    return log;
+}
+
+const KEEP = { sub: '', diff: '', status: '', topic: '', clearTopic: false, tags: [], tagMode: 'add' };
+
+test('bulk edit writes the subject alias, never blanks sub, and leaves the question body alone', () => {
+    const code = codeOf('commitManageBulkEdit');
+    // normalizeQuestion() resolves the subject from `sub` but regenerates `subject` from it, and any
+    // reader between this write and the next saveData() sees whichever of the two was not updated.
+    assert.match(code, /q\.sub\s*=\s*patch\.sub/);
+    assert.match(code, /q\.subject\s*=\s*patch\.sub/, 'bulk edit leaves the stale subject alias behind');
+    // Only written when patch.sub is truthy: normalizeQuestion() falls back to raw.topic when sub is
+    // empty, so a blank subject silently re-files every question under its own topic.
+    assert.match(code, /if\s*\(patch\.sub\)/);
+    // The fields that are per-question by nature. A bulk write over the text, the options or the
+    // answer index is only ever a mistake, and there is no undo strip for an edit.
+    [[/q\.q\s*=/, 'question text'], [/q\.opts\s*=/, 'options'], [/q\.ans\s*=/, 'answer index'],
+     [/q\.correctAnswerIndex\s*=/, 'answer alias'], [/q\.qHtml\s*=/, 'rich text']].forEach(pair =>
+        assert.doesNotMatch(code, pair[0], 'bulk edit writes a per-question field: ' + pair[1]));
+});
+
+test('bulk edit only writes the fields that were not left on "keep"', () => {
+    const log = bulkCommitter();
+    const q = { id: 1, q: 'Q', opts: ['a', 'b'], ans: 1, sub: 'Agronomy', topic: 'Weeds',
+                difficulty: 'Hard', status: 'draft', marks: 2, tags: ['old'], updatedAt: 5 };
+    log.run([q], Object.assign({}, KEEP));
+    assert.deepStrictEqual(
+        { sub: q.sub, topic: q.topic, difficulty: q.difficulty, status: q.status, tags: q.tags },
+        { sub: 'Agronomy', topic: 'Weeds', difficulty: 'Hard', status: 'draft', tags: ['old'] },
+        'an all-keep apply still rewrote fields');
+    assert.strictEqual(q.ans, 1);
+    assert.strictEqual(q.marks, 2);
+    // updatedAt still moves: it is what the CRDT merge and both memo signatures key on.
+    assert.ok(q.updatedAt > 5, 'updatedAt did not move, so the cloud merge cannot see this edit');
+    assert.strictEqual(log.saved, 1);
+    assert.strictEqual(log.closed, 1, 'the bulk form was left open over a finished apply');
+    assert.ok(!log.cache.has(1), 'the search index kept its stale entry for the edited row');
+});
+
+test('the three bulk tag modes add, replace and remove without duplicating case variants', () => {
+    const seed = () => [{ id: 1, tags: ['Kharif', 'formula'], sub: 'A' },
+                        { id: 2, tags: [], sub: 'A' }];
+    const add = seed();
+    bulkCommitter().run(add, Object.assign({}, KEEP, { tags: ['KHARIF', 'PSC 2078'], tagMode: 'add' }));
+    // Add is a union, not a concat: the same tag in another case must not land twice.
+    assert.deepStrictEqual(add[0].tags, ['Kharif', 'formula', 'PSC 2078']);
+    assert.deepStrictEqual(add[1].tags, ['KHARIF', 'PSC 2078']);
+
+    const rep = seed();
+    bulkCommitter().run(rep, Object.assign({}, KEEP, { tags: ['only'], tagMode: 'replace' }));
+    assert.deepStrictEqual(rep[0].tags, ['only'], 'replace kept the old tags');
+    assert.deepStrictEqual(rep[1].tags, ['only']);
+
+    const rem = seed();
+    bulkCommitter().run(rem, Object.assign({}, KEEP, { tags: ['kharif'], tagMode: 'remove' }));
+    assert.deepStrictEqual(rem[0].tags, ['formula'], 'remove is case sensitive');
+    assert.deepStrictEqual(rem[1].tags, []);
+
+    // An empty tag box is "keep", never "clear all" - the mode select stays set from the last apply.
+    const none = seed();
+    bulkCommitter().run(none, Object.assign({}, KEEP, { tags: [], tagMode: 'replace' }));
+    assert.deepStrictEqual(none[0].tags, ['Kharif', 'formula'], 'an empty tag box wiped the tags');
+});
+
+test('bulk edit clears a topic only when asked, and clearing outranks a typed topic', () => {
+    const a = { id: 1, topic: 'Weeds', sub: 'A', tags: [] };
+    bulkCommitter().run([a], Object.assign({}, KEEP, { topic: 'Seeds' }));
+    assert.strictEqual(a.topic, 'Seeds');
+    const b = { id: 2, topic: 'Weeds', sub: 'A', tags: [] };
+    bulkCommitter().run([b], Object.assign({}, KEEP, { topic: 'Seeds', clearTopic: true }));
+    assert.strictEqual(b.topic, '', 'the clear checkbox lost to the leftover text in the input');
+    // Blanking the topic must not reach `sub`: normalizeQuestion() falls back to raw.topic for the
+    // subject, so a question with neither would be re-filed under "General".
+    assert.strictEqual(b.sub, 'A');
+});
+
+test('bulk edit counts the demotions saveData() is about to make, before it saves', () => {
+    const code = codeOf('commitManageBulkEdit');
+    const issues = code.indexOf('manageIssuesOf');
+    const save = code.indexOf('saveData()');
+    assert.ok(issues > -1 && save > -1 && issues < save,
+        'the demote count is read after saveData(), which has already re-stamped status');
+    const log = bulkCommitter([2]);
+    const picked = [{ id: 1, status: 'draft', sub: 'A', tags: [] },
+                    { id: 2, status: 'draft', sub: 'A', tags: [] }];
+    log.run(picked, Object.assign({}, KEEP, { status: 'published' }));
+    const msg = log.toasts.join(' ');
+    assert.match(msg, /2 question\(s\) updated/);
+    // saveData() re-stamps status='revision' on anything validateImportQuestion rejects, so a silent
+    // toast here reads as "the bulk edit did nothing" when the row snaps back on the next render.
+    assert.match(msg, /1 still/, 'the invalid row was promoted with no warning');
+    const clean = bulkCommitter();
+    clean.run([{ id: 1, status: 'draft', sub: 'A', tags: [] }],
+        Object.assign({}, KEEP, { status: 'published' }));
+    assert.doesNotMatch(clean.toasts.join(' '), /still/, 'a clean promote still warned about demotions');
+});
+
+test('selection export shares the download builder and ships only the picked ids', () => {
+    const code = codeOf('exportSelectedManageQuestions');
+    // Must go through the shared builder: a second inline CSV/JSON writer drifts from the importer,
+    // and the old hand-rolled one never revoked its object URL.
+    assert.match(code, /downloadQuestionBundle\(/, 'selection export hand-rolls its own blob');
+    assert.match(code, /selectedManageQIds\.includes\(q\.id\)/, 'export ignores the selection');
+    assert.match(code, /if\s*\(!picked\.length\)/, 'exporting an empty selection writes an empty file');
+    assert.match(codeOf('downloadQuestionBundle'), /revokeObjectURL/, 'the export blob is never freed');
+    // The CSV header and the row builder must stay the same length or every column shifts by one.
+    const bundle = codeOf('buildQuestionBundle');
+    const header = /'(Question,[^']*)'/.exec(bundle);
+    assert.ok(header, 'the CSV header literal moved - update tests/cloud_sync_contract.test.js');
+    const cols = header[1].split(',').length;
+    const row = /const row = \[([\s\S]*?)\]\.map/.exec(bundle);
+    assert.ok(row, 'the CSV row builder moved - update tests/cloud_sync_contract.test.js');
+    // Blank out string literals first: one of the cells is `.join(', ')`, whose comma is not a separator.
+    const cells = row[1].replace(/'(?:[^'\\]|\\.)*'/g, "@")
+        .split(',').filter(s => s.trim()).length;
+    assert.strictEqual(cells, cols, 'the CSV row has ' + cells + ' cells for ' + cols + ' headers');
+});
+
+/** The real manageHealthStats(), memo kept alive across calls in a closure. */
+function healthStats(bank, calls) {
+    const norm = tagNormalizer();
+    const tagsOf = new Function('normalizeQuestionTags', 'q',
+        functionBody('manageTagsOf').slice(1, -1)).bind(null, norm);
+    const factory = new Function('localData', 'manageIssuesOf', 'manageHasExplanation',
+        'repeatCountOf', 'manageTagsOf',
+        'let _manageHealthCache = {}; return function()' + functionBody('manageHealthStats') + ';');
+    return factory({ customQuestions: bank },
+        q => { calls.issues++; return q._broken ? ['Needs 2 options.'] : []; },
+        q => !q._noexpl,
+        q => q._repeat || 1,
+        tagsOf);
+}
+
+test('bank health counts overlapping problems once and reads "clean" as the AND of them', () => {
+    const bank = [
+        { id: 1, sub: 'Agronomy', topic: 'T', marks: 2, _broken: true },
+        { id: 2, sub: 'Agronomy', topic: 'T', _noexpl: true },
+        { id: 3, sub: 'Soil', topic: 'T', _broken: true, _noexpl: true },
+        { id: 4, sub: 'Soil', topic: 'T', tags: ['kharif'] },
+        { id: 5, sub: 'Soil', deleted: true, _broken: true },
+        { id: 6, status: 'draft', _repeat: 3, marks: 0 },
+        null,
+    ];
+    const calls = { issues: 0 };
+    const st = healthStats(bank, calls)();
+    assert.deepStrictEqual({
+        total: st.total, binned: st.binned, fix: st.fix, noexpl: st.noexpl, clean: st.clean,
+        draft: st.draft, repeat: st.repeat, tagged: st.tagged, notopic: st.notopic,
+        marks: st.marks, score: st.score,
+    }, {
+        // q3 is broken AND unexplained, so the chips add up to 4 over 5 live questions: `clean` has to
+        // be counted in the same pass or the readiness score reads 20% instead of 40%.
+        total: 5, binned: 1, fix: 2, noexpl: 2, clean: 2,
+        draft: 1, repeat: 1, tagged: 1, notopic: 1, marks: 6, score: 40,
+    });
+    assert.deepStrictEqual(st.bySub, [['Agronomy', 2], ['Soil', 2], ['General', 1]],
+        'per-subject bars must be biggest-first, alphabetical on a tie, and skip the bin');
+});
+
+test('bank health memoises on the bank signature, not on the render', () => {
+    // renderQuestionList() runs this on every keystroke in the search box, and it walks the whole bank
+    // through validateImportQuestion. Without the memo a 4,000-question bank retypes as a freeze.
+    const bank = [{ id: 1, sub: 'A', updatedAt: 10 }, { id: 2, sub: 'A', updatedAt: 20 }];
+    const calls = { issues: 0 };
+    const stats = healthStats(bank, calls);
+    const first = stats();
+    assert.strictEqual(calls.issues, 2);
+    assert.strictEqual(stats(), first, 'the second call rebuilt the stats object');
+    assert.strictEqual(calls.issues, 2, 'the memo re-validated the bank anyway');
+    // An edit has to invalidate it: the stats object is also the identity renderManageHealth() diffs on.
+    bank[1].updatedAt = 21;
+    assert.notStrictEqual(stats(), first, 'an edited question left the health card showing stale counts');
+    bank.push({ id: 3, sub: 'A', updatedAt: 21 });
+    const grown = stats();
+    assert.strictEqual(grown.total, 3, 'a new question did not invalidate the memo');
+});
+
+test('the bulk edit form cannot outlive the selection it writes to', () => {
+    const bar = codeOf('updateManageSelectionBar');
+    assert.match(bar, /if\s*\(!show\s*&&\s*manageListState\.bulk\)\s*closeManageBulkEdit\(\)/,
+        'an emptied selection leaves the bulk form open, so Apply hits rows nobody has ticked');
+    assert.match(bar, /refreshManageBulkEditCount\(n\)/,
+        'the "Apply to N" labels are not refreshed when the selection changes size');
+    // Refresh, not rebuild: a rebuild between two keystrokes would eat the tags the user is typing.
+    assert.doesNotMatch(codeOf('refreshManageBulkEditCount'), /buildManageBulkEditForm/);
+    assert.match(codeOf('refreshManageBulkEditCount'), /data-bulk-count/);
+    // Trash mode shows other people's rows by id; a bulk apply there would write to the wrong bank.
+    assert.match(codeOf('toggleManageTrash'), /closeManageBulkEdit\(\)/);
+    assert.match(codeOf('openManageBulkEdit'), /manageListState\.trash/);
 });

@@ -9068,6 +9068,10 @@ if (state.isMock) {
         }
         // Admin categories select init
         populateAdminSubjects();
+        // The tab label read "Manage (0)" no matter how big the bank was: the <span id="manage-count">
+        // had no writer anywhere. Filled here as well as in switchCreatorTab so the count is right
+        // before the Manage tab has ever been opened.
+        updateManageCount();
 
         // Recover a batch list left behind by a previous session. Done here rather than at
         // boot so the toast only appears when the user actually opens the Creator, and so
@@ -9120,7 +9124,7 @@ if (state.isMock) {
         });
         document.getElementById('creator-panel-'+tab).classList.remove('hidden');
 
-        if(tab==='manage'){ closeDupScan(); scheduleRenderQuestionList(true); }
+        if(tab==='manage'){ closeDupScan(); updateManageCount(); scheduleRenderQuestionList(true); }
         if(tab==='io'){ renderLastImportBar(); initImportDropZone(); }
     }
 
@@ -10082,6 +10086,34 @@ if (state.isMock) {
         }
     }
 
+    // `tags` used to be copied through as `raw.tags || []`, which trusts whatever arrived. A CSV or
+    // JSON import can carry it as a plain string ("weeds, kharif"), and every reader in the Manage
+    // tab does `q.tags.forEach` / `.join` - a string would render one letter per badge, and a number
+    // would throw. Normalising here means the array shape is guaranteed by the same pass that
+    // guarantees `opts`, instead of at each of the six places that now read it.
+    const MANAGE_TAG_MAX = 24;
+    function normalizeQuestionTags(raw){
+        let list = [];
+        if (Array.isArray(raw)) list = raw;
+        else if (typeof raw === 'string') list = raw.split(/[,;\n]/);
+        else if (raw && typeof raw === 'object') list = Object.values(raw);
+        else return [];
+        const seen = new Set();
+        const out = [];
+        for (let i = 0; i < list.length; i++) {
+            // Leading '#' is stripped so "#weeds" and "weeds" are one tag: the row badges render the
+            // hash themselves, and a bank with both spellings cannot be filtered by either.
+            const t = String(list[i] == null ? '' : list[i]).replace(/^#+/, '').trim().slice(0, 40);
+            if (!t) continue;
+            const k = t.toLowerCase();
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(t);
+            if (out.length >= MANAGE_TAG_MAX) break;
+        }
+        return out;
+    }
+
     function normalizeQuestion(raw) {
         let q = raw.q || raw.question || raw.Question || raw.question_text || raw.questionText || raw.text || raw.query || raw.prompt || "";
         q = String(q).trim();
@@ -10272,7 +10304,7 @@ if (state.isMock) {
             correctAnswerIndex: ans,
             explanation: expl,
             subject: sub,
-            tags: raw.tags || [],
+            tags: normalizeQuestionTags(raw.tags),
             source: raw.source || ""
         };
     }
@@ -10368,7 +10400,7 @@ if (state.isMock) {
         });
         let isHeader = headerExact || headerHits >= 2;
 
-        let colMap = { q: -1, opts: [], ans: -1, sub: -1, expl: -1, topic: -1, difficulty: -1, marks: -1, status: -1 };
+        let colMap = { q: -1, opts: [], ans: -1, sub: -1, expl: -1, topic: -1, difficulty: -1, marks: -1, status: -1, tags: -1 };
 
         if (isHeader) {
             firstRow.forEach((col, idx) => {
@@ -10399,6 +10431,10 @@ if (state.isMock) {
                     colMap.marks = idx;
                 } else if (cl === "status" || cl === "state") {
                     colMap.status = idx;
+                } else if (cl === "tags" || cl === "tag" || cl === "labels" || cl === "keywords") {
+                    // The whole-bank CSV export writes this column, so without a mapping here
+                    // exporting and re-importing your own file dropped every tag.
+                    colMap.tags = idx;
                 }
             });
         }
@@ -10428,7 +10464,10 @@ if (state.isMock) {
                 if (colMap.difficulty !== -1) raw.difficulty = cols[colMap.difficulty];
                 if (colMap.marks !== -1) raw.marks = cols[colMap.marks];
                 if (colMap.status !== -1) raw.status = cols[colMap.status];
-                
+                // normalizeQuestionTags() splits a plain string on commas, so the quoted
+                // "weeds, kharif" cell one CSV column holds comes back as two tags.
+                if (colMap.tags !== -1) raw.tags = cols[colMap.tags];
+
             } else {
                 raw.q = cols[0];
                 if (cols.length === 6) {
@@ -10933,27 +10972,33 @@ if (state.isMock) {
         if (!g) return;
         const n = g.items.filter(q => q.id !== g.keepId).length;
         if (!n) return;
-        if (!confirm(`Delete ${n} duplicate copy(ies) and keep 1?`)) return;
-        const removed = dupScanRemove(g.items, g.keepId);
-        saveData();
-        showToast(`🗑 Removed ${removed} duplicate copy(ies).`);
-        scanBankDuplicates();
-        scheduleRenderQuestionList(true);
-        updatePracticePage();
+        // Native confirm() returns false without asking inside the Android WebView, so this button
+        // silently did nothing in the APK. Same for dupScanDeleteAll below.
+        manageConfirm('🗑 Delete ' + n + ' duplicate copy(ies)?',
+            'One copy of this question is kept — the one marked <b>KEEP</b>.', () => {
+                const removed = dupScanRemove(g.items, g.keepId);
+                saveData();
+                showToast(`🗑 Removed ${removed} duplicate copy(ies).`);
+                scanBankDuplicates();
+                scheduleRenderQuestionList(true);
+                updatePracticePage();
+            }, { confirmLabel: 'Delete copies', cancelLabel: 'Rakhne' });
     }
 
     function dupScanDeleteAll() {
         let total = 0;
         dupScanGroups.forEach(g => { total += g.items.filter(q => q.id !== g.keepId).length; });
         if (!total) return;
-        if (!confirm(`Delete ${total} extra copy(ies) across ${dupScanGroups.length} group(s)?\n\nOne copy of each question is kept - the one marked KEEP.`)) return;
-        let removed = 0;
-        dupScanGroups.forEach(g => { removed += dupScanRemove(g.items, g.keepId); });
-        saveData();
-        showToast(`🗑 Removed ${removed} duplicate copy(ies). One copy of each was kept.`, 5000);
-        scanBankDuplicates();
-        scheduleRenderQuestionList(true);
-        updatePracticePage();
+        manageConfirm('🗑 Delete ' + total + ' extra copy(ies)?',
+            'Across <b>' + dupScanGroups.length + '</b> duplicate group(s). One copy of each question is kept — the one marked <b>KEEP</b>.', () => {
+                let removed = 0;
+                dupScanGroups.forEach(g => { removed += dupScanRemove(g.items, g.keepId); });
+                saveData();
+                showToast(`🗑 Removed ${removed} duplicate copy(ies). One copy of each was kept.`, 5000);
+                scanBankDuplicates();
+                scheduleRenderQuestionList(true);
+                updatePracticePage();
+            }, { confirmLabel: 'Delete copies', cancelLabel: 'Rakhne' });
     }
 
     // ---- Near-duplicate detection -----------------------------------------------------------
@@ -11596,47 +11641,49 @@ if (state.isMock) {
         if (status) status.textContent = '';
     }
 
+    // Builds the download for one list of questions. Split out of exportQuestions() so the Manage
+    // tab's selection-only export writes a byte-identical file to the whole-bank export instead of
+    // growing a second CSV writer that drifts from this one column by column.
+    function buildQuestionBundle(list, format){
+        if (format === 'json') {
+            return { blob: new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' }), ext: '.json' };
+        }
+        // Include ALL available attributes in CSV representation!
+        let csv = 'Question,Option A,Option B,Option C,Option D,Option E,Correct Index,Subject,Explanation,Topic,Difficulty,Marks,Status,Tags\n';
+        list.forEach(q => {
+            const opts = q.opts || q.options || [];
+            const row = [
+                q.q, opts[0] || '', opts[1] || '', opts[2] || '', opts[3] || '', opts[4] || '',
+                String(q.ans), q.sub || 'General',
+                q.expl || '', q.topic || '', q.difficulty || 'Medium',
+                String(q.marks !== undefined ? q.marks : 1), q.status || 'published',
+                (Array.isArray(q.tags) ? q.tags : []).join(', ')
+            ].map(val => `"${String(val).replace(/"/g, '""')}"`);
+            csv += row.join(',') + '\n';
+        });
+        return { blob: new Blob([csv], { type: 'text/csv;charset=utf-8;' }), ext: '.csv' };
+    }
+
+    function downloadQuestionBundle(list, format, stem){
+        const bundle = buildQuestionBundle(list, format);
+        const url = URL.createObjectURL(bundle.blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = stem + bundle.ext;
+        a.click();
+        // The old export never revoked its URL, so every export pinned the whole blob in memory for
+        // the life of the document - a few thousand questions of JSON is megabytes of that, held on
+        // a device where the app is a long-lived WebView that is rarely killed.
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch(e){} }, 4000);
+    }
+
     function exportQuestions(format){
-        let data = getCustomQuestions();
+        const data = getCustomQuestions();
         if (data.length === 0) {
             showToast('⚠️ Your custom questions bundle is currently empty!');
             return;
         }
-
-        let filename = 'krishi_mcq_export_' + Date.now();
-        let blob, type;
-        
-        if(format==='json'){
-            blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-            filename += '.json';
-        } else {
-            // Include ALL available attributes in CSV representation!
-            let csv = 'Question,Option A,Option B,Option C,Option D,Option E,Correct Index,Subject,Explanation,Topic,Difficulty,Marks,Status\n';
-            data.forEach(q => {
-                let optA = q.opts[0] || '';
-                let optB = q.opts[1] || '';
-                let optC = q.opts[2] || '';
-                let optD = q.opts[3] || '';
-                let optE = q.opts[4] || '';
-                let expl = q.expl || '';
-                let topic = q.topic || '';
-                let diff = q.difficulty || 'Medium';
-                let marks = q.marks !== undefined ? q.marks : 1;
-                let status = q.status || 'published';
-
-                let row = [
-                    q.q, optA, optB, optC, optD, optE,
-                    String(q.ans), q.sub || 'General',
-                    expl, topic, diff, String(marks), status
-                ].map(val => `"${String(val).replace(/"/g, '""')}"`);
-
-                csv += row.join(',') + '\n';
-            });
-            blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
-            filename += '.csv';
-        }
-        let url = URL.createObjectURL(blob);
-        let a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+        downloadQuestionBundle(data, format, 'krishi_mcq_export_' + Date.now());
         showToast('📥 Questions exported successfully!');
     }
 
@@ -12126,9 +12173,35 @@ function openEditImportModal(idx) {
         filtered: [],
         rendered: 0,
         lastKey: '',
-        pageSize: 60
+        pageSize: 60,
+        sort: 'newest',
+        chip: 'all',
+        trash: false,
+        expanded: new Set(),   // ids whose Options/Editor panel is open
+        editing: null,         // id currently held by the inline editor
+        health: false,         // 🩺 Bank health card open
+        bulk: false            // ✏️ Bulk edit form open over the current selection
     };
-    const manageSearchCache = new Map(); // id -> lowercased question text
+    // id -> { v: updatedAt, s: haystack }. Versioned, because the inline editor rewrites a
+    // question's text in place: a plain id -> text cache would keep matching the words the
+    // question used to contain, and searching for the new ones would find nothing.
+    const manageSearchCache = new Map();
+
+    const MANAGE_CHIPS = [
+        { id: 'all',    label: 'All' },
+        { id: 'draft',  label: '📝 Drafts' },
+        { id: 'fix',    label: '⚠️ Needs fix' },
+        { id: 'noexpl', label: '💬 No explanation' },
+        { id: 'repeat', label: '🔥 Repeated' },
+        { id: 'new7',   label: '🆕 New 7d' }
+    ];
+    const MANAGE_NEW_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const MANAGE_STATUS_STYLE = {
+        draft:     { label: '📝 Draft',     cls: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100' },
+        revision:  { label: '⚠️ Needs fix', cls: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-100' },
+        published: { label: '✅ Published', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100' }
+    };
+    const MANAGE_CHIP_NEUTRAL = 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100';
 
     const scheduleRenderQuestionList = (() => {
         const debounced = debounce(() => renderQuestionList(true), 180);
@@ -12145,74 +12218,620 @@ function openEditImportModal(idx) {
         return 60;
     }
 
+    function findCustomQuestion(id){
+        return ((localData && localData.customQuestions) || []).find(q => q && q.id === id) || null;
+    }
+
+    // Always through normalizeQuestionTags(): a row that has not been through a save yet - just
+    // imported, just pulled from a peer - can still be carrying `tags` as a string, and every
+    // reader here joins or iterates it.
+    function manageTagsOf(q){
+        return normalizeQuestionTags(q && q.tags);
+    }
+
+    // Everything the search box is allowed to match. It used to be q.q alone, so a word that lived
+    // in an option, in the explanation or in the topic was unfindable - and those are exactly the
+    // words you remember a question by. Fields are joined with a newline so a match can never span
+    // two of them (search terms are split on whitespace, so no term can contain one).
+    function manageHaystack(q){
+        const ver = Number(q.updatedAt) || 0;
+        const hit = manageSearchCache.get(q.id);
+        if (hit && hit.v === ver) return hit.s;
+        const parts = [q.q, q.expl || q.explanation, q.topic, q.sub];
+        (q.opts || q.options || []).forEach(o => parts.push(o));
+        // Tags are searchable too, otherwise labelling a question is a write-only act: you can add
+        // "#kharif" and then have no way to pull those questions back out.
+        manageTagsOf(q).forEach(t => parts.push(t));
+        const s = parts.map(p => String(p == null ? '' : p)).join('\n')
+            .replace(/<[^>]*>/g, ' ')
+            .toLowerCase()
+            .replace(/[ \t]+/g, ' ');
+        manageSearchCache.set(q.id, { v: ver, s: s });
+        return s;
+    }
+
+    // The same validator saveData() runs, so "Needs fix" means exactly what got the question
+    // stamped `revision` there rather than a second, looser opinion of what is broken.
+    function manageIssuesOf(q){
+        const errs = validateImportQuestion(q);
+        if (!errs.length && q.status === 'revision') errs.push('Marked for revision by an earlier save.');
+        return errs;
+    }
+
+    function manageHasExplanation(q){
+        return !!getNormalizedText(q.expl || q.explanation || '');
+    }
+
+    function manageChipMatches(q, chip){
+        switch (chip) {
+            case 'draft':  return q.status === 'draft';
+            case 'fix':    return manageIssuesOf(q).length > 0;
+            case 'noexpl': return !manageHasExplanation(q);
+            case 'repeat': return repeatCountOf(q) > 1;
+            case 'new7':   return (Number(q.updatedAt) || Number(q.id) || 0) >= (Date.now() - MANAGE_NEW_WINDOW_MS);
+            default:       return true;
+        }
+    }
+
+    let _manageChipCache = { sig: '', counts: null };
+
+    // renderQuestionList() runs on every keystroke of the search box, and the counting pass below
+    // runs a validator plus two regex normalisations over the whole bank - so it is keyed on a
+    // cheap signature first. Length covers add/delete, the newest updatedAt covers every edit.
+    function manageChipCounts(all){
+        let maxStamp = 0;
+        for (let i = 0; i < all.length; i++) {
+            const s = Number(all[i].updatedAt) || 0;
+            if (s > maxStamp) maxStamp = s;
+        }
+        const sig = all.length + ':' + maxStamp;
+        if (_manageChipCache.sig === sig && _manageChipCache.counts) return _manageChipCache.counts;
+
+        const counts = { all: all.length, draft: 0, fix: 0, noexpl: 0, repeat: 0, new7: 0 };
+        const cutoff = Date.now() - MANAGE_NEW_WINDOW_MS;
+        all.forEach(q => {
+            if (q.status === 'draft') counts.draft++;
+            if (manageIssuesOf(q).length) counts.fix++;
+            if (!manageHasExplanation(q)) counts.noexpl++;
+            if (repeatCountOf(q) > 1) counts.repeat++;
+            if ((Number(q.updatedAt) || Number(q.id) || 0) >= cutoff) counts.new7++;
+        });
+        _manageChipCache = { sig: sig, counts: counts };
+        return counts;
+    }
+
+    function renderManageChips(counts){
+        const host = document.getElementById('manage-chips');
+        if (!host) return;
+        host.textContent = '';
+        MANAGE_CHIPS.forEach(c => {
+            const n = counts[c.id] || 0;
+            // An empty bucket is dropped rather than shown as "(0)": a chip that can only ever
+            // produce an empty list is noise, and "All" is always there to come back to.
+            if (c.id !== 'all' && !n) return;
+            const on = manageListState.chip === c.id;
+            const b = document.createElement('button');
+            b.className = 'px-2 py-1 rounded-lg border text-[10px] font-bold pressable ' +
+                (on ? 'bg-indigo-600 text-white border-indigo-600' : '');
+            if (!on) b.style.borderColor = 'var(--border)';
+            b.textContent = c.label + ' (' + n + ')';
+            b.onclick = () => setManageChip(c.id);
+            host.appendChild(b);
+        });
+    }
+
+    function setManageChip(id){
+        // Tapping the active chip again clears it, so a filter can be undone where it was set.
+        manageListState.chip = (manageListState.chip === id && id !== 'all') ? 'all' : id;
+        renderQuestionList(true);
+    }
+
+    // The tab label carried a hard-coded "(0)" since it was written: the <span id="manage-count">
+    // existed in the markup but no code ever wrote to it, so a bank of 500 questions still read
+    // "Manage (0)". The Recycle bin button's count is filled here for the same reason.
+    function updateManageCount(){
+        const bank = ((localData && localData.customQuestions) || []);
+        const el = document.getElementById('manage-count');
+        if (el) el.textContent = String(bank.filter(q => q && !q.deleted).length);
+        const tb = document.getElementById('manage-trash-btn');
+        if (tb) {
+            const n = bank.filter(q => q && q.deleted).length;
+            tb.textContent = manageListState.trash ? '↩️ Back to list' : ('🗑 Recycle bin (' + n + ')');
+        }
+    }
+
+    function updateManageSelectionBar(){
+        const bar = document.getElementById('manage-selection-bar');
+        const label = document.getElementById('manage-selection-count');
+        if (!bar) return;
+
+        // Ids of questions that no longer exist - deleted from a row, or gone after a cloud merge -
+        // are dropped here instead of being left to fail quietly inside the delete loop.
+        const live = new Set(getCustomQuestions().map(q => q.id));
+        selectedManageQIds = selectedManageQIds.filter(id => live.has(id));
+
+        const n = selectedManageQIds.length;
+        const show = n > 0 && !manageListState.trash;
+        bar.classList.toggle('hidden', !show);
+        bar.classList.toggle('flex', show);
+        // The bulk form is a write surface aimed at the selection, so it cannot outlive it: leaving it
+        // open over an empty selection means an Apply that reports "already gone" at best, and at worst
+        // an Apply the user believes hit the rows they can still see ticked somewhere else.
+        if (!show && manageListState.bulk) closeManageBulkEdit();
+        else if (show && manageListState.bulk) refreshManageBulkEditCount(n);
+        if (!show || !label) return;
+
+        // A selection deliberately survives a filter change - picking rows from two subjects is a
+        // real workflow - so the rows the current filter is NOT showing have to be named. Without
+        // this the bar reads "12 selected" beside three visible ticks, which is the exact shape of
+        // an accidental mass delete.
+        const shown = new Set((manageListState.filtered || []).map(q => q.id));
+        const hidden = selectedManageQIds.filter(id => !shown.has(id)).length;
+        label.textContent = n + ' selected' + (hidden ? ' · ' + hidden + ' not shown by this filter' : '');
+    }
+
+    function manageRowEl(id){
+        const c = document.getElementById('question-list-container');
+        if (!c) return null;
+        return Array.prototype.find.call(c.children, el => el.dataset && el.dataset.qid === String(id)) || null;
+    }
+
+    // Native confirm() returns false without asking anything inside the Android WebView (the same
+    // trap that made the old back button do nothing), so every destructive action in this tab goes
+    // through the in-app dialog. A confirm() here simply made the button dead in the APK.
+    function manageConfirm(title, html, onOk, opts){
+        if (typeof window.showConfirmDialog !== 'function') {
+            showToast('⚠️ Confirm dialog unavailable. Reload the app and try again.', 3500);
+            return;
+        }
+        window.showConfirmDialog(html, onOk, null, Object.assign({
+            title: title,
+            icon: '🗑',
+            iconClass: 'bg-rose-500/15 dark:bg-rose-500/20',
+            confirmLabel: 'Yes, delete',
+            cancelLabel: 'Cancel'
+        }, opts || {}));
+    }
+
+    function manageBadge(text, cls, title){
+        const s = document.createElement('span');
+        s.className = 'px-1.5 py-0.5 rounded-md font-bold ' + (cls || MANAGE_CHIP_NEUTRAL);
+        s.textContent = text;
+        if (title) s.title = title;
+        return s;
+    }
+
     function buildManageQuestionRow(q) {
         const wrap = document.createElement('div');
         wrap.className = 'p-3 border rounded-xl text-xs space-y-2 bg-white dark:bg-slate-800 prunable-row flex items-start gap-3';
+        wrap.dataset.qid = String(q.id);
 
-        const checkWrap = document.createElement('div');
-        checkWrap.className = 'pt-0.5';
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer';
-        checkbox.checked = selectedManageQIds.includes(q.id);
-        checkbox.onchange = () => {
-            if (checkbox.checked) {
-                if (!selectedManageQIds.includes(q.id)) selectedManageQIds.push(q.id);
-            } else {
-                selectedManageQIds = selectedManageQIds.filter(id => id !== q.id);
-            }
-        };
-        checkWrap.appendChild(checkbox);
+        // No checkbox in the Recycle bin: the only thing a binned row can do is come back, and a
+        // bulk bar reading "Delete" over a list of already-deleted questions means nothing.
+        if (!manageListState.trash) {
+            const checkWrap = document.createElement('div');
+            checkWrap.className = 'pt-0.5';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.dataset.role = 'pick';
+            checkbox.className = 'rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer';
+            checkbox.checked = selectedManageQIds.includes(q.id);
+            checkbox.onchange = () => {
+                if (checkbox.checked) {
+                    if (!selectedManageQIds.includes(q.id)) selectedManageQIds.push(q.id);
+                } else {
+                    selectedManageQIds = selectedManageQIds.filter(id => id !== q.id);
+                }
+                updateManageSelectionBar();
+            };
+            checkWrap.appendChild(checkbox);
+            wrap.appendChild(checkWrap);
+        }
 
+        // min-w-0 so a long unbroken question wraps instead of stretching the flex row.
         const contentWrap = document.createElement('div');
-        contentWrap.className = 'flex-1 space-y-2';
+        contentWrap.className = 'flex-1 space-y-2 min-w-0';
 
         // A <div>, not a <p>: the rich version of a question is itself made of <p> elements, and
         // nesting a <p> inside a <p> is not valid markup the parser will keep.
         const qEl = document.createElement('div');
-        qEl.className = 'font-bold';
+        qEl.className = 'font-bold break-words';
         // Rich text is preserved where a question has it, but it is sanitised on the way in.
         // This used to be a bare `qEl.innerHTML = q.q`, which ran whatever markup arrived from
         // OCR, an imported file, or another device over cloud sync.
         setRichTextContent(qEl, q.q, q.qHtml);
 
-        const meta = document.createElement('p');
-        meta.className = 'text-gray-500';
-        meta.textContent = `Subject: ${q.sub || 'General'} | Correct: Option ${String.fromCharCode(65 + (q.ans || 0))}`;
+        // Everything the row used to hide. "Correct: Option B" was the only metadata shown, which
+        // says nothing without the options, while `status` - the field saveData() silently stamps
+        // `revision` on a broken question - was invisible, so a question could vanish from the
+        // usable bank with no way to find out why.
+        const meta = document.createElement('div');
+        meta.className = 'flex flex-wrap gap-1 text-[9px]';
+        const st = MANAGE_STATUS_STYLE[q.status] || MANAGE_STATUS_STYLE.published;
+        meta.appendChild(manageBadge(st.label, st.cls));
+        meta.appendChild(manageBadge('📚 ' + (q.sub || 'General')));
+        if (q.topic) meta.appendChild(manageBadge('🏷 ' + q.topic));
+        meta.appendChild(manageBadge('◐ ' + (q.difficulty || 'Medium')));
 
         // Repeated questions are the highest-value ones in an exam bank, so the count is shown on
         // the row rather than left for the duplicate scanner to reveal.
         const repeats = repeatCountOf(q);
         if (repeats > 1) {
-            const fire = document.createElement('span');
-            fire.className = 'ml-1 px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 font-bold';
-            fire.textContent = `🔥 ${repeats}× repeated`;
-            fire.title = 'This question appears ' + repeats + ' times in your bank - likely a repeated exam question.';
-            meta.appendChild(fire);
+            meta.appendChild(manageBadge('🔥 ' + repeats + '× repeated',
+                'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100',
+                'This question appears ' + repeats + ' times in your bank - likely a repeated exam question.'));
         }
+        const issues = manageIssuesOf(q);
+        if (issues.length) {
+            meta.appendChild(manageBadge('⚠️ ' + issues.length + (issues.length > 1 ? ' issues' : ' issue'),
+                MANAGE_STATUS_STYLE.revision.cls, issues.join(' ')));
+        }
+        if (!manageHasExplanation(q)) meta.appendChild(manageBadge('💬 no explanation'));
+
+        // Tags, capped at three on the row. They are the field the bulk editor writes, so leaving
+        // them invisible here would make a bulk tagging pass look like it did nothing.
+        const tags = manageTagsOf(q);
+        tags.slice(0, 3).forEach(t => meta.appendChild(manageBadge('#' + t,
+            'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100')));
+        if (tags.length > 3) meta.appendChild(manageBadge('+' + (tags.length - 3), MANAGE_CHIP_NEUTRAL, tags.join(', ')));
+
+        // Options, the correct answer and the explanation live in here. They are the whole reason
+        // the row exists, but printing them on every row made the list unscannable - so the row
+        // stays one line tall and opens on demand. The host is kept in the DOM (not rebuilt on
+        // toggle) so expanding is a class flip, not a re-render.
+        const detail = document.createElement('div');
+        detail.dataset.role = 'detail';
+        detail.className = 'pt-1 border-t space-y-1';
+        detail.style.borderColor = 'var(--border)';
+        const editing = manageListState.editing === q.id;
+        const open = editing || manageListState.expanded.has(q.id);
+        detail.classList.toggle('hidden', !open);
+        if (open) detail.appendChild(editing ? buildManageRowEditor(q) : buildManageRowDetail(q));
 
         const actions = document.createElement('div');
-        actions.className = 'flex gap-2';
-        const del = document.createElement('button');
-        del.className = 'text-red-500 underline font-bold pressable';
-        del.textContent = 'Delete';
-        del.onclick = () => deleteCustomQuestion(q.id);
+        actions.className = 'flex flex-wrap gap-2 text-[10px]';
+        const mkBtn = (label, cls, fn, role) => {
+            const b = document.createElement('button');
+            b.className = 'underline font-bold pressable ' + cls;
+            b.textContent = label;
+            b.onclick = fn;
+            if (role) b.dataset.role = role;
+            actions.appendChild(b);
+            return b;
+        };
 
-        const dup = document.createElement('button');
-        dup.className = 'text-emerald-500 underline font-semibold pressable';
-        dup.textContent = 'Duplicate';
-        dup.onclick = () => duplicateCustomQuestion(q.id);
-
-        actions.appendChild(del);
-        actions.appendChild(dup);
+        if (manageListState.trash) {
+            mkBtn('♻️ Restore', 'text-emerald-600 dark:text-emerald-400', () => restoreCustomQuestion(q.id));
+        } else {
+            mkBtn(open && !editing ? '▾ Hide' : '▸ Options',
+                'text-indigo-600 dark:text-indigo-400', () => toggleManageRowDetail(q.id), 'detail-btn');
+            mkBtn('✏️ Edit', 'text-sky-600 dark:text-sky-400', () => openManageRowEdit(q.id));
+            mkBtn('⧉ Duplicate', 'text-emerald-600 dark:text-emerald-400', () => duplicateCustomQuestion(q.id));
+            mkBtn('🗑 Delete', 'text-red-500', () => deleteCustomQuestion(q.id));
+        }
 
         contentWrap.appendChild(qEl);
         contentWrap.appendChild(meta);
         contentWrap.appendChild(actions);
+        contentWrap.appendChild(detail);
 
-        wrap.appendChild(checkWrap);
         wrap.appendChild(contentWrap);
         return wrap;
+    }
+
+    // Full body of one question: every option with the correct one marked, then the explanation.
+    // Reviewing a question needed the Edit form before this - which meant opening a write surface
+    // to answer a read-only question ("is the right option actually ticked?").
+    function buildManageRowDetail(q){
+        const box = document.createElement('div');
+        box.className = 'space-y-1';
+
+        const opts = q.opts || q.options || [];
+        const ans = parseInt(q.ans != null ? q.ans : q.correctAnswerIndex, 10);
+        opts.forEach((o, i) => {
+            const txt = String(o == null ? '' : o).trim();
+            if (!txt) return;
+            const row = document.createElement('p');
+            const right = i === ans;
+            row.className = 'text-[11px] ' + (right ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'opacity-80');
+            row.textContent = (right ? '✅ ' : '○ ') + String.fromCharCode(65 + i) + '. ' + txt;
+            box.appendChild(row);
+        });
+
+        const expl = q.expl || q.explanation || '';
+        if (getNormalizedText(expl)) {
+            const head = document.createElement('p');
+            head.className = 'text-[10px] font-bold pt-1 opacity-70';
+            head.textContent = '💡 Explanation';
+            box.appendChild(head);
+            // A div again, for the same nested-<p> reason as the question text above.
+            const body = document.createElement('div');
+            body.className = 'text-[11px] opacity-90 break-words';
+            setRichTextContent(body, expl, q.explHtml);
+            box.appendChild(body);
+        } else {
+            const none = document.createElement('p');
+            none.className = 'text-[10px] pt-1 opacity-60';
+            none.textContent = '💡 No explanation saved.';
+            box.appendChild(none);
+        }
+
+        const stamp = Number(q.updatedAt) || Number(q.id) || 0;
+        const foot = document.createElement('p');
+        foot.className = 'text-[9px] pt-1 opacity-60';
+        foot.textContent = 'Marks: ' + (q.marks || 1) +
+            (stamp ? ' · last edited ' + new Date(stamp).toLocaleDateString() : '');
+        box.appendChild(foot);
+        return box;
+    }
+
+    // Only the one row is patched. A full renderQuestionList() would rebuild every row, throw away
+    // the scroll position and collapse whatever else was open - on a 500-question bank that is a
+    // visible jump for what should be an instant open/close.
+    function manageRepaintRow(id){
+        const row = manageRowEl(id);
+        if (!row) return null;
+        const host = row.querySelector('[data-role="detail"]');
+        const btn = row.querySelector('[data-role="detail-btn"]');
+        if (!host) return row;
+
+        const q = findCustomQuestion(id);
+        const editing = manageListState.editing === id;
+        const open = !!q && (editing || manageListState.expanded.has(id));
+        host.textContent = '';
+        if (open) host.appendChild(editing ? buildManageRowEditor(q) : buildManageRowDetail(q));
+        host.classList.toggle('hidden', !open);
+        if (btn) btn.textContent = (open && !editing) ? '▾ Hide' : '▸ Options';
+        return row;
+    }
+
+    function toggleManageRowDetail(id){
+        if (manageListState.expanded.has(id)) manageListState.expanded.delete(id);
+        else manageListState.expanded.add(id);
+        // Opening the read-only view over an open editor would drop unsaved typing silently.
+        if (manageListState.editing === id) manageListState.editing = null;
+        manageRepaintRow(id);
+    }
+
+    function openManageRowEdit(id){
+        if (!findCustomQuestion(id)) { showToast('⚠️ Question not found.'); return; }
+        const prev = manageListState.editing;
+        manageListState.editing = id;
+        manageListState.expanded.add(id);
+        // One editor at a time: two open forms over the same bank is how one of them gets
+        // overwritten by the other's stale copy of the row.
+        if (prev && prev !== id) {
+            manageListState.expanded.delete(prev);
+            manageRepaintRow(prev);
+        }
+        const row = manageRepaintRow(id);
+        if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function cancelManageRowEdit(id){
+        manageListState.editing = null;
+        // Not routed through toggleManageRowDetail(): that would flip `expanded` and re-open the
+        // row as a read-only detail panel the moment Cancel was pressed.
+        manageListState.expanded.delete(id);
+        manageRepaintRow(id);
+    }
+
+    // Inline editor. Fixing a typo used to mean deleting the question and retyping the whole thing
+    // in the Add tab - which loses its id, and with it every SM2 review record attached to it.
+    function buildManageRowEditor(q){
+        const box = document.createElement('div');
+        box.className = 'space-y-2';
+        const field = (labelText, el) => {
+            const w = document.createElement('label');
+            w.className = 'block';
+            const t = document.createElement('span');
+            t.className = 'block text-[9px] font-bold opacity-70 mb-0.5';
+            t.textContent = labelText;
+            w.appendChild(t);
+            w.appendChild(el);
+            box.appendChild(w);
+            return el;
+        };
+        const inputCls = 'w-full p-2 border rounded-lg text-[11px]';
+        const mk = (tag, cls, key) => {
+            const el = document.createElement(tag);
+            el.className = cls;
+            if (key) el.dataset.edit = key;
+            return el;
+        };
+
+        // Plain-text editing cannot round-trip bold/superscript, and normalizeQuestion() drops a
+        // qHtml whose plain projection no longer matches q.q - so say so before the typing starts
+        // rather than letting the formatting disappear at Save.
+        if (q.qHtml || q.explHtml) {
+            const warn = document.createElement('p');
+            warn.className = 'text-[9px] font-bold px-2 py-1 rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100';
+            warn.textContent = '⚠️ This question has rich formatting. Editing here saves plain text and drops that formatting.';
+            box.appendChild(warn);
+        }
+
+        const qBox = field('Question', mk('textarea', inputCls, 'q'));
+        qBox.rows = 3;
+        qBox.value = creatorPlainText(q.qHtml || '') || String(q.q || '');
+
+        const optWrap = document.createElement('div');
+        optWrap.className = 'space-y-1';
+        const optHead = document.createElement('span');
+        optHead.className = 'block text-[9px] font-bold opacity-70';
+        optHead.textContent = 'Options — tick the correct one';
+        optWrap.appendChild(optHead);
+
+        const opts = (q.opts || q.options || []).map(o => String(o == null ? '' : o));
+        const ansIdx = parseInt(q.ans != null ? q.ans : q.correctAnswerIndex, 10) || 0;
+        const total = Math.max(4, Math.min(6, opts.length));
+        const radioName = 'mng-ans-' + String(q.id).replace(/[^A-Za-z0-9]/g, '');
+        for (let i = 0; i < total; i++) {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-2';
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = radioName;
+            radio.dataset.edit = 'ans';
+            radio.value = String(i);
+            radio.checked = i === ansIdx;
+            radio.className = 'h-3.5 w-3.5 text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0';
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.dataset.editOpt = String(i);
+            inp.className = inputCls + ' flex-1 min-w-0';
+            inp.value = opts[i] || '';
+            inp.placeholder = 'Option ' + String.fromCharCode(65 + i) + (i > 1 ? ' (optional)' : '');
+            row.appendChild(radio);
+            row.appendChild(inp);
+            optWrap.appendChild(row);
+        }
+        box.appendChild(optWrap);
+
+        const explBox = field('Explanation', mk('textarea', inputCls, 'expl'));
+        explBox.rows = 2;
+        explBox.value = creatorPlainText(q.explHtml || '') || String(q.expl || q.explanation || '');
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-2 gap-2';
+        const gField = (labelText, el) => {
+            const w = document.createElement('label');
+            w.className = 'block';
+            const t = document.createElement('span');
+            t.className = 'block text-[9px] font-bold opacity-70 mb-0.5';
+            t.textContent = labelText;
+            w.appendChild(t); w.appendChild(el);
+            grid.appendChild(w);
+            return el;
+        };
+        const fill = (sel, values, current) => {
+            values.forEach(v => {
+                const o = document.createElement('option');
+                o.value = v; o.textContent = v;
+                if (v === current) o.selected = true;
+                sel.appendChild(o);
+            });
+            return sel;
+        };
+
+        // The question's own subject is unioned in, so a subject that was later renamed or dropped
+        // from the list cannot be silently rewritten to whichever entry happens to sit first.
+        const subs = [...new Set([...(typeof getAllSubjects === 'function' ? getAllSubjects() : []), q.sub || 'General'])];
+        fill(gField('Subject', mk('select', inputCls, 'sub')), subs, q.sub || 'General');
+        fill(gField('Difficulty', mk('select', inputCls, 'diff')), ['Easy', 'Medium', 'Hard'], q.difficulty || 'Medium');
+
+        const topic = gField('Topic', mk('input', inputCls, 'topic'));
+        topic.type = 'text';
+        topic.value = q.topic || '';
+        topic.placeholder = 'Optional';
+
+        const marks = gField('Marks', mk('input', inputCls, 'marks'));
+        marks.type = 'number';
+        marks.min = '1';
+        marks.max = '10';
+        marks.value = String(q.marks || 1);
+
+        // Status is editable here because saveData() writes it too: a question stamped `revision`
+        // by an earlier save stays stamped after the fix unless something can clear it.
+        const statusSel = fill(gField('Status', mk('select', inputCls, 'status')),
+            ['published', 'draft', 'revision'], q.status || 'published');
+        statusSel.title = 'draft = not ready, revision = needs fixing, published = usable in practice.';
+        box.appendChild(grid);
+
+        // Tags, comma separated and full width because the grid's half-columns cannot show more than
+        // one. Free-form on purpose: no fixed list covers "kharif", "PSC 2078" and "formula" at once,
+        // and normalizeQuestionTags() trims, de-duplicates and caps whatever is typed.
+        const tagsInp = field('Tags (comma separated)', mk('input', inputCls, 'tags'));
+        tagsInp.type = 'text';
+        tagsInp.value = manageTagsOf(q).join(', ');
+        tagsInp.placeholder = 'e.g. kharif, PSC 2078, formula';
+
+        const btns = document.createElement('div');
+        btns.className = 'flex gap-2 pt-1';
+        const save = document.createElement('button');
+        save.className = 'flex-1 bg-indigo-600 text-white rounded-lg py-1.5 text-[11px] font-bold pressable';
+        save.textContent = '💾 Save changes';
+        save.onclick = () => saveManageRowEdit(q.id);
+        const cancel = document.createElement('button');
+        cancel.className = 'flex-1 border rounded-lg py-1.5 text-[11px] font-bold pressable';
+        cancel.style.borderColor = 'var(--border)';
+        cancel.textContent = 'Cancel';
+        cancel.onclick = () => cancelManageRowEdit(q.id);
+        btns.appendChild(save);
+        btns.appendChild(cancel);
+        box.appendChild(btns);
+        return box;
+    }
+
+    function saveManageRowEdit(id){
+        const row = manageRowEl(id);
+        const q = findCustomQuestion(id);
+        if (!row || !q) { showToast('⚠️ Question not found.'); return; }
+        const host = row.querySelector('[data-role="detail"]');
+        if (!host) return;
+        const val = key => {
+            const el = host.querySelector('[data-edit="' + key + '"]');
+            return el ? String(el.value || '').trim() : '';
+        };
+
+        const opts = Array.prototype.map.call(host.querySelectorAll('[data-edit-opt]'), el => String(el.value || '').trim());
+        // Trailing blanks are dropped, not the gaps between options: removing a blank B would
+        // renumber C and D and silently move the correct answer off the option it was ticked on.
+        while (opts.length && !opts[opts.length - 1]) opts.pop();
+
+        const ansEl = host.querySelector('[data-edit="ans"]:checked');
+        const draft = {
+            q: val('q'),
+            opts: opts,
+            ans: ansEl ? parseInt(ansEl.value, 10) : 0,
+            expl: val('expl'),
+            sub: val('sub') || 'General',
+            topic: val('topic'),
+            difficulty: val('diff') || 'Medium',
+            marks: Math.max(1, Math.min(10, parseInt(val('marks'), 10) || 1)),
+            status: val('status') || 'published',
+            tags: normalizeQuestionTags(val('tags'))
+        };
+
+        // validateImportQuestion, not validateCreatorEntry: the creator validator also runs
+        // duplicate detection, which would match this question against itself and refuse every
+        // edit. This is also the exact validator saveData() uses to stamp `revision`.
+        const errs = validateImportQuestion(draft);
+        if (String(draft.q).length < 5) errs.unshift('Question text is too short.');
+        if (errs.length) { showToast('⚠️ ' + errs[0], 3500); return; }
+        // normalizeQuestion() blanks a qHtml whose plain projection no longer equals q.q, so a
+        // stale rich copy would not survive the next save anyway - dropping it here keeps the pair
+        // consistent immediately instead of one save later.
+        if (q.qHtml && creatorPlainText(q.qHtml) !== draft.q) q.qHtml = undefined;
+        if (q.explHtml && creatorPlainText(q.explHtml) !== draft.expl) q.explHtml = undefined;
+
+        Object.assign(q, draft);
+
+        // Every question also carries the dual-format aliases normalizeQuestion() writes, and that
+        // function resolves the answer from `correctAnswerIndex` BEFORE `ans` - it has to, because
+        // that is the key external files use. So an edited answer index sat in `ans` while the
+        // stale alias still said the old option, and the next saveData() quietly put the old one
+        // back: the tick moved in the UI and reverted on its own. The rest are refreshed too so
+        // nothing reads a half-updated question before that save runs.
+        q.correctAnswerIndex = draft.ans;
+        q.question = draft.q;
+        q.options = draft.opts;
+        q.explanation = draft.expl;
+        q.subject = draft.sub;
+        // Aliases that also outrank `ans` and that an imported row can still be carrying until its
+        // first normalize pass. Left in place, any one of them would win over the edit.
+        ['correctIndex', 'answerIndex', 'answer', 'correct', 'correctAnswer',
+         'CorrectAnswerIndex', 'AnswerIndex', 'Answer', 'Correct'].forEach(k => { delete q[k]; });
+
+        q.updatedAt = Date.now();
+        // The search index is keyed on updatedAt, but deleting is cheaper than waiting for the
+        // version check and makes the intent obvious at the call site.
+        manageSearchCache.delete(q.id);
+
+        manageListState.editing = null;
+        manageListState.expanded.delete(q.id);
+        saveData();
+        scheduleRenderQuestionList(true);
+        showToast('✅ Question updated.');
+        if (typeof updatePracticePage === 'function') updatePracticePage();
     }
 
     function updateManageListFooterStats(total, shown) {
@@ -12234,44 +12853,79 @@ function openEditImportModal(idx) {
         if (!container) return;
 
         manageListState.pageSize = getManagePageSize();
+        updateManageCount();
+        renderManageHealth();
 
-        const all = getCustomQuestions();
-        if (!all || all.length === 0) {
-            container.textContent = '';
-            manageListState.filtered = [];
-            manageListState.rendered = 0;
-            updateManageListFooterStats(0, 0);
-            return;
+        const bank = ((localData && localData.customQuestions) || []);
+        // Deletes are soft (q.deleted = true), so the bin is just the other side of the same array.
+        const all = manageListState.trash ? bank.filter(q => q && q.deleted) : getCustomQuestions();
+
+        const chipHost = document.getElementById('manage-chips');
+        if (chipHost) {
+            chipHost.classList.toggle('hidden', manageListState.trash);
+            if (!manageListState.trash) renderManageChips(manageChipCounts(all));
+        }
+        const emptyMsg = document.getElementById('manage-empty-msg');
+        if (emptyMsg) {
+            // Three different empty states, and telling them apart matters: an empty result from a
+            // filter, a bank whose questions are all sitting in the recycle bin, and a bank that
+            // genuinely has nothing in it yet.
+            emptyMsg.textContent = manageListState.trash
+                ? 'Recycle bin is empty.'
+                : (all.length ? 'No question matches this search or filter.'
+                    : (bank.length ? 'Your bank is empty — every question is in the 🗑 Recycle bin.'
+                        : 'No custom questions yet. Add one from the ✍️ Add tab.'));
         }
 
         const searchEl = document.getElementById('manage-search');
         const filterEl = document.getElementById('manage-filter-sub');
+        const sortEl = document.getElementById('manage-sort');
         const search = (searchEl && searchEl.value ? searchEl.value.trim().toLowerCase() : '');
         const sub = (filterEl && filterEl.value ? filterEl.value : 'all');
+        if (sortEl && sortEl.value) manageListState.sort = sortEl.value;
 
-        const key = search + '::' + sub + '::' + all.length;
+        const key = [manageListState.trash ? 'trash' : 'live', search, sub,
+            manageListState.sort, manageListState.chip, all.length].join('::');
         if (reset || key !== manageListState.lastKey) {
             manageListState.lastKey = key;
             manageListState.rendered = 0;
 
             let filtered = all;
             if (sub && sub !== 'all') filtered = filtered.filter(q => (q.sub || 'General').trim().toLowerCase() === sub.trim().toLowerCase());
+            if (!manageListState.trash && manageListState.chip !== 'all') {
+                filtered = filtered.filter(q => manageChipMatches(q, manageListState.chip));
+            }
             if (search) {
+                // Every word must match, in any field and in any order: "soil ph" finds a question
+                // whose text says pH and whose topic is Soil, which a single-substring test cannot.
+                const terms = search.split(/\s+/).filter(Boolean);
                 filtered = filtered.filter(q => {
-                    const id = q.id;
-                    let lc = manageSearchCache.get(id);
-                    if (!lc) {
-                        lc = String(q.q || '').replace(/<[^>]*>/g, ' ').toLowerCase();
-                        manageSearchCache.set(id, lc);
-                    }
-                    return lc.includes(search);
+                    const hay = manageHaystack(q);
+                    return terms.every(t => hay.includes(t));
                 });
             }
-            manageListState.filtered = filtered;
+            manageListState.filtered = sortManageList(filtered);
             container.textContent = '';
         }
 
         manageLoadMoreQuestions();
+        updateManageSelectionBar();
+    }
+
+    // Sorting on a copy: manageListState.filtered may still be the `all` array itself when nothing
+    // is filtered out, and that array is localData.customQuestions - reordering it in place would
+    // reorder the saved bank.
+    function sortManageList(list){
+        const out = list.slice();
+        const stamp = q => Number(q.updatedAt) || Number(q.id) || 0;
+        switch (manageListState.sort) {
+            case 'oldest':   out.sort((a, b) => stamp(a) - stamp(b)); break;
+            case 'subject':  out.sort((a, b) => String(a.sub || 'General').localeCompare(String(b.sub || 'General')) || stamp(b) - stamp(a)); break;
+            case 'repeats':  out.sort((a, b) => repeatCountOf(b) - repeatCountOf(a) || stamp(b) - stamp(a)); break;
+            case 'shortest': out.sort((a, b) => String(a.q || '').length - String(b.q || '').length); break;
+            default:         out.sort((a, b) => stamp(b) - stamp(a));
+        }
+        return out;
     }
 
     function manageLoadMoreQuestions(){
@@ -12297,42 +12951,69 @@ function openEditImportModal(idx) {
         updateManageListFooterStats(list.length, manageListState.rendered);
     }
 
+    // Records what a delete removed so Undo has something to flip back. It stores ids only - the
+    // old code stored a copy of the whole customQuestions array on every bulk delete (a real bank
+    // is hundreds of KB of that) and then never read the key back anywhere.
+    function rememberManageDelete(ids){
+        try { Storage.setJSON('krishi_last_manage_backup', { t: Date.now(), ids: ids }, { immediate: true }); } catch(e){}
+    }
+
     function deleteCustomQuestion(id){
         const q = localData.customQuestions.find(x => x.id === id);
         if (q) {
             q.deleted = true;
             q.updatedAt = Date.now();
+            rememberManageDelete([id]);
+            selectedManageQIds = selectedManageQIds.filter(x => x !== id);
+            manageListState.expanded.delete(id);
+            if (manageListState.editing === id) manageListState.editing = null;
             saveData();
             scheduleRenderQuestionList(true);
-            showToast('Question deleted!');
+            showManageUndoBar(1);
+            showToast('🗑 Moved to recycle bin.');
         }
     }
 
     function duplicateCustomQuestion(id){
         let orig = localData.customQuestions.find(q=>q.id===id); if(!orig) return;
-        let dup = {...orig, id: Date.now(), q: orig.q + ' (Copy)', updatedAt: Date.now(), deleted: false};
+        const plain = String(orig.q || '') + ' (Copy)';
+        // `id: Date.now()` collided: duplicating twice inside the same millisecond - or duplicating
+        // right after an add - produced two questions with one id, and every id lookup in this tab
+        // (edit, delete, restore) then hit whichever came first.
+        let dup = {...orig, id: Date.now() + Math.random(), q: plain, updatedAt: Date.now(), deleted: false};
+        if (orig.qHtml) {
+            // The old copy kept orig.qHtml untouched beside a q that now ends in " (Copy)", and
+            // normalizeQuestion() blanks a qHtml whose plain projection does not match q - so the
+            // duplicate silently lost its formatting on the next save. Append inside the HTML.
+            const pair = (typeof splitRichText === 'function') ? splitRichText(orig.qHtml + ' (Copy)') : null;
+            dup.qHtml = (pair && pair.plain === plain) ? pair.html : undefined;
+        }
         localData.customQuestions.push(dup);
         saveData();
         scheduleRenderQuestionList(true);
-        showToast('Question Duplicated!');
+        showToast('⧉ Duplicated. Edit the copy from its ✏️ Edit button.');
     }
 
     function selectAllManage(){
-         selectedManageQIds = getCustomQuestions().map(q=>q.id);
+         if (manageListState.trash) { showToast('Selection is not used in the recycle bin.'); return; }
+         // Was getCustomQuestions() - the whole bank, ignoring the search and filter entirely. With
+         // 3 rows on screen after a search, "Select shown" ticked all 500 and the next Delete took
+         // the bank. Only the rows this filter produced are selected now.
+         const shown = manageListState.filtered || [];
+         if (!shown.length) { showToast('Nothing to select.'); return; }
+         const set = new Set(selectedManageQIds);
+         shown.forEach(q => set.add(q.id));
+         selectedManageQIds = [...set];
          const container = document.getElementById('question-list-container');
-         if (container) {
-             const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-             checkboxes.forEach(cb => cb.checked = true);
-         }
-         showToast('All items selected!');
+         if (container) container.querySelectorAll('input[data-role="pick"]').forEach(cb => cb.checked = true);
+         updateManageSelectionBar();
+         showToast('☑ ' + shown.length + ' shown question(s) selected.');
     }
     function deselectAllManage(){
          selectedManageQIds = [];
          const container = document.getElementById('question-list-container');
-         if (container) {
-             const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-             checkboxes.forEach(cb => cb.checked = false);
-         }
+         if (container) container.querySelectorAll('input[data-role="pick"]').forEach(cb => cb.checked = false);
+         updateManageSelectionBar();
          showToast('Cleared selections.');
     }
     function deleteSelectedQuestions(){
@@ -12340,9 +13021,30 @@ function openEditImportModal(idx) {
              showToast('No questions selected!');
              return;
          }
-         if (confirm(`Are you sure you want to delete the ${selectedManageQIds.length} selected questions?`)) {
-             try { Storage.setJSON('krishi_last_manage_backup', { t: Date.now(), customQuestions: localData.customQuestions }, { immediate: true }); } catch(e){}
-             const selectSet = new Set(selectedManageQIds);
+         const picked = getCustomQuestions().filter(q => selectedManageQIds.includes(q.id));
+         if (!picked.length) {
+             selectedManageQIds = [];
+             updateManageSelectionBar();
+             showToast('Those questions are already gone.');
+             return;
+         }
+
+         // What is about to go, per subject. "Delete 40 selected questions?" does not tell you that
+         // 37 of them are from a subject you were not even looking at.
+         const bySub = {};
+         picked.forEach(q => { const s = q.sub || 'General'; bySub[s] = (bySub[s] || 0) + 1; });
+         const lines = Object.keys(bySub).sort().map(s =>
+             '<li>' + escapeCreatorHtml(s) + ' — <b>' + bySub[s] + '</b></li>').join('');
+         const msg = 'These questions move to the <b>recycle bin</b> and leave practice. You can restore them.' +
+             '<ul class="text-left mt-2 space-y-0.5">' + lines + '</ul>';
+
+         // confirm() returns false without asking anything inside the Android WebView, so this
+         // button did nothing at all in the APK - the bulk delete was dead on the only platform
+         // the bank is actually managed on.
+         manageConfirm('🗑 Delete ' + picked.length + ' question(s)?', msg, () => {
+             const ids = picked.map(q => q.id);
+             rememberManageDelete(ids);
+             const selectSet = new Set(ids);
              localData.customQuestions.forEach(q => {
                  if (selectSet.has(q.id)) {
                      q.deleted = true;
@@ -12350,10 +13052,589 @@ function openEditImportModal(idx) {
                  }
              });
              selectedManageQIds = [];
+             ids.forEach(id => manageListState.expanded.delete(id));
+             if (ids.includes(manageListState.editing)) manageListState.editing = null;
              saveData();
              scheduleRenderQuestionList(true);
-             showToast('Deleted selected custom questions!');
-         }
+             showManageUndoBar(ids.length);
+             showToast('🗑 ' + ids.length + ' question(s) moved to recycle bin.');
+             if (typeof updatePracticePage === 'function') updatePracticePage();
+         }, { confirmLabel: 'Delete', cancelLabel: 'Rakhne' });
+    }
+
+    // showToast() only sets textContent, so a toast cannot carry an Undo button - the strip lives in
+    // the panel instead, which also means it survives longer than a 2 s toast.
+    let manageUndoTimer = null;
+
+    function showManageUndoBar(n){
+        const bar = document.getElementById('manage-undo-bar');
+        const text = document.getElementById('manage-undo-text');
+        if (!bar) return;
+        if (text) text.textContent = '🗑 ' + n + ' question(s) deleted.';
+        bar.classList.remove('hidden');
+        bar.classList.add('flex');
+        if (manageUndoTimer) clearTimeout(manageUndoTimer);
+        // The strip hides after 30 s, but the snapshot is not cleared with it: the recycle bin is
+        // still there, so a late change of mind is not lost - only the one-tap shortcut is.
+        manageUndoTimer = setTimeout(hideManageUndoBar, 30000);
+    }
+
+    function hideManageUndoBar(){
+        if (manageUndoTimer) { clearTimeout(manageUndoTimer); manageUndoTimer = null; }
+        const bar = document.getElementById('manage-undo-bar');
+        if (!bar) return;
+        bar.classList.add('hidden');
+        bar.classList.remove('flex');
+    }
+
+    function undoManageDelete(){
+        let snap = null;
+        try { snap = Storage.getJSON('krishi_last_manage_backup', null); } catch(e){}
+        if (!snap || !Array.isArray(snap.ids) || !snap.ids.length) {
+            hideManageUndoBar();
+            showToast('Nothing to undo.');
+            return;
+        }
+        const ids = new Set(snap.ids);
+        let restored = 0;
+        (localData.customQuestions || []).forEach(q => {
+            // Only rows that are still deleted: if one was already restored from the bin, flipping
+            // it again would bump updatedAt for nothing and push a pointless cloud write.
+            if (q && ids.has(q.id) && q.deleted) {
+                q.deleted = false;
+                q.updatedAt = Date.now();
+                restored++;
+            }
+        });
+        try { Storage.setJSON('krishi_last_manage_backup', { t: Date.now(), ids: [] }, { immediate: true }); } catch(e){}
+        hideManageUndoBar();
+        if (!restored) { showToast('Those questions are already restored.'); return; }
+        saveData();
+        scheduleRenderQuestionList(true);
+        showToast('↩️ ' + restored + ' question(s) restored.');
+        if (typeof updatePracticePage === 'function') updatePracticePage();
+    }
+
+    // Recycle bin. Deleted questions were never removed from disk - getCustomQuestions() just
+    // filters them out - so they have been recoverable all along with no way to reach them.
+    function toggleManageTrash(){
+        manageListState.trash = !manageListState.trash;
+        selectedManageQIds = [];
+        manageListState.expanded.clear();
+        manageListState.editing = null;
+        manageListState.chip = 'all';
+        if (typeof closeDupScan === 'function') closeDupScan();
+        hideManageUndoBar();
+        closeManageBulkEdit();
+
+        // hidden/flex ordering in the Tailwind CDN build is not dependable, so visibility is driven
+        // by toggling the class explicitly on each button rather than trusting one rule to win.
+        const show = manageListState.trash;
+        const setVis = (id, visible) => {
+            const el = document.getElementById(id);
+            if (el) el.classList.toggle('hidden', !visible);
+        };
+        setVis('manage-select-all-btn', !show);
+        setVis('manage-dup-btn', !show);
+        setVis('manage-restore-all-btn', show);
+        renderQuestionList(true);
+    }
+
+    function restoreCustomQuestion(id){
+        const q = (localData.customQuestions || []).find(x => x && x.id === id);
+        if (!q) { showToast('⚠️ Question not found.'); return; }
+        q.deleted = false;
+        q.updatedAt = Date.now();
+        saveData();
+        scheduleRenderQuestionList(true);
+        showToast('♻️ Restored to your bank.');
+        if (typeof updatePracticePage === 'function') updatePracticePage();
+    }
+
+    function restoreAllManageTrash(){
+        const gone = (localData.customQuestions || []).filter(q => q && q.deleted);
+        if (!gone.length) { showToast('Recycle bin is empty.'); return; }
+        manageConfirm('♻️ Restore ' + gone.length + ' question(s)?',
+            'Everything in the recycle bin goes back into your bank and returns to practice.', () => {
+                const now = Date.now();
+                gone.forEach(q => { q.deleted = false; q.updatedAt = now; });
+                saveData();
+                scheduleRenderQuestionList(true);
+                showToast('♻️ ' + gone.length + ' question(s) restored.');
+                if (typeof updatePracticePage === 'function') updatePracticePage();
+            }, { icon: '♻️', iconClass: 'bg-emerald-500/15 dark:bg-emerald-500/20',
+                 confirmLabel: 'Restore', cancelLabel: 'Rahna dine' });
+    }
+
+    // ==================== MANAGE: BANK HEALTH ====================
+    let _manageHealthCache = { sig: '', stats: null };
+
+    // Memoised on the same cheap signature the chip counts use. This pass runs validateImportQuestion
+    // over the whole bank, and the card is re-rendered from renderQuestionList() - which fires on
+    // every keystroke of the search box - so an unmemoised version would validate a few thousand
+    // questions per character typed.
+    function manageHealthStats(){
+        const bank = ((localData && localData.customQuestions) || []).filter(Boolean);
+        let maxStamp = 0;
+        for (let i = 0; i < bank.length; i++) {
+            const s = Number(bank[i].updatedAt) || 0;
+            if (s > maxStamp) maxStamp = s;
+        }
+        const sig = bank.length + ':' + maxStamp;
+        if (_manageHealthCache.sig === sig && _manageHealthCache.stats) return _manageHealthCache.stats;
+
+        const live = bank.filter(q => !q.deleted);
+        const st = { total: live.length, binned: bank.length - live.length, fix: 0, noexpl: 0,
+                     draft: 0, repeat: 0, tagged: 0, notopic: 0, clean: 0, marks: 0, bySub: [] };
+        const bySub = new Map();
+        live.forEach(q => {
+            // Both flags come out of one pass: `clean` needs the AND of them, and the chip counts
+            // cannot supply that - a question can be in both buckets at once.
+            const broken = manageIssuesOf(q).length > 0;
+            const unexplained = !manageHasExplanation(q);
+            if (broken) st.fix++;
+            if (unexplained) st.noexpl++;
+            if (!broken && !unexplained) st.clean++;
+            if (q.status === 'draft') st.draft++;
+            if (repeatCountOf(q) > 1) st.repeat++;
+            if (manageTagsOf(q).length) st.tagged++;
+            if (!String(q.topic || '').trim()) st.notopic++;
+            st.marks += Number(q.marks) || 1;
+            const s = q.sub || 'General';
+            bySub.set(s, (bySub.get(s) || 0) + 1);
+        });
+        st.bySub = [...bySub.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        st.score = live.length ? Math.round((st.clean / live.length) * 100) : 0;
+        _manageHealthCache = { sig: sig, stats: st };
+        return st;
+    }
+
+    function toggleManageHealth(){
+        manageListState.health = !manageListState.health;
+        renderManageHealth();
+    }
+
+    // Jumps from a health counter to the rows it counted. Without this the card can only tell you
+    // that 37 questions are broken and leave you to find them by hand.
+    function manageHealthJump(chip){
+        if (manageListState.trash) toggleManageTrash();
+        const sel = document.getElementById('manage-filter-sub');
+        if (sel) sel.value = 'all';
+        const search = document.getElementById('manage-search');
+        if (search) search.value = '';
+        setManageChip(chip);
+        const host = document.getElementById('question-list-container');
+        if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    let _manageHealthPainted = null;
+
+    function renderManageHealth(){
+        const card = document.getElementById('manage-health-card');
+        const sum = document.getElementById('manage-health-summary');
+        const caret = document.getElementById('manage-health-caret');
+        if (!card) return;
+
+        const st = manageHealthStats();
+        const open = manageListState.health;
+        // manageHealthStats() hands back the same memoised object while the bank is unchanged, so this
+        // identity test is exact and free. renderQuestionList() calls this on every keystroke of the
+        // search box, and none of this card depends on the search.
+        if (_manageHealthPainted && _manageHealthPainted.stats === st && _manageHealthPainted.open === open) return;
+        _manageHealthPainted = { stats: st, open: open };
+
+        // The collapsed header carries the one number worth glancing at, so the card does not have to
+        // be opened to know whether the bank needs work.
+        if (sum) sum.textContent = st.total ? (st.score + '% ready · ' + st.total + ' live') : 'empty';
+        if (caret) caret.textContent = open ? '▾' : '▸';
+        card.classList.toggle('hidden', !open);
+        // Emptied when closed rather than left hidden: this is the top of a tab that can already be
+        // holding hundreds of question rows.
+        card.textContent = '';
+        if (!open) return;
+
+        if (!st.total) {
+            const p = document.createElement('p');
+            p.className = 'opacity-75';
+            p.textContent = st.binned
+                ? 'Every question you have is in the 🗑 Recycle bin.'
+                : 'Add questions from the ✍️ Add tab to see your bank health.';
+            card.appendChild(p);
+            return;
+        }
+
+        const head = document.createElement('p');
+        head.className = 'font-bold';
+        head.textContent = st.score + '% exam-ready — ' + st.clean + ' of ' + st.total +
+            ' questions are valid and explained.';
+        card.appendChild(head);
+
+        const bar = document.createElement('div');
+        bar.className = 'h-2 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700';
+        const fill = document.createElement('div');
+        fill.className = 'h-full rounded-full ' +
+            (st.score >= 80 ? 'bg-emerald-500' : st.score >= 50 ? 'bg-amber-500' : 'bg-rose-500');
+        fill.style.width = st.score + '%';
+        bar.appendChild(fill);
+        card.appendChild(bar);
+        // Each counter is a button, because a number you cannot act on is just guilt: tapping one
+        // clears the search and filter and leaves the list showing exactly those rows.
+        const tiles = document.createElement('div');
+        tiles.className = 'grid grid-cols-2 gap-1.5 pt-1';
+        const tile = (label, n, chip, cls) => {
+            const b = document.createElement('button');
+            b.className = 'text-left px-2 py-1.5 rounded-lg border font-bold pressable ' + (n ? cls : 'opacity-50');
+            b.style.borderColor = 'var(--border)';
+            b.textContent = label + ' — ' + n;
+            if (n) b.onclick = () => manageHealthJump(chip);
+            else b.disabled = true;
+            tiles.appendChild(b);
+        };
+        tile('⚠️ Needs fix', st.fix, 'fix', 'text-rose-600 dark:text-rose-400');
+        tile('💬 No explanation', st.noexpl, 'noexpl', 'text-amber-600 dark:text-amber-400');
+        tile('📝 Drafts', st.draft, 'draft', 'text-amber-600 dark:text-amber-400');
+        tile('🔥 Repeated', st.repeat, 'repeat', 'text-orange-600 dark:text-orange-400');
+        card.appendChild(tiles);
+
+        const meta = document.createElement('p');
+        meta.className = 'opacity-75 pt-1';
+        meta.textContent = '🗑 ' + st.binned + ' in bin · 🏷 ' + st.tagged + ' tagged · ' +
+            '📄 ' + st.notopic + ' without a topic · Σ ' + st.marks + ' marks';
+        card.appendChild(meta);
+        const subHead = document.createElement('p');
+        subHead.className = 'font-bold pt-1';
+        subHead.textContent = '📚 By subject';
+        card.appendChild(subHead);
+
+        // Top six only. A bank with twenty subjects would otherwise push the question list off the
+        // screen with a bar chart, and the tail is summarised on one line below.
+        const top = st.bySub.slice(0, 6);
+        const rest = st.bySub.slice(6);
+        const max = top.length ? top[0][1] : 1;
+        const list = document.createElement('div');
+        list.className = 'space-y-1';
+        top.forEach(entry => {
+            const row = document.createElement('button');
+            row.className = 'w-full text-left pressable';
+            row.onclick = () => manageHealthFilterSubject(entry[0]);
+            const lab = document.createElement('span');
+            lab.className = 'flex items-center gap-1';
+            const t = document.createElement('span');
+            t.className = 'truncate';
+            t.textContent = entry[0];
+            const c = document.createElement('span');
+            c.className = 'ml-auto font-bold shrink-0';
+            c.textContent = String(entry[1]);
+            lab.appendChild(t);
+            lab.appendChild(c);
+            const track = document.createElement('div');
+            track.className = 'h-1.5 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700 mt-0.5';
+            const f = document.createElement('div');
+            f.className = 'h-full rounded-full bg-indigo-500';
+            f.style.width = Math.max(4, Math.round((entry[1] / max) * 100)) + '%';
+            track.appendChild(f);
+            row.appendChild(lab);
+            row.appendChild(track);
+            list.appendChild(row);
+        });
+        card.appendChild(list);
+        if (rest.length) {
+            const more = document.createElement('p');
+            more.className = 'opacity-75';
+            more.textContent = '+ ' + rest.length + ' more subject(s), ' +
+                rest.reduce((s, e) => s + e[1], 0) + ' question(s).';
+            card.appendChild(more);
+        }
+    }
+    // A subject bar filters the list to that subject. The <option> values come from getAllSubjects(),
+    // so a subject that now exists only on a question - renamed since, or arrived from a peer whose
+    // subject list this device never registered - has no option to select; that case falls back to the
+    // search box, which reaches q.sub through the haystack.
+    function manageHealthFilterSubject(name){
+        if (manageListState.trash) toggleManageTrash();
+        const sel = document.getElementById('manage-filter-sub');
+        const search = document.getElementById('manage-search');
+        const has = sel && Array.prototype.some.call(sel.options, o => o.value === name);
+        if (has) {
+            sel.value = name;
+            if (search) search.value = '';
+        } else if (search) {
+            search.value = name;
+            if (sel) sel.value = 'all';
+        }
+        manageListState.chip = 'all';
+        renderQuestionList(true);
+        const host = document.getElementById('question-list-container');
+        if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    // ==================== MANAGE: BULK EDIT ====================
+    // Retagging or re-filing a batch of questions used to mean opening every row's editor in turn.
+    // Nothing here can touch the question text, the options or the answer: those are per-question by
+    // nature, and a bulk write over them is only ever a mistake.
+    function openManageBulkEdit(){
+        if (manageListState.trash) { showToast('Bulk edit is not used in the recycle bin.'); return; }
+        const host = document.getElementById('manage-bulk-edit');
+        if (!host) return;
+        if (manageListState.bulk) { closeManageBulkEdit(); return; }
+        const picked = getCustomQuestions().filter(q => selectedManageQIds.includes(q.id));
+        if (!picked.length) { showToast('No questions selected!'); return; }
+        manageListState.bulk = true;
+        host.textContent = '';
+        host.appendChild(buildManageBulkEditForm(picked));
+        host.classList.remove('hidden');
+        if (host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function closeManageBulkEdit(){
+        manageListState.bulk = false;
+        const host = document.getElementById('manage-bulk-edit');
+        if (!host) return;
+        host.classList.add('hidden');
+        host.textContent = '';
+    }
+
+    // The selection can change while the form is open - ticking one more row - and
+    // applyManageBulkEdit() re-reads it at Apply time, so the count printed on the form has to follow
+    // or the button reads "Apply to 3" and writes to 5. Only the two labels are patched: rebuilding the
+    // form would throw away whatever has already been typed into it.
+    function refreshManageBulkEditCount(n){
+        const host = document.getElementById('manage-bulk-edit');
+        if (!host) return;
+        const head = host.querySelector('[data-bulk-count="head"]');
+        const apply = host.querySelector('[data-bulk-count="apply"]');
+        if (head) head.textContent = '✏️ Bulk edit ' + n + ' selected question(s)';
+        if (apply) apply.textContent = '✅ Apply to ' + n;
+    }
+
+    function buildManageBulkEditForm(picked){
+        const box = document.createElement('div');
+        box.className = 'p-3 border rounded-xl space-y-2 text-[10px]';
+        box.style.borderColor = 'var(--border)';
+        box.style.background = 'var(--card)';
+
+        const head = document.createElement('p');
+        head.className = 'font-bold';
+        head.dataset.bulkCount = 'head';
+        head.textContent = '✏️ Bulk edit ' + picked.length + ' selected question(s)';
+        box.appendChild(head);
+        const hint = document.createElement('p');
+        hint.className = 'opacity-75';
+        hint.textContent = 'Every field left on “— keep —” is not touched. Question text, options and the correct answer are edited per question only.';
+        box.appendChild(hint);
+        const inputCls = 'w-full p-2 border rounded-lg text-[11px]';
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-2 gap-2';
+        const gField = (labelText, el, host) => {
+            const w = document.createElement('label');
+            w.className = 'block';
+            const t = document.createElement('span');
+            t.className = 'block text-[9px] font-bold opacity-70 mb-0.5';
+            t.textContent = labelText;
+            w.appendChild(t);
+            w.appendChild(el);
+            (host || grid).appendChild(w);
+            return el;
+        };
+        const mkSel = (key, values) => {
+            const s = document.createElement('select');
+            s.className = inputCls;
+            s.dataset.bulk = key;
+            // The empty value is what "keep" means everywhere below: a falsy read = do not write.
+            values.forEach(v => {
+                const o = document.createElement('option');
+                o.value = v.v;
+                o.textContent = v.t;
+                s.appendChild(o);
+            });
+            return s;
+        };
+
+        const keep = { v: '', t: '— keep —' };
+        // The subject list is unioned with the subjects the picked questions already carry, so a
+        // subject this device never registered is still offered instead of being unreachable.
+        const subs = [...new Set([...(typeof getAllSubjects === 'function' ? getAllSubjects() : []),
+            ...picked.map(q => q.sub || 'General')])].sort();
+        gField('Subject', mkSel('sub', [keep, ...subs.map(s => ({ v: s, t: s }))]));
+        gField('Difficulty', mkSel('diff', [keep, ...['Easy', 'Medium', 'Hard'].map(s => ({ v: s, t: s }))]));
+        gField('Status', mkSel('status', [keep, ...['published', 'draft', 'revision'].map(s => ({ v: s, t: s }))]));
+
+        const topic = gField('Topic', document.createElement('input'));
+        topic.type = 'text';
+        topic.className = inputCls;
+        topic.dataset.bulk = 'topic';
+        topic.placeholder = '— keep —';
+        box.appendChild(grid);
+        // A blank Topic box has to mean "keep" - it is the default - so emptying the field needs its
+        // own switch. Without it a topic typed onto 40 questions by mistake could never be taken off
+        // them again except one row at a time.
+        const clearWrap = document.createElement('label');
+        clearWrap.className = 'flex items-center gap-2';
+        const clearCb = document.createElement('input');
+        clearCb.type = 'checkbox';
+        clearCb.dataset.bulk = 'topicClear';
+        clearCb.className = 'rounded h-3.5 w-3.5 text-indigo-600 focus:ring-indigo-500';
+        clearCb.onchange = () => {
+            topic.disabled = clearCb.checked;
+            if (clearCb.checked) topic.value = '';
+        };
+        const clearTxt = document.createElement('span');
+        clearTxt.textContent = 'Clear the topic instead of setting one';
+        clearWrap.appendChild(clearCb);
+        clearWrap.appendChild(clearTxt);
+        box.appendChild(clearWrap);
+
+        const tagRow = document.createElement('div');
+        tagRow.className = 'grid grid-cols-3 gap-2';
+        const tagsWrap = document.createElement('label');
+        tagsWrap.className = 'block col-span-2';
+        const tagsLab = document.createElement('span');
+        tagsLab.className = 'block text-[9px] font-bold opacity-70 mb-0.5';
+        tagsLab.textContent = 'Tags (comma separated)';
+        const tagsInp = document.createElement('input');
+        tagsInp.type = 'text';
+        tagsInp.className = inputCls;
+        tagsInp.dataset.bulk = 'tags';
+        tagsInp.placeholder = 'kharif, PSC 2078';
+        tagsWrap.appendChild(tagsLab);
+        tagsWrap.appendChild(tagsInp);
+        tagRow.appendChild(tagsWrap);
+        // No "keep" entry: the mode only means anything when the tags box has something in it, and
+        // an empty tags box is itself the keep case.
+        gField('Mode', mkSel('tagMode', [
+            { v: 'add', t: '➕ Add' },
+            { v: 'replace', t: '♻️ Replace' },
+            { v: 'remove', t: '➖ Remove' }
+        ]), tagRow);
+        box.appendChild(tagRow);
+        const btns = document.createElement('div');
+        btns.className = 'flex gap-2 pt-1';
+        const apply = document.createElement('button');
+        apply.className = 'flex-1 bg-indigo-600 text-white rounded-lg py-1.5 text-[11px] font-bold pressable';
+        apply.dataset.bulkCount = 'apply';
+        apply.textContent = '✅ Apply to ' + picked.length;
+        apply.onclick = applyManageBulkEdit;
+        const cancel = document.createElement('button');
+        cancel.className = 'flex-1 border rounded-lg py-1.5 text-[11px] font-bold pressable';
+        cancel.style.borderColor = 'var(--border)';
+        cancel.textContent = 'Cancel';
+        cancel.onclick = closeManageBulkEdit;
+        btns.appendChild(apply);
+        btns.appendChild(cancel);
+        box.appendChild(btns);
+        return box;
+    }
+    function applyManageBulkEdit(){
+        const host = document.getElementById('manage-bulk-edit');
+        if (!host) return;
+        const picked = getCustomQuestions().filter(q => selectedManageQIds.includes(q.id));
+        if (!picked.length) {
+            closeManageBulkEdit();
+            selectedManageQIds = [];
+            updateManageSelectionBar();
+            showToast('Those questions are already gone.');
+            return;
+        }
+
+        const v = k => {
+            const el = host.querySelector('[data-bulk="' + k + '"]');
+            return el ? String(el.value || '').trim() : '';
+        };
+        const on = k => {
+            const el = host.querySelector('[data-bulk="' + k + '"]');
+            return !!(el && el.checked);
+        };
+
+        const patch = {
+            sub: v('sub'),
+            diff: v('diff'),
+            status: v('status'),
+            topic: v('topic'),
+            clearTopic: on('topicClear'),
+            tags: normalizeQuestionTags(v('tags')),
+            tagMode: v('tagMode') || 'add'
+        };
+
+        // Spelled out rather than counted: "apply 3 changes" tells you nothing, and this dialog is
+        // the last point at which a wrong subject on 200 questions is still recoverable for free.
+        const changes = [];
+        if (patch.sub) changes.push('Subject → ' + patch.sub);
+        if (patch.diff) changes.push('Difficulty → ' + patch.diff);
+        if (patch.status) changes.push('Status → ' + patch.status);
+        if (patch.clearTopic) changes.push('Topic → cleared');
+        else if (patch.topic) changes.push('Topic → ' + patch.topic);
+        if (patch.tags.length) {
+            const word = patch.tagMode === 'replace' ? 'replaced with' : patch.tagMode === 'remove' ? 'remove' : 'add';
+            changes.push('Tags → ' + word + ' ' + patch.tags.map(t => '#' + t).join(' '));
+        }
+        if (!changes.length) {
+            showToast('⚠️ Nothing to change — every field is still on “keep”.', 3000);
+            return;
+        }
+
+        const msg = '<b>' + picked.length + '</b> question(s) will change:' +
+            '<ul class="text-left mt-2 space-y-0.5">' +
+            changes.map(c => '<li>' + escapeCreatorHtml(c) + '</li>').join('') + '</ul>';
+        manageConfirm('✏️ Apply to ' + picked.length + ' question(s)?', msg,
+            () => commitManageBulkEdit(picked, patch),
+            { icon: '✏️', iconClass: 'bg-indigo-500/15 dark:bg-indigo-500/20',
+              confirmLabel: 'Apply', cancelLabel: 'Cancel' });
+    }
+    function commitManageBulkEdit(picked, patch){
+        const now = Date.now();
+        let demoted = 0;
+        picked.forEach(q => {
+            if (patch.sub) {
+                // `subject` is the dual-format alias normalizeQuestion() regenerates, and it wins over
+                // nothing here - but a reader between this write and the next saveData() would see the
+                // old subject on a question whose `sub` already changed. The same reason the inline
+                // editor refreshes its aliases. `sub` is never blanked: normalizeQuestion() falls back
+                // to raw.topic when it is empty, which would silently file the question under its topic.
+                q.sub = patch.sub;
+                q.subject = patch.sub;
+            }
+            if (patch.diff) q.difficulty = patch.diff;
+            if (patch.status) q.status = patch.status;
+            if (patch.clearTopic) q.topic = '';
+            else if (patch.topic) q.topic = patch.topic;
+            if (patch.tags.length) {
+                const cur = manageTagsOf(q);
+                if (patch.tagMode === 'replace') {
+                    q.tags = patch.tags.slice();
+                } else if (patch.tagMode === 'remove') {
+                    const drop = new Set(patch.tags.map(t => t.toLowerCase()));
+                    q.tags = cur.filter(t => !drop.has(t.toLowerCase()));
+                } else {
+                    q.tags = normalizeQuestionTags(cur.concat(patch.tags));
+                }
+            }
+            q.updatedAt = now;
+            manageSearchCache.delete(q.id);
+            // saveData() re-stamps `revision` on anything validateImportQuestion() rejects, so
+            // promoting a broken question to `published` here does not stick. Counted before that save
+            // runs, because afterwards the status looks like the user never asked for it.
+            if (patch.status === 'published' && manageIssuesOf(q).length) demoted++;
+        });
+
+        closeManageBulkEdit();
+        // The selection deliberately survives: setting the subject and then tagging the same rows is
+        // one job, and re-ticking 200 questions between the two halves of it is not.
+        saveData();
+        scheduleRenderQuestionList(true);
+        updateManageSelectionBar();
+        let msg = '✅ ' + picked.length + ' question(s) updated.';
+        if (demoted) msg += ' ' + demoted + ' still ⚠️ Needs fix, so they stayed unpublished.';
+        showToast(msg, demoted ? 4500 : 2000);
+        if (typeof updatePracticePage === 'function') updatePracticePage();
+    }
+
+    // Selection-only export. The IO tab can only ever dump the whole bank, so sharing one subject -
+    // or the twelve questions you just fixed - meant exporting everything and deleting rows by hand.
+    function exportSelectedManageQuestions(){
+        const picked = getCustomQuestions().filter(q => selectedManageQIds.includes(q.id));
+        if (!picked.length) { showToast('No questions selected!'); return; }
+        // JSON, not CSV: it is the only one of the two formats that round-trips the rich-text pair and
+        // the tags without flattening them, and the importer reads it back as-is.
+        downloadQuestionBundle(picked, 'json', 'krishi_mcq_selection_' + picked.length + '_' + Date.now());
+        showToast('📤 ' + picked.length + ' question(s) exported as JSON.', 3000);
     }
 
     // ==================== DASHBOARD DETAILS UPDATES ====================

@@ -6227,58 +6227,18 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
 
         onPracticeSubjectChanged(preSelectedTopic);
 
-        // Load configurations
-        let rawLast = KrishiStorage.getItem('krishi_last_practice_config');
-        if (rawLast && preSelectedSubject === 'all') {
-            try {
-                let conf = JSON.parse(rawLast);
-                // Same guard as above, for the saved config: the subject it names may have been
-                // deleted or renamed since the last run.
-                subSel.value = conf.subject || 'all';
-                if (subSel.selectedIndex === -1) subSel.value = 'all';
-                onPracticeSubjectChanged(conf.topic || 'all');
-                
-                document.getElementById('prac-cfg-difficulty').value = conf.difficulty || 'all';
-                document.getElementById('prac-cfg-count').value = conf.count || 20;
-                document.getElementById('prac-cfg-count').dispatchEvent(new Event('input'));
-                document.getElementById('prac-cfg-timer').value = conf.timer || 'off';
-                document.getElementById('prac-cfg-timer-min').value = conf.timerMin || 20;
-                document.getElementById('prac-cfg-per-q-timer').value = conf.perQTimer || 'off';
-                document.getElementById('prac-cfg-per-q-sec').value = conf.perQSec || 30;
-                document.getElementById('prac-cfg-neg-marking').value = conf.negativeMarking || 'off';
-                document.getElementById('prac-cfg-feedback').value = conf.feedback || 'immediate';
-                document.getElementById('prac-cfg-shuffle-qs').checked = conf.shuffleQs !== false;
-                document.getElementById('prac-cfg-shuffle-opts').checked = conf.shuffleOpts !== false;
-                
-                document.getElementById('prac-cfg-inc-wrong').checked = conf.incWrong !== false;
-                document.getElementById('prac-cfg-inc-bookmarks').checked = conf.incBookmarks !== false;
-                document.getElementById('prac-cfg-inc-unattempted').checked = conf.incUnattempted !== false;
-                document.getElementById('prac-cfg-inc-custom').checked = conf.incCustom !== false;
-            } catch(ex) {
-                console.warn("Failed restoring practice configurations", ex);
-            }
+        // Load configurations. Restore and reset now go through one applier, so a control added
+        // to the page can no longer be restored-but-not-reset (or the reverse) — the old pair of
+        // hand-written blocks had drifted apart exactly that way.
+        let store = readAdvancedSetupStore();
+        if (store.last && preSelectedSubject === 'all') {
+            applyAdvancedSetupConfig(store.last, true);
         } else {
-            // Explicitly reset filters so previous state does not leak into a new subject selection
-            document.getElementById('prac-cfg-difficulty').value = 'all';
-            document.getElementById('prac-cfg-count').value = 20;
-            document.getElementById('prac-cfg-count').dispatchEvent(new Event('input'));
-            document.getElementById('prac-cfg-timer').value = 'off';
-            document.getElementById('prac-cfg-timer-min').value = 20;
-            document.getElementById('prac-cfg-per-q-timer').value = 'off';
-            document.getElementById('prac-cfg-per-q-sec').value = 30;
-            document.getElementById('prac-cfg-neg-marking').value = 'off';
-            document.getElementById('prac-cfg-feedback').value = 'immediate';
-            document.getElementById('prac-cfg-shuffle-qs').checked = true;
-            document.getElementById('prac-cfg-shuffle-opts').checked = true;
-            document.getElementById('prac-cfg-inc-wrong').checked = true;
-            document.getElementById('prac-cfg-inc-bookmarks').checked = true;
-            document.getElementById('prac-cfg-inc-unattempted').checked = true;
-            document.getElementById('prac-cfg-inc-custom').checked = true;
+            // Pass no config so every filter falls back to its default: previous state must not
+            // leak into a fresh subject selection.
+            applyAdvancedSetupConfig(null, false);
         }
-        
-        toggleConfigTimerFields();
-        toggleConfigPerQTimerFields();
-        updateSizingDiagnosticsInSetup();
+        renderAdvancedSetupPresets();
     }
 
     function toggleConfigTimerFields() {
@@ -6319,140 +6279,465 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         updateSizingDiagnosticsInSetup();
     }
 
-    function updateSizingDiagnosticsInSetup() {
-        // Load metrics counting
-        //
-        // Bookmarks go through getValidBookmarkedCount() for the same reason wrong answers go
-        // through getValidWrongCount(): both lists hold ids, and deleting a question (or
-        // replacing the bank on import) leaves the id behind. The raw `.length` therefore
-        // over-reported — the label promised more bookmarked questions than the filter below
-        // could ever pull, and the two adjacent numbers were counted by different rules.
-        document.getElementById('prac-cfg-cnt-wrong').textContent = getValidWrongCount();
-        document.getElementById('prac-cfg-cnt-bookmarks').textContent = getValidBookmarkedCount();
-        document.getElementById('prac-cfg-cnt-custom').textContent = getCustomQuestions().length;
-        
-        // Count unattempted items
-        let loggedIds = new Set(timingLog.map(l => l.qid));
-        let unattemptedCount = getAllQuestions().filter(q => !loggedIds.has(q.id)).length;
-        document.getElementById('prac-cfg-cnt-unattempt').textContent = unattemptedCount;
-    }
+    // ── Advanced Setup: one pool builder, shared by the preview and the run ─────────────────
+    //
+    // The filter used to live inside startAdvancedConfiguredPractice() alone, so the page could
+    // not answer "how many questions will this actually give me" until you pressed Start and
+    // read a toast. Six of the ten controls had no change handler at all. Extracted so the
+    // preview, the inclusion counts and the session itself agree by construction.
 
-    function startAdvancedConfiguredPractice() {
-        // `min`/`max` on a number <input> is validation metadata only — nothing enforces it
-        // outside a form submit, and this page has no form. A typed "-5" used to sail straight
-        // through: a negative Duration made the `> 0` test at the session timer fail, so the
-        // timer silently never started while the dropdown still read "Limit overall time"; a
-        // negative Countdown put expectedEndTime in the past, so every question auto-marked
-        // wrong on the first tick. Clamp to the bounds the markup already advertises
-        // (index.html:1430 and 1445) and write the corrected value back so the fix is visible
-        // rather than silent.
-        const clampCfgNumber = (input, min, max, fallback) => {
+    /** Every control on page-practice-config, in the shape the session and storage both use. */
+    function readAdvancedSetupConfig(clampInputs = false) {
+        const g = id => document.getElementById('prac-cfg-' + id);
+        const num = (input, min, max, fallback) => {
             if (!input) return fallback;
             let n = parseInt(input.value, 10);
             if (!Number.isFinite(n)) n = fallback;
             n = Math.min(max, Math.max(min, n));
-            if (String(n) !== String(input.value)) input.value = n;
+            // Only Start writes the corrected value back. Doing it on every keystroke would
+            // fight the user mid-type: "-" would become 2 before they reached the 5.
+            if (clampInputs && String(n) !== String(input.value)) input.value = n;
             return n;
         };
-
-        let subject = document.getElementById('prac-cfg-subject').value;
-        let topic = document.getElementById('prac-cfg-topic').value;
-        let difficulty = document.getElementById('prac-cfg-difficulty').value;
-        let count = parseInt(document.getElementById('prac-cfg-count').value) || 20;
-        let timer = document.getElementById('prac-cfg-timer').value;
-        let timerMin = clampCfgNumber(document.getElementById('prac-cfg-timer-min'), 2, 180, 20);
-        let perQTimer = document.getElementById('prac-cfg-per-q-timer').value;
-        let perQSec = clampCfgNumber(document.getElementById('prac-cfg-per-q-sec'), 5, 300, 30);
-        let negativeMarking = document.getElementById('prac-cfg-neg-marking').value;
-        let feedback = document.getElementById('prac-cfg-feedback').value;
-        let shuffleQs = document.getElementById('prac-cfg-shuffle-qs').checked;
-        let shuffleOpts = document.getElementById('prac-cfg-shuffle-opts').checked;
-        
-        let incWrong = document.getElementById('prac-cfg-inc-wrong').checked;
-        let incBookmarks = document.getElementById('prac-cfg-inc-bookmarks').checked;
-        let incUnattempted = document.getElementById('prac-cfg-inc-unattempted').checked;
-        let incCustom = document.getElementById('prac-cfg-inc-custom').checked;
-        
-        // Save setup inside storage
-        let configObj = {
-            subject, topic, difficulty, count, timer, timerMin, perQTimer, perQSec,
-            negativeMarking, feedback, shuffleQs, shuffleOpts,
-            incWrong, incBookmarks, incUnattempted, incCustom
+        const useAll = !!(g('count-all') && g('count-all').checked);
+        return {
+            subject: g('subject').value,
+            topic: g('topic').value,
+            difficulty: g('difficulty').value,
+            count: useAll ? 'all' : (parseInt(g('count').value, 10) || 20),
+            timer: g('timer').value,
+            timerMin: num(g('timer-min'), 2, 180, 20),
+            perQTimer: g('per-q-timer').value,
+            perQSec: num(g('per-q-sec'), 5, 300, 30),
+            negativeMarking: g('neg-marking').value,
+            feedback: g('feedback').value,
+            shuffleQs: g('shuffle-qs').checked,
+            shuffleOpts: g('shuffle-opts').checked,
+            incWrong: g('inc-wrong').checked,
+            incBookmarks: g('inc-bookmarks').checked,
+            incUnattempted: g('inc-unattempted').checked,
+            incCustom: g('inc-custom').checked,
+            incDue: !!(g('inc-due') && g('inc-due').checked)
         };
-        KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(configObj));
+    }
 
-        // Gather matching items list
-        let pool = [];
-        let allQuestions = getAllQuestions();
-        
-        // Log attempt sets
-        let loggedIds = new Set(timingLog.map(l => l.qid));
-        let wrongSet = new Set(localData.wrong);
-        let bkSet = new Set(localData.bookmarked);
-        let customSet = new Set(getCustomQuestions().map(q => q.id));
+    /**
+     * Questions that are hard *for this student*, not hard according to whoever typed them in.
+     *
+     * The author-assigned `difficulty` field is nearly empty data: questions.json carries none
+     * at all and every import defaults to 'Medium' (js/app.js:10035), so the Easy/Medium/Hard
+     * dropdown can only ever sort the handful of questions somebody graded by hand. timingLog
+     * already stores {qid, timeSec, correct} for every answer ever given, which is a far better
+     * signal and is this student's own. "Hard for me" = got it wrong at least once, or answered
+     * it right but 1.5x slower than their own average (right-but-slow is not yet fluent).
+     */
+    function getPersonalHardIdSet() {
+        const hard = new Set((localData && Array.isArray(localData.wrong)) ? localData.wrong.map(String) : []);
+        if (!Array.isArray(timingLog) || timingLog.length === 0) return hard;
+        const per = new Map();
+        let totalTime = 0, totalTimed = 0;
+        timingLog.forEach(l => {
+            if (!l || l.qid === undefined || l.qid === null) return;
+            const id = String(l.qid);
+            const rec = per.get(id) || { wrong: 0, time: 0, timed: 0 };
+            if (l.correct === false) rec.wrong++;
+            const t = Number(l.timeSec);
+            if (Number.isFinite(t) && t > 0) { rec.time += t; rec.timed++; totalTime += t; totalTimed++; }
+            per.set(id, rec);
+        });
+        const avg = totalTimed > 0 ? totalTime / totalTimed : 0;
+        per.forEach((rec, id) => {
+            if (rec.wrong > 0) hard.add(id);
+            else if (avg > 0 && rec.timed > 0 && (rec.time / rec.timed) >= avg * 1.5) hard.add(id);
+        });
+        return hard;
+    }
 
-        // Which gate rejected what, so the failure message below can name the setting to change
-        // instead of blaming "your filter metrics" as a whole.
+    var _advDueCache = null;
+
+    /**
+     * The spaced-review due set, cached for a few seconds.
+     *
+     * Two reasons this is not called inline. getDueQuestions() re-parses its store, walks the
+     * whole bank and can write back — and updateSizingDiagnosticsInSetup() now fires on every
+     * slider tick, so an uncached call would run all of that ~60x a second while dragging.
+     * Second, it PRUNES every SM2 record whose id is missing from the array it is handed, so it
+     * must always see the full bank: passing a filtered pool would silently delete the review
+     * schedule of every other subject. Filter its result, never its input.
+     */
+    function getAdvancedDueIdSet(allQuestions) {
+        const now = Date.now();
+        const key = allQuestions.length;
+        if (_advDueCache && _advDueCache.key === key && (now - _advDueCache.at) < 4000) {
+            return _advDueCache.set;
+        }
+        let set = new Set();
+        if (window.KrishiSM2Engine && typeof window.KrishiSM2Engine.getDueQuestions === 'function') {
+            try {
+                set = new Set(window.KrishiSM2Engine.getDueQuestions(allQuestions).map(q => String(q.id || q.q)));
+            } catch (ex) {
+                console.warn('Spaced-review pool unavailable', ex);
+            }
+        }
+        _advDueCache = { key, at: now, set };
+        return set;
+    }
+
+    /**
+     * The difficulty gate, extracted because it now has three modes and is the part most easily
+     * broken. Normalised on both sides, and a missing difficulty reads as Medium — the same
+     * default normalizeQuestion() stamps on imports. A strict !== against a raw field rejected
+     * the entire static bank, which stores no difficulty field at all.
+     */
+    function advancedDifficultyMatches(q, cfg, hardSet) {
+        const norm = s => (s === undefined || s === null ? '' : String(s)).trim().toLowerCase();
+        if (cfg.difficulty === 'all') return true;
+        if (cfg.difficulty === 'weak') return !!hardSet && hardSet.has(String(q.id));
+        return norm(q.difficulty || 'Medium') === norm(cfg.difficulty);
+    }
+
+    /**
+     * The questions a given Advanced Setup config would actually serve.
+     *
+     * Returns the pool plus the two survival tallies (so a caller can say *which* control
+     * emptied it), the scoped candidate list before the Include boxes are applied (so the
+     * counts beside those boxes can describe this subject/topic instead of the whole bank),
+     * and the id sets it built along the way.
+     */
+    function buildAdvancedPool(cfg) {
+        const allQuestions = getAllQuestions();
+        const norm = s => (s === undefined || s === null ? '' : String(s)).trim().toLowerCase();
+        const loggedIds = new Set((Array.isArray(timingLog) ? timingLog : []).map(l => String(l && l.qid)));
+        const wrongSet = new Set(((localData && localData.wrong) || []).map(String));
+        const bkSet = new Set(((localData && localData.bookmarked) || []).map(String));
+        const customSet = new Set(getCustomQuestions().map(q => String(q.id)));
+        const dueSet = getAdvancedDueIdSet(allQuestions);
+        const hardSet = (cfg.difficulty === 'weak') ? getPersonalHardIdSet() : null;
+        const anyInclusion = cfg.incWrong || cfg.incBookmarks || cfg.incUnattempted || cfg.incCustom || cfg.incDue;
+
+        const pool = [];
+        const scoped = [];
         let survivedCategory = 0;
-        let survivedDifficulty = 0;
-
         allQuestions.forEach(q => {
-            // Apply category and difficulty gates
-            if (subject !== 'all' && (q.sub || "").trim().toLowerCase() !== (subject || "").trim().toLowerCase()) return;
-            if (topic !== 'all' && (q.topic || "").trim().toLowerCase() !== (topic || "").trim().toLowerCase()) return;
+            const id = String(q.id);
+            if (cfg.subject !== 'all' && norm(q.sub) !== norm(cfg.subject)) return;
+            if (cfg.topic !== 'all' && norm(q.topic) !== norm(cfg.topic)) return;
             survivedCategory++;
-            // Normalised like the two gates above it, which this one used to skip. Two separate
-            // faults: a strict !== against a raw field meant "Easy" never matched "easy" or
-            // " Easy" from an import, and questions.json carries no `difficulty` at all — every
-            // static question reads undefined, so all three non-"all" options produced an empty
-            // pool and the page just said no questions matched. Missing difficulty defaults to
-            // 'Medium', the same default normalizeQuestion() stamps on imports (js/app.js:9674).
-            if (difficulty !== 'all' && (q.difficulty || 'Medium').trim().toLowerCase() !== (difficulty || "").trim().toLowerCase()) return;
-            survivedDifficulty++;
+            if (!advancedDifficultyMatches(q, cfg, hardSet)) return;
+            scoped.push(q);
 
-            // Check filters inclusions
-            let isCustom = customSet.has(q.id);
-            let isWrong = wrongSet.has(q.id);
-            let isBookmarked = bkSet.has(q.id);
-            let isUnattempted = !loggedIds.has(q.id);
-
-            let matchesInclusion = false;
-            if (incWrong && isWrong) matchesInclusion = true;
-            if (incBookmarks && isBookmarked) matchesInclusion = true;
-            if (incCustom && isCustom) matchesInclusion = true;
-            if (incUnattempted && isUnattempted) matchesInclusion = true;
-
-            // Default inclusion if filters are all off
-            if (!incWrong && !incBookmarks && !incUnattempted && !incCustom) {
-                matchesInclusion = true;
-            }
-
-            if (matchesInclusion) {
-                pool.push(q);
-            }
+            let keep = !anyInclusion;
+            if (cfg.incWrong && wrongSet.has(id)) keep = true;
+            if (cfg.incBookmarks && bkSet.has(id)) keep = true;
+            if (cfg.incCustom && customSet.has(id)) keep = true;
+            if (cfg.incUnattempted && !loggedIds.has(id)) keep = true;
+            if (cfg.incDue && dueSet.has(id)) keep = true;
+            if (keep) pool.push(q);
         });
 
-        if (pool.length === 0) {
-            let scope = topic !== 'all' ? `"${topic}"` : (subject !== 'all' ? `"${subject}"` : 'your question bank');
-            if (survivedCategory === 0) {
-                showToast(`No questions found in ${scope}. Pick a different subject or topic.`);
-            } else if (survivedDifficulty === 0) {
-                showToast(`No "${difficulty}" questions in ${scope}. Try "Any difficulty mixed".`);
+        return {
+            pool, scoped, survivedCategory, survivedDifficulty: scoped.length,
+            sets: { loggedIds, wrongSet, bkSet, customSet, dueSet }
+        };
+    }
+
+    /** Why an empty pool is empty, naming the control that emptied it. */
+    function describeEmptyAdvancedPool(cfg, res) {
+        const scope = cfg.topic !== 'all' ? `"${cfg.topic}"`
+            : (cfg.subject !== 'all' ? `"${cfg.subject}"` : 'your question bank');
+        if (res.survivedCategory === 0) {
+            return `No questions found in ${scope}. Pick a different subject or topic.`;
+        }
+        if (res.survivedDifficulty === 0) {
+            return cfg.difficulty === 'weak'
+                ? `Nothing in ${scope} counts as weak for you yet. Answer a few, or pick "Any difficulty mixed".`
+                : `No "${cfg.difficulty}" questions in ${scope}. Try "Any difficulty mixed".`;
+        }
+        return `${res.survivedDifficulty} question(s) in ${scope}, but none match the "Include" boxes. Untick some.`;
+    }
+
+    function updateSizingDiagnosticsInSetup() {
+        if (!document.getElementById('prac-cfg-subject')) return;
+        const cfg = readAdvancedSetupConfig(false);
+        const res = buildAdvancedPool(cfg);
+        const s = res.sets;
+
+        // The counts describe the current subject / topic / difficulty, not the whole bank. A
+        // "Bookmarks (12)" label next to a subject holding 2 of them was the page's most
+        // misleading number. Counting from `scoped` — real questions that passed the category
+        // gates — also makes a deleted-but-still-listed id impossible by construction, which is
+        // what getValidWrongCount()/getValidBookmarkedCount() had to strip by hand.
+        const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        setText('prac-cfg-cnt-wrong', res.scoped.filter(q => s.wrongSet.has(String(q.id))).length);
+        setText('prac-cfg-cnt-bookmarks', res.scoped.filter(q => s.bkSet.has(String(q.id))).length);
+        setText('prac-cfg-cnt-unattempt', res.scoped.filter(q => !s.loggedIds.has(String(q.id))).length);
+        setText('prac-cfg-cnt-custom', res.scoped.filter(q => s.customSet.has(String(q.id))).length);
+        setText('prac-cfg-cnt-due', res.scoped.filter(q => s.dueSet.has(String(q.id))).length);
+
+        renderAdvancedSetupPreview(cfg, res);
+    }
+
+    /** The live "this run will give you N questions" line, plus the two warnings. */
+    function renderAdvancedSetupPreview(cfg, res) {
+        const previewEl = document.getElementById('prac-cfg-preview');
+        const warnEl = document.getElementById('prac-cfg-warn');
+        const startBtn = document.getElementById('prac-cfg-start');
+        const total = res.pool.length;
+        const take = (cfg.count === 'all') ? total : Math.min(cfg.count, total);
+
+        if (previewEl) {
+            if (total === 0) {
+                previewEl.innerHTML = `⚠️ ${escapeCreatorHtml(describeEmptyAdvancedPool(cfg, res))}`;
+                previewEl.className = 'text-xs font-semibold p-2.5 rounded-xl bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300';
             } else {
-                showToast(`${survivedDifficulty} question(s) in ${scope}, but none match the "Include" boxes. Untick some.`);
+                const scopeLabel = cfg.topic !== 'all' ? cfg.topic : (cfg.subject !== 'all' ? cfg.subject : 'all subjects');
+                previewEl.innerHTML = `🎯 <b>${take}</b> question${take === 1 ? '' : 's'} ready from <b>${escapeCreatorHtml(scopeLabel)}</b>`
+                    + (total > take ? ` <span class="opacity-70">(${total} match, ${total - take} held back)</span>` : '');
+                previewEl.className = 'text-xs font-semibold p-2.5 rounded-xl bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
             }
+        }
+
+        const warns = [];
+        // Asking for 50 and getting 12 used to be silent: the session just ended early and the
+        // score looked like a short quiz for no visible reason.
+        if (total > 0 && cfg.count !== 'all' && total < cfg.count) {
+            warns.push(`Only ${total} match your filters, so this run is ${total} long, not ${cfg.count}.`);
+        }
+        // Both timers on at once is legal but usually a mistake: the whole-paper clock can expire
+        // before the per-question clocks have had time to run, ending the paper mid-question.
+        if (cfg.timer === 'on' && cfg.perQTimer === 'on' && take > 0 && (cfg.timerMin * 60) < (take * cfg.perQSec)) {
+            const need = Math.ceil((take * cfg.perQSec) / 60);
+            warns.push(`Your ${cfg.timerMin} min total clock ends before ${take} x ${cfg.perQSec}s does. Allow ~${need} min, or turn one timer off.`);
+        }
+        if (warnEl) {
+            // Plain text markers, not lucide <i> nodes: this runs on every slider tick, and
+            // lucide.createIcons() rescans the whole document each call.
+            warnEl.innerHTML = warns.map(w => `<div class="flex gap-1.5"><span>⚠️</span><span>${escapeCreatorHtml(w)}</span></div>`).join('');
+            warnEl.classList.toggle('hidden', warns.length === 0);
+        }
+        if (startBtn) {
+            startBtn.disabled = total === 0;
+            startBtn.classList.toggle('opacity-50', total === 0);
+            startBtn.classList.toggle('pointer-events-none', total === 0);
+            const label = startBtn.querySelector('.prac-cfg-start-label');
+            // The verb comes from dataset.baseText so a Nepali or custom label survives: this
+            // is the one button on the page that translateAppLabels() localises, and simply
+            // overwriting it with an English sentence would undo the user's language setting.
+            if (label) {
+                const base = label.dataset.baseText || 'Start Practice';
+                label.textContent = total === 0 ? 'No questions match' : `${base} · ${take} Qs`;
+            }
+        }
+    }
+
+    /** One source of truth for every control's default, shared by restore and reset. */
+    function advancedSetupDefaults() {
+        return {
+            subject: 'all', topic: 'all', difficulty: 'all', count: 20,
+            timer: 'off', timerMin: 20, perQTimer: 'off', perQSec: 30,
+            negativeMarking: 'off', feedback: 'immediate', shuffleQs: true, shuffleOpts: true,
+            incWrong: true, incBookmarks: true, incUnattempted: true, incCustom: true, incDue: false
+        };
+    }
+
+    /**
+     * The Advanced Setup store: `{ last, presets: [{name, cfg}] }`.
+     *
+     * Deliberately reuses the existing `krishi_last_practice_config` key instead of adding a new
+     * one. That key is already in the sync key list, the cloud field map, collect and apply, so
+     * growing its *value* costs no sync-layer change — while a key that is persisted locally but
+     * absent from the cloud payload is exactly the shape that builds an endless save→sync→save
+     * loop. Anything written before presets existed was the bare config, so it is read as `last`.
+     */
+    function readAdvancedSetupStore() {
+        const raw = KrishiStorage.getItem('krishi_last_practice_config');
+        if (!raw) return { last: null, presets: [] };
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { last: null, presets: [] };
+            if (!('last' in parsed) && !('presets' in parsed)) return { last: parsed, presets: [] };
+            return {
+                last: (parsed.last && typeof parsed.last === 'object') ? parsed.last : null,
+                presets: Array.isArray(parsed.presets) ? parsed.presets.filter(p => p && p.name && p.cfg) : []
+            };
+        } catch (ex) {
+            console.warn('Failed reading practice setup store', ex);
+            return { last: null, presets: [] };
+        }
+    }
+
+    function writeAdvancedSetupStore(store) {
+        KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify({
+            last: (store && store.last) || null,
+            // Capped at 8: this value rides along in the synced users doc, and an uncapped list of
+            // 17-field configs is a slow leak into a document with a hard 1 MB ceiling.
+            presets: ((store && store.presets) || []).slice(0, 8)
+        }));
+    }
+
+    function saveAdvancedSetupConfig(cfg) {
+        const store = readAdvancedSetupStore();
+        store.last = cfg;
+        writeAdvancedSetupStore(store);
+    }
+
+    /** Push a saved (or default) config back onto the controls, then refresh the preview. */
+    function applyAdvancedSetupConfig(conf, applySubject = true) {
+        const d = advancedSetupDefaults();
+        const c = Object.assign({}, d, conf || {});
+        if (c.count !== 'all' && !Number.isFinite(parseInt(c.count, 10))) c.count = d.count;
+        const g = id => document.getElementById('prac-cfg-' + id);
+        const setVal = (id, v) => { const el = g(id); if (el) el.value = v; };
+        const setChk = (id, v) => { const el = g(id); if (el) el.checked = !!v; };
+
+        if (applySubject) {
+            const subSel = g('subject');
+            subSel.value = c.subject || 'all';
+            // The subject a saved config names may have been deleted or renamed since it was
+            // saved. Without this the select renders blank and every later filter compares
+            // against '', which rejects the whole bank.
+            if (subSel.selectedIndex === -1) subSel.value = 'all';
+            onPracticeSubjectChanged(c.topic || 'all');
+        }
+
+        setVal('difficulty', c.difficulty);
+        if (g('difficulty').selectedIndex === -1) g('difficulty').value = 'all';
+        setChk('count-all', c.count === 'all');
+        setVal('count', c.count === 'all' ? d.count : c.count);
+        g('count').dispatchEvent(new Event('input'));
+        setVal('timer', c.timer);
+        setVal('timer-min', c.timerMin);
+        setVal('per-q-timer', c.perQTimer);
+        setVal('per-q-sec', c.perQSec);
+        setVal('neg-marking', c.negativeMarking);
+        setVal('feedback', c.feedback);
+        setChk('shuffle-qs', c.shuffleQs);
+        setChk('shuffle-opts', c.shuffleOpts);
+        setChk('inc-wrong', c.incWrong);
+        setChk('inc-bookmarks', c.incBookmarks);
+        setChk('inc-unattempted', c.incUnattempted);
+        setChk('inc-custom', c.incCustom);
+        setChk('inc-due', c.incDue);
+
+        toggleConfigTimerFields();
+        toggleConfigPerQTimerFields();
+        toggleConfigCountAllField();
+        updateSizingDiagnosticsInSetup();
+    }
+
+    /** The slider is meaningless while "use every match" is ticked, so say so. */
+    function toggleConfigCountAllField() {
+        const all = document.getElementById('prac-cfg-count-all');
+        const row = document.getElementById('prac-cfg-count-row');
+        if (!all || !row) return;
+        row.classList.toggle('opacity-40', all.checked);
+        row.classList.toggle('pointer-events-none', all.checked);
+    }
+
+    function renderAdvancedSetupPresets() {
+        const wrap = document.getElementById('prac-cfg-presets');
+        if (!wrap) return;
+        const presets = readAdvancedSetupStore().presets;
+        wrap.innerHTML = presets.length === 0
+            ? `<span class="text-[11px] text-slate-400 dark:text-slate-500">No saved setups yet — configure below, then tap Save Setup.</span>`
+            : presets.map((p, i) => `
+            <span class="inline-flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full pl-3 pr-1 py-1 text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                <button type="button" onclick="applyAdvancedSetupPreset(${i})" class="max-w-[130px] truncate">${escapeCreatorHtml(p.name)}</button>
+                <button type="button" onclick="deleteAdvancedSetupPreset(${i}, event)" aria-label="Delete saved setup ${escapeCreatorHtml(p.name)}" class="w-5 h-5 grid place-items-center rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 text-sm leading-none">&times;</button>
+            </span>`).join('');
+        // Also the only createIcons() pass this page gets: the two static header-row icons above
+        // stay blank without it, because nothing bootstraps lucide on navigate.
+        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+    }
+
+    function saveAdvancedSetupPreset() {
+        const cfg = readAdvancedSetupConfig(true);
+        const suggested = cfg.topic !== 'all' ? cfg.topic : (cfg.subject !== 'all' ? cfg.subject : 'My setup');
+        const name = (prompt('Name this setup', suggested) || '').trim().slice(0, 40);
+        if (!name) return;
+        const store = readAdvancedSetupStore();
+        const idx = store.presets.findIndex(p => String(p.name).toLowerCase() === name.toLowerCase());
+        if (idx >= 0) {
+            store.presets[idx] = { name, cfg };
+        } else if (store.presets.length >= 8) {
+            showToast('8 saved setups is the limit. Delete one first.');
+            return;
+        } else {
+            store.presets.push({ name, cfg });
+        }
+        store.last = cfg;
+        writeAdvancedSetupStore(store);
+        renderAdvancedSetupPresets();
+        showToast(`Saved "${name}".`);
+    }
+
+    function applyAdvancedSetupPreset(index) {
+        const p = readAdvancedSetupStore().presets[index];
+        if (!p) { showToast('That saved setup is gone.'); renderAdvancedSetupPresets(); return; }
+        applyAdvancedSetupConfig(p.cfg, true);
+        showToast(`Loaded "${p.name}".`);
+    }
+
+    function deleteAdvancedSetupPreset(index, ev) {
+        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        const store = readAdvancedSetupStore();
+        const removed = store.presets.splice(index, 1)[0];
+        if (!removed) return;
+        writeAdvancedSetupStore(store);
+        renderAdvancedSetupPresets();
+        showToast(`Deleted "${removed.name}".`);
+    }
+
+    /**
+     * "Target my weak areas": point the whole page at the subject this student scores worst in,
+     * and switch the difficulty gate to the derived "Hard for me" band. Nothing here is a new
+     * statistic — getWeakestSubject() already backs the home-screen weak-subject card.
+     */
+    function targetWeakAreasInSetup() {
+        const weak = getWeakestSubject();
+        if (!weak.hasData) {
+            showToast('Not enough attempts yet to know your weak subject. Practise a little first.');
+            return;
+        }
+        const cfg = Object.assign(readAdvancedSetupConfig(false), {
+            subject: weak.subject, topic: 'all', difficulty: 'weak',
+            incWrong: true, incBookmarks: false, incUnattempted: false, incCustom: false, incDue: true
+        });
+        applyAdvancedSetupConfig(cfg, true);
+        const res = buildAdvancedPool(readAdvancedSetupConfig(false));
+        showToast(res.pool.length > 0
+            ? `${weak.subject} is your weakest at ${weak.accuracy}%. ${res.pool.length} question(s) queued.`
+            : `${weak.subject} is your weakest at ${weak.accuracy}%, but nothing there is due or wrong right now.`);
+    }
+
+    function startAdvancedConfiguredPractice() {
+        // Every control is read (and clamped) by readAdvancedSetupConfig, and the pool comes from
+        // the same buildAdvancedPool() the live preview uses — so the count on the button and the
+        // count in the session cannot disagree.
+        //
+        // Clamping matters because `min`/`max` on a number <input> is validation metadata only:
+        // nothing enforces it outside a form submit, and this page has no form. A typed "-5" used
+        // to sail straight through — a negative Duration made the `> 0` test at the session timer
+        // fail, so the timer silently never started while the dropdown still read "Limit overall
+        // time"; a negative Countdown put expectedEndTime in the past, so every question
+        // auto-marked wrong on the first tick.
+        const cfg = readAdvancedSetupConfig(true);
+        saveAdvancedSetupConfig(cfg);
+
+        const res = buildAdvancedPool(cfg);
+        if (res.pool.length === 0) {
+            showToast(describeEmptyAdvancedPool(cfg, res));
+            updateSizingDiagnosticsInSetup();
             return;
         }
 
-        // Apply Shuffling
-        if (shuffleQs) {
-            pool = shuffle(pool);
-        }
-        pool = pool.slice(0, Math.min(count, pool.length));
+        let pool = cfg.shuffleQs ? shuffle(res.pool.slice()) : res.pool.slice();
+        // Math.min('all', n) is NaN and slice(0, NaN) returns [], so the "use every matching
+        // question" box needs its own branch or it would start an empty session.
+        pool = pool.slice(0, cfg.count === 'all' ? pool.length : Math.min(cfg.count, pool.length));
 
-        // Start session config
-        state.activeConfig = configObj;
-        setupMCQSession(pool, false, timer === 'on' ? timerMin * 60 : 0);
+        state.activeConfig = cfg;
+        setupMCQSession(pool, false, cfg.timer === 'on' ? cfg.timerMin * 60 : 0);
     }
 
     // ==================== SMART MODES ENGINE ====================
@@ -13598,7 +13883,20 @@ document.querySelectorAll('button').forEach(btn => {
     // Start Practice
     if (orig === '🎯 Start Practice' || orig === 'Start Practice' || orig.includes('Start Practice Challenge')) {
         let prefix = orig.includes('🎯') ? '🎯 ' : (orig.includes('⚡') ? '⚡ ' : '');
-        btn.textContent = prefix + labels.startPractice;
+        // Write into the label span when the button has one. Assigning to btn.textContent
+        // replaces every child node, and the Advanced Setup button carries a
+        // .prac-cfg-start-label that renderAdvancedSetupPreview() retitles with the live
+        // question count. This function runs at boot, so it used to delete that span before
+        // the page was ever opened, leaving the count label permanently dead.
+        let startLabel = btn.querySelector('.prac-cfg-start-label');
+        if (startLabel) {
+            startLabel.textContent = labels.startPractice;
+            // Kept so the live-count renderer can rebuild "<verb> · N Qs" in the chosen language
+            // instead of hardcoding an English verb over the top of a translated one.
+            startLabel.dataset.baseText = labels.startPractice;
+        } else {
+            btn.textContent = prefix + labels.startPractice;
+        }
     }
     
     // Save Question

@@ -86,7 +86,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=yov34ug" rel="stylesheet">
+    <link href="./index.css?v=qiz75vi" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1377,6 +1377,20 @@
                 </div>
             </div>
 
+            <!-- Saved setups + one-tap weak-area targeting. The presets live inside the existing
+                 krishi_last_practice_config value, so no new synced key was introduced. -->
+            <div class="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-2.5">
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="targetWeakAreasInSetup(); playSound('click');" class="flex-1 flex items-center justify-center gap-1.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-300 py-2 rounded-xl font-black text-[10px] cursor-pointer transition">
+                        <i data-lucide="crosshair" class="w-3.5 h-3.5"></i> Target My Weak Areas
+                    </button>
+                    <button type="button" onclick="saveAdvancedSetupPreset(); playSound('click');" class="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-705 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl font-black text-[10px] cursor-pointer transition">
+                        <i data-lucide="bookmark-plus" class="w-3.5 h-3.5"></i> Save Setup
+                    </button>
+                </div>
+                <div id="prac-cfg-presets" class="flex flex-wrap items-center gap-1.5"></div>
+            </div>
+
             <div class="p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-150 dark:border-slate-700 shadow-sm space-y-4">
                 <!-- Subject selection -->
                 <div>
@@ -1389,7 +1403,7 @@
                 <!-- Topic selection -->
                 <div>
                     <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Select Target Topic / Chapter</label>
-                    <select id="prac-cfg-topic" class="w-full mt-1 p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
+                    <select id="prac-cfg-topic" onchange="updateSizingDiagnosticsInSetup()" class="w-full mt-1 p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
                         <option value="all">All Topics combined</option>
                     </select>
                 </div>
@@ -1397,8 +1411,12 @@
                 <!-- Difficulty selection -->
                 <div>
                     <label class="text-[9px] font-black uppercase text-slate-400 tracking-wider block">Difficulty Grade</label>
-                    <select id="prac-cfg-difficulty" class="w-full mt-1 p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
+                    <select id="prac-cfg-difficulty" onchange="updateSizingDiagnosticsInSetup()" class="w-full mt-1 p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
                         <option value="all">Any difficulty mixed</option>
+                        <!-- "Hard for me" is derived from this student's own timingLog, because the
+                             author-assigned grade below is nearly empty data: the static bank ships
+                             none at all and every import defaults to Medium. -->
+                        <option value="weak">🎯 Hard for me (my own record)</option>
                         <option value="Easy">Easy questions only</option>
                         <option value="Medium">Medium complexity</option>
                         <option value="Hard">Hard / Senior complex</option>
@@ -1411,28 +1429,38 @@
                         <span>Assemble Question Count</span>
                         <span id="prac-cfg-cnt-val" class="text-indigo-600 dark:text-indigo-455 font-bold">20 Questions</span>
                     </label>
-                    <input type="range" id="prac-cfg-count" value="20" min="5" max="100" step="5" oninput="document.getElementById('prac-cfg-cnt-val').textContent = this.value + ' Questions'" class="w-full mt-1.5 accent-indigo-600 cursor-ew-resize">
-                    <div class="flex justify-between gap-1 mt-1 text-[8px] font-black">
-                        <button onclick="document.getElementById('prac-cfg-count').value=10; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">10</button>
-                        <button onclick="document.getElementById('prac-cfg-count').value=20; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 rounded cursor-pointer">20</button>
-                        <button onclick="document.getElementById('prac-cfg-count').value=30; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">30</button>
-                        <button onclick="document.getElementById('prac-cfg-count').value=50; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">50</button>
-                        <button onclick="document.getElementById('prac-cfg-count').value=100; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">100</button>
+                    <div id="prac-cfg-count-row" class="transition-opacity">
+                        <input type="range" id="prac-cfg-count" value="20" min="5" max="100" step="5" oninput="document.getElementById('prac-cfg-cnt-val').textContent = this.value + ' Questions'; updateSizingDiagnosticsInSetup();" class="w-full mt-1.5 accent-indigo-600 cursor-ew-resize">
+                        <!-- Jump-to shortcuts, not axis labels: the bare numbers under a slider read
+                             as tick marks, so several taps here looked like nothing happened. -->
+                        <div class="flex justify-between items-center gap-1 mt-1 text-[8px] font-black">
+                            <span class="text-slate-400 dark:text-slate-500 uppercase tracking-wider">Jump to</span>
+                            <button onclick="document.getElementById('prac-cfg-count').value=10; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">10</button>
+                            <button onclick="document.getElementById('prac-cfg-count').value=20; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 rounded cursor-pointer">20</button>
+                            <button onclick="document.getElementById('prac-cfg-count').value=30; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">30</button>
+                            <button onclick="document.getElementById('prac-cfg-count').value=50; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">50</button>
+                            <button onclick="document.getElementById('prac-cfg-count').value=100; document.getElementById('prac-cfg-count').dispatchEvent(new Event('input')); playSound('click');" class="p-1 px-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded cursor-pointer">100</button>
+                        </div>
                     </div>
+                    <!-- The slider caps at 100, so a 300-question subject could not be revised in
+                         one pass however far you dragged it. -->
+                    <label class="flex items-center gap-1.5 mt-2 text-[10px] font-black text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                        <input type="checkbox" id="prac-cfg-count-all" onchange="toggleConfigCountAllField(); updateSizingDiagnosticsInSetup(); playSound('click');"> Use every matching question (ignore the slider)
+                    </label>
                 </div>
 
                 <!-- Timeline and per question config -->
                 <div class="grid grid-cols-2 gap-3 pt-1">
                     <div>
                         <label class="text-[9px] font-black uppercase text-slate-400 block mb-1">Total Timer Limit</label>
-                        <select id="prac-cfg-timer" onchange="toggleConfigTimerFields()" class="w-full p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
+                        <select id="prac-cfg-timer" onchange="toggleConfigTimerFields(); updateSizingDiagnosticsInSetup();" class="w-full p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
                             <option value="off">Unrestricted time</option>
                             <option value="on">Limit overall time</option>
                         </select>
                     </div>
                     <div id="prac-cfg-timer-min-container" class="hidden">
                         <label class="text-[9px] font-black uppercase text-slate-400 block mb-1">Duration (minutes)</label>
-                        <input type="number" id="prac-cfg-timer-min" value="20" min="2" max="180" class="w-full p-2 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100">
+                        <input type="number" id="prac-cfg-timer-min" value="20" min="2" max="180" oninput="updateSizingDiagnosticsInSetup()" class="w-full p-2 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100">
                     </div>
                 </div>
 
@@ -1440,14 +1468,14 @@
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="text-[9px] font-black uppercase text-slate-400 block mb-1">Per-Question Timer</label>
-                        <select id="prac-cfg-per-q-timer" onchange="toggleConfigPerQTimerFields()" class="w-full p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
+                        <select id="prac-cfg-per-q-timer" onchange="toggleConfigPerQTimerFields(); updateSizingDiagnosticsInSetup();" class="w-full p-2.5 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100 cursor-pointer">
                             <option value="off">Disable per Q limit</option>
                             <option value="on">Enable per Q limit</option>
                         </select>
                     </div>
                     <div id="prac-cfg-per-q-sec-container" class="hidden">
                         <label class="text-[9px] font-black uppercase text-slate-400 block mb-1">Countdown (sec)</label>
-                        <input type="number" id="prac-cfg-per-q-sec" value="30" min="5" max="300" class="w-full p-2 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100">
+                        <input type="number" id="prac-cfg-per-q-sec" value="30" min="5" max="300" oninput="updateSizingDiagnosticsInSetup()" class="w-full p-2 rounded-xl border text-xs bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 text-slate-800 dark:text-slate-100">
                     </div>
                 </div>
 
@@ -1482,24 +1510,39 @@
                 <!-- Part of inclusion metrics -->
                 <div class="space-y-2 pt-2 border-t border-dashed border-slate-150 dark:border-slate-700">
                     <span class="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Question Pool inclusion metrics:</span>
+                    <!-- Every count below is scoped to the subject / topic / difficulty chosen
+                         above, so "Bookmarks (12)" can no longer promise 12 in a subject holding
+                         two of them. Untick all five to mean "everything in scope". -->
                     <div class="grid grid-cols-2 gap-2 text-[9px] font-black text-slate-700 dark:text-slate-300">
                         <label class="flex items-center gap-1.5 bg-slate-50/55 dark:bg-slate-900/50 p-2.5 rounded-xl cursor-pointer">
-                            <input type="checkbox" id="prac-cfg-inc-wrong" checked> Mistake History (<span id="prac-cfg-cnt-wrong">0</span>)
+                            <input type="checkbox" id="prac-cfg-inc-wrong" onchange="updateSizingDiagnosticsInSetup()" checked> Mistake History (<span id="prac-cfg-cnt-wrong">0</span>)
                         </label>
                         <label class="flex items-center gap-1.5 bg-slate-50/55 dark:bg-slate-900/50 p-2.5 rounded-xl cursor-pointer">
-                            <input type="checkbox" id="prac-cfg-inc-bookmarks" checked> Bookmarks (<span id="prac-cfg-cnt-bookmarks">0</span>)
+                            <input type="checkbox" id="prac-cfg-inc-bookmarks" onchange="updateSizingDiagnosticsInSetup()" checked> Bookmarks (<span id="prac-cfg-cnt-bookmarks">0</span>)
                         </label>
                         <label class="flex items-center gap-1.5 bg-slate-50/55 dark:bg-slate-900/50 p-2.5 rounded-xl cursor-pointer">
-                            <input type="checkbox" id="prac-cfg-inc-unattempted" checked> Unattempted Qs (<span id="prac-cfg-cnt-unattempt">0</span>)
+                            <input type="checkbox" id="prac-cfg-inc-unattempted" onchange="updateSizingDiagnosticsInSetup()" checked> Unattempted Qs (<span id="prac-cfg-cnt-unattempt">0</span>)
                         </label>
                         <label class="flex items-center gap-1.5 bg-slate-50/55 dark:bg-slate-900/50 p-2.5 rounded-xl cursor-pointer">
-                            <input type="checkbox" id="prac-cfg-inc-custom" checked> Custom Imported (<span id="prac-cfg-cnt-custom">0</span>)
+                            <input type="checkbox" id="prac-cfg-inc-custom" onchange="updateSizingDiagnosticsInSetup()" checked> Custom Imported (<span id="prac-cfg-cnt-custom">0</span>)
+                        </label>
+                        <!-- The spaced-repetition schedule was previously reachable only from the
+                             Smart Modes tile, so it could not be combined with a subject filter. -->
+                        <label class="flex items-center gap-1.5 col-span-2 bg-teal-50/70 dark:bg-teal-900/25 p-2.5 rounded-xl cursor-pointer">
+                            <input type="checkbox" id="prac-cfg-inc-due" onchange="updateSizingDiagnosticsInSetup()"> ⏰ Due for Review today (<span id="prac-cfg-cnt-due">0</span>)
                         </label>
                     </div>
                 </div>
 
-                <button onclick="startAdvancedConfiguredPractice()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-black text-xs cursor-pointer shadow-sm transition flex justify-center items-center gap-1">
-                    ⚡ Start Practice Challenge
+                <!-- Live preview: what this configuration actually yields, before pressing Start. -->
+                <div id="prac-cfg-preview" class="text-xs font-semibold p-2.5 rounded-xl bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"></div>
+                <div id="prac-cfg-warn" class="hidden space-y-1 text-[10px] font-bold p-2.5 rounded-xl bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"></div>
+
+                <!-- data-original-text is pre-declared, not left for translateAppLabels() to cache:
+                     the label span below is rewritten with a live question count, so whichever ran
+                     first would decide what the translator thinks this button "originally" said. -->
+                <button id="prac-cfg-start" onclick="startAdvancedConfiguredPractice()" data-original-text="⚡ Start Practice Challenge" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-black text-xs cursor-pointer shadow-sm transition flex justify-center items-center gap-1">
+                    ⚡ <span class="prac-cfg-start-label">Start Practice Challenge</span>
                 </button>
             </div>
         </div>
@@ -2688,7 +2731,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v252-yov34ug (202609051259)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v253-qiz75vi (202609051428)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -3968,14 +4011,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=yov34ug" defer></script>
-    <script src="./js/elite_3d_engine.js?v=yov34ug" defer></script>
-    <script src="./js/canvas_charts.js?v=yov34ug" defer></script>
+    <script src="./js/elite_animations_controller.js?v=qiz75vi" defer></script>
+    <script src="./js/elite_3d_engine.js?v=qiz75vi" defer></script>
+    <script src="./js/canvas_charts.js?v=qiz75vi" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=yov34ug" defer></script>
-    <script src="./js/sqlite_db.js?v=yov34ug" defer></script>
-    <script src="./js/krishi_idb.js?v=yov34ug"></script>
-    <script src="./js/app.js?v=yov34ug" defer></script>
+    <script src="./js/pwa_helpers.js?v=qiz75vi" defer></script>
+    <script src="./js/sqlite_db.js?v=qiz75vi" defer></script>
+    <script src="./js/krishi_idb.js?v=qiz75vi"></script>
+    <script src="./js/app.js?v=qiz75vi" defer></script>
 
 
     <!--
@@ -4003,8 +4046,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=yov34ug" defer></script>
-    <script src="./js/voice_assistant.js?v=yov34ug" defer></script>
+<script src="./js/data_safety.js?v=qiz75vi" defer></script>
+    <script src="./js/voice_assistant.js?v=qiz75vi" defer></script>
 </body>
 </html>
 

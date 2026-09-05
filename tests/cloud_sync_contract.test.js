@@ -2088,56 +2088,82 @@ test('an Advanced Setup config cannot leak into the next session', () => {
 
 test('the config saved for next time never carries the session stamp', () => {
     const body = functionBody('startAdvancedConfiguredPractice');
-    const stored = body.indexOf("KrishiStorage.setItem('krishi_last_practice_config'");
-    const adopted = body.indexOf('state.activeConfig = configObj');
+    const stored = body.indexOf('saveAdvancedSetupConfig(cfg)');
+    const adopted = body.indexOf('state.activeConfig = cfg');
     assert.ok(stored > -1 && adopted > -1, 'startAdvancedConfiguredPractice() no longer does both');
     assert.ok(stored < adopted,
-        'configObj is stringified into storage and then handed to state, so the stamp added ' +
+        'the config is stringified into storage and only then handed to state, so the stamp added ' +
         'downstream can never reach the stored copy - reversing this would persist ' +
         '__sessionConsumed and every restored config would be dropped on arrival'
     );
 });
+
 test('the difficulty gate matches a bank that never stored a difficulty', () => {
-    const line = (APP_JS.split(/\r?\n/).find(l => /if \(difficulty !== 'all'/.test(l)) || '');
-    assert.ok(line, 'the difficulty gate in startAdvancedConfiguredPractice() moved - retarget this test');
-    // The gate `return`s to reject; turn it into a predicate.
-    const keeps = new Function('q', 'difficulty', line.replace(/return\s*;\s*$/, 'return false;') + '\nreturn true;');
+    const keeps = new Function('q', 'cfg', 'hardSet', functionBody('advancedDifficultyMatches').slice(1, -1));
 
     // questions.json carries {id,q,opts,ans,expl,sub} and no difficulty at all, so every static
-    // question read undefined and a strict !== rejected all of them: all three non-"all" options
+    // question read undefined and a strict !== rejected all of them: all three graded options
     // produced an empty pool. Missing difficulty now reads as Medium, matching normalizeQuestion().
-    assert.strictEqual(keeps({}, 'Medium'), true, 'a question with no difficulty counts as Medium');
-    assert.strictEqual(keeps({}, 'Easy'), false, 'and only as Medium');
+    assert.strictEqual(keeps({}, { difficulty: 'Medium' }), true, 'a question with no difficulty counts as Medium');
+    assert.strictEqual(keeps({}, { difficulty: 'Easy' }), false, 'and only as Medium');
 
     // Imported difficulties arrive with whatever casing and padding the source had.
-    assert.strictEqual(keeps({ difficulty: ' easy ' }, 'Easy'), true, 'both sides are trimmed and lowercased');
-    assert.strictEqual(keeps({ difficulty: 'HARD' }, 'Hard'), true, 'casing cannot decide a match');
-    assert.strictEqual(keeps({ difficulty: 'Easy' }, 'Hard'), false, 'a real mismatch still rejects');
-    assert.strictEqual(keeps({ difficulty: 'Easy' }, 'all'), true, '"Any difficulty mixed" gates nothing');
+    assert.strictEqual(keeps({ difficulty: ' easy ' }, { difficulty: 'Easy' }), true, 'both sides are trimmed and lowercased');
+    assert.strictEqual(keeps({ difficulty: 'HARD' }, { difficulty: 'Hard' }), true, 'casing cannot decide a match');
+    assert.strictEqual(keeps({ difficulty: 'Easy' }, { difficulty: 'Hard' }), false, 'a real mismatch still rejects');
+    assert.strictEqual(keeps({ difficulty: 'Easy' }, { difficulty: 'all' }), true, '"Any difficulty mixed" gates nothing');
+
+    // "Hard for me" ignores the author's grade entirely and asks this student's own record.
+    const hard = new Set(['7']);
+    assert.strictEqual(keeps({ id: 7, difficulty: 'Easy' }, { difficulty: 'weak' }, hard), true,
+        'an author-Easy question the student keeps failing is still hard for them'
+    );
+    assert.strictEqual(keeps({ id: 8, difficulty: 'Hard' }, { difficulty: 'weak' }, hard), false,
+        'and an author-Hard question they always get right is not'
+    );
+    assert.strictEqual(keeps({ id: 7 }, { difficulty: 'weak' }, null), false,
+        'no personal record set means nothing qualifies - never a crash'
+    );
 });
 
 test('an empty pool names the setting that emptied it', () => {
-    const body = functionBody('startAdvancedConfiguredPractice');
-    assert.ok(!/No questions match your filter metrics/.test(body),
-        'the one-size-fits-all toast gave the user nothing to act on'
+    const why = new Function('cfg', 'res', functionBody('describeEmptyAdvancedPool').slice(1, -1));
+    const cfg = { subject: 'Agronomy', topic: 'all', difficulty: 'Easy' };
+
+    // One message per cause, because the old single "No questions match your filter metrics"
+    // toast named none of the ten controls that could have produced it.
+    assert.match(why(cfg, { survivedCategory: 0, survivedDifficulty: 0 }), /^No questions found in "Agronomy"\./);
+    assert.match(why(cfg, { survivedCategory: 12, survivedDifficulty: 0 }), /^No "Easy" questions in "Agronomy"\./);
+    assert.match(why(cfg, { survivedCategory: 12, survivedDifficulty: 12 }), /^12 question\(s\) in "Agronomy", but none match the "Include" boxes\./);
+
+    // The topic wins the scope label when both are set, and "your question bank" covers all/all.
+    assert.match(why({ subject: 'Agronomy', topic: 'Soil', difficulty: 'all' }, { survivedCategory: 0 }), /in "Soil"\./);
+    assert.match(why({ subject: 'all', topic: 'all', difficulty: 'all' }, { survivedCategory: 0 }), /in your question bank\./);
+
+    // "Hard for me" is derived, so "no Easy questions here" would be nonsense advice for it.
+    assert.match(why({ subject: 'all', topic: 'all', difficulty: 'weak' }, { survivedCategory: 9, survivedDifficulty: 0 }),
+        /counts as weak for you yet/
     );
-    for (const counter of ['survivedCategory', 'survivedDifficulty']) {
-        assert.match(body, new RegExp(counter + '\\+\\+'), counter + ' must be tallied inside the filter');
-        assert.match(body, new RegExp(counter + ' === 0'), counter + ' must be read when the pool is empty');
+
+    // And the tallies it reads still have to be kept by the builder.
+    const build = functionBody('buildAdvancedPool');
+    for (const counter of ['survivedCategory']) {
+        assert.match(build, new RegExp(counter + '\\+\\+'), counter + ' must be tallied inside the filter');
     }
-    const empty = body.slice(body.indexOf('if (pool.length === 0)'));
-    assert.strictEqual((empty.match(/showToast\(/g) || []).length, 3,
-        'three distinct causes - nothing in the subject/topic, nothing at that difficulty, ' +
-        'nothing left after the Include boxes - need three distinct messages'
+    assert.match(build, /survivedDifficulty: scoped\.length/, 'survivedDifficulty is the scoped list itself');
+    assert.ok(!/No questions match your filter metrics["'`]\)/.test(APP_JS),
+        'the one-size-fits-all toast gave the user nothing to act on'
     );
 });
 
 test('a saved subject or topic that no longer exists falls back to "all"', () => {
     // Without this the select ends up with value '' and selectedIndex -1: the control renders
     // blank and every later filter compares questions against '', so Start always failed.
-    const setup = functionBody('openPracticeSetupPage');
-    assert.strictEqual((setup.match(/subSel\.selectedIndex === -1/g) || []).length, 2,
-        'both the preselected subject and the restored one need the guard'
+    assert.match(functionBody('openPracticeSetupPage'), /subSel\.selectedIndex === -1/,
+        'the subject a caller deep-links to needs the guard'
+    );
+    assert.match(functionBody('applyAdvancedSetupConfig'), /subSel\.selectedIndex === -1/,
+        'so does the subject named by a restored config or preset'
     );
     const changed = functionBody('onPracticeSubjectChanged');
     assert.match(changed, /topicSel\.selectedIndex === -1/, 'the topic select needs it too');
@@ -2159,27 +2185,46 @@ test('the subject and topic options cannot carry markup out of a question bank',
     }
 });
 
-test('the two inclusion counts on the setup page are counted by the same rule', () => {
+test('every inclusion count on the setup page is scoped and valid by construction', () => {
     const body = functionBody('updateSizingDiagnosticsInSetup');
-    assert.match(body, /cnt-wrong'\)\.textContent = getValidWrongCount\(\)/, 'wrong answers exclude deleted ids');
-    assert.match(body, /cnt-bookmarks'\)\.textContent = getValidBookmarkedCount\(\)/,
-        'bookmarks must exclude them too - the raw .length promised questions the filter could ' +
-        'never pull, and made the two adjacent numbers mean different things'
+    // Comments stripped: the block comment below explains which helpers were dropped, and naming
+    // them there must not read as still calling them.
+    const code = body.replace(/\/\/[^\n]*/g, '');
+
+    // The counts used to be whole-bank numbers: "Bookmarks (12)" stood next to a subject holding
+    // two of them, and two of the four were raw list lengths that still counted ids whose
+    // question had been deleted. Both faults disappear when every count is a filter over
+    // `res.scoped` - the questions that already passed the subject/topic/difficulty gates, drawn
+    // from the live bank - so validity is no longer something a helper has to strip by hand.
+    for (const id of ['wrong', 'bookmarks', 'unattempt', 'custom', 'due']) {
+        assert.match(code, new RegExp("setText\\('prac-cfg-cnt-" + id + "', res\\.scoped\\.filter\\("),
+            'prac-cfg-cnt-' + id + ' must be counted from the scoped list'
+        );
+    }
+    assert.ok(!/getValidWrongCount\(\)|getValidBookmarkedCount\(\)/.test(code),
+        'the whole-bank helpers cannot come back - they answer a different question than the label asks'
     );
-    assert.ok(!/localData\.bookmarked\.length/.test(body), 'no raw list length may remain here');
+    assert.ok(!/localData\.(bookmarked|wrong)\.length/.test(code), 'no raw list length may remain here');
+
+    // And the same builder feeds the session, so a count here cannot disagree with what Start gives.
+    assert.match(code, /const res = buildAdvancedPool\(cfg\)/, 'the counts come from the shared pool builder');
+    assert.match(functionBody('startAdvancedConfiguredPractice'), /const res = buildAdvancedPool\(cfg\)/,
+        'and so does the run itself'
+    );
 });
 
 test('the setup number inputs are clamped to the bounds the markup advertises', () => {
-    const i = APP_JS.indexOf('const clampCfgNumber = (');
-    assert.ok(i > -1, 'clampCfgNumber() moved - retarget this test');
-    const open = APP_JS.indexOf('{', APP_JS.indexOf('=>', i));
+    const body = functionBody('readAdvancedSetupConfig');
+    const i = body.indexOf('const num = (');
+    assert.ok(i > -1, 'the clamp helper moved - retarget this test');
+    const open = body.indexOf('{', body.indexOf('=>', i));
     let depth = 0, end = -1;
-    for (let j = open; j < APP_JS.length && end < 0; j++) {
-        if (APP_JS[j] === '{') depth++;
-        else if (APP_JS[j] === '}' && --depth === 0) end = j;
+    for (let j = open; j < body.length && end < 0; j++) {
+        if (body[j] === '{') depth++;
+        else if (body[j] === '}' && --depth === 0) end = j;
     }
-    assert.ok(end > -1, 'unbalanced braces in clampCfgNumber()');
-    const clamp = new Function('input', 'min', 'max', 'fallback', APP_JS.slice(open + 1, end));
+    assert.ok(end > -1, 'unbalanced braces in the clamp helper');
+    const clamp = new Function('input', 'min', 'max', 'fallback', 'clampInputs', body.slice(open + 1, end));
 
     // min/max on a number <input> is validation metadata only, and this page has no form. A
     // typed "-5" made the total timer silently never start (its `> 0` test failed while the
@@ -2187,15 +2232,364 @@ test('the setup number inputs are clamped to the bounds the markup advertises', 
     // in the past, auto-marking every question wrong on the first tick.
     const el = v => ({ value: v });
     const neg = el('-5');
-    assert.strictEqual(clamp(neg, 2, 180, 20), 2, 'a negative duration clamps up to the minimum');
-    assert.strictEqual(neg.value, 2, 'and the corrected value is written back so the fix is visible');
-    assert.strictEqual(clamp(el('9999'), 5, 300, 30), 300, 'an absurd countdown clamps down');
-    assert.strictEqual(clamp(el(''), 2, 180, 20), 20, 'a cleared field falls back to the default');
-    assert.strictEqual(clamp(el('abc'), 5, 300, 30), 30, 'so does an unparseable one');
-    assert.strictEqual(clamp(el('45'), 5, 300, 30), 45, 'a value in range passes through');
-    assert.strictEqual(clamp(null, 2, 180, 20), 20, 'a missing input is not a crash');
+    assert.strictEqual(clamp(neg, 2, 180, 20, true), 2, 'a negative duration clamps up to the minimum');
+    assert.strictEqual(neg.value, 2, 'and Start writes the corrected value back so the fix is visible');
+    assert.strictEqual(clamp(el('9999'), 5, 300, 30, true), 300, 'an absurd countdown clamps down');
+    assert.strictEqual(clamp(el(''), 2, 180, 20, true), 20, 'a cleared field falls back to the default');
+    assert.strictEqual(clamp(el('abc'), 5, 300, 30, true), 30, 'so does an unparseable one');
+    assert.strictEqual(clamp(el('45'), 5, 300, 30, true), 45, 'a value in range passes through');
+    assert.strictEqual(clamp(null, 2, 180, 20, true), 20, 'a missing input is not a crash');
+
+    // The live preview reads the same controls on every keystroke, and must NOT rewrite them:
+    // a typed "-5" heading toward "-50" would be corrected to 2 before the 0 arrived.
+    const typing = el('-5');
+    assert.strictEqual(clamp(typing, 2, 180, 20, false), 2, 'the preview still clamps the value it uses');
+    assert.strictEqual(typing.value, '-5', 'but leaves the half-typed field alone');
 });
+test('the spaced-review query is never handed a filtered pool', () => {
+    // KrishiSM2Engine.getDueQuestions() DELETES every SM2 record whose id is missing from the
+    // array it is given (js/pwa_helpers.js:858). Handing it a subject-filtered pool would wipe
+    // the review schedule of every other subject - silently, and on both devices after sync.
+    const calls = [...APP_JS.matchAll(/getDueQuestions\(([^)]*)\)/g)].map(m => m[1].trim());
+    assert.ok(calls.length > 0, 'getDueQuestions() is no longer called - retarget this test');
+    for (const arg of calls) {
+        assert.ok(!/pool|scoped|filtered/i.test(arg),
+            'getDueQuestions(' + arg + ') looks filtered; it must always see the full bank'
+        );
+    }
+    const cache = functionBody('getAdvancedDueIdSet');
+    assert.match(cache, /getDueQuestions\(allQuestions\)/, 'the cached reader passes its own full-bank argument through');
+    assert.match(functionBody('buildAdvancedPool'), /getAdvancedDueIdSet\(allQuestions\)/,
+        'and buildAdvancedPool() hands it getAllQuestions(), never its own filtered list'
+    );
+
+    // Cached, because updateSizingDiagnosticsInSetup() now fires on every slider tick and that
+    // call re-parses its store, walks the whole bank and can write back.
+    assert.match(cache, /_advDueCache/, 'the due set is memoised');
+    assert.match(cache, /- _advDueCache\.at\) < \d+/, 'with a short TTL, so answering a question is reflected quickly');
+});
+
+test('the Include boxes are a union, and unticking all of them means "everything in scope"', () => {
+    const g = globalThis;
+    const saved = ['getAllQuestions', 'getCustomQuestions', 'getAdvancedDueIdSet', 'getPersonalHardIdSet',
+        'advancedDifficultyMatches', 'timingLog', 'localData'].map(k => [k, g[k]]);
+
+    const BANK = [
+        { id: '1', sub: 'Agronomy', topic: 'Soil', difficulty: 'Easy' },   // attempted, clean
+        { id: '2', sub: 'Agronomy', topic: 'Soil' },                        // wrong once
+        { id: '3', sub: 'Agronomy', topic: 'Pests' },                       // bookmarked
+        { id: '4', sub: 'Horticulture', topic: 'Fruit' },                   // never attempted
+        { id: '5', sub: 'Agronomy', topic: 'Soil' }                         // custom + due
+    ];
+    g.getAllQuestions = () => BANK;
+    g.getCustomQuestions = () => [{ id: '5' }];
+    g.getAdvancedDueIdSet = () => new Set(['5']);
+    g.getPersonalHardIdSet = () => new Set(['2']);
+    g.advancedDifficultyMatches = new Function('q', 'cfg', 'hardSet', functionBody('advancedDifficultyMatches').slice(1, -1));
+    g.timingLog = [{ qid: '1' }, { qid: '2' }, { qid: '3' }, { qid: '5' }];
+    g.localData = { wrong: ['2'], bookmarked: ['3'] };
+
+    const build = new Function('cfg', functionBody('buildAdvancedPool').slice(1, -1));
+    const base = { subject: 'all', topic: 'all', difficulty: 'all' };
+    const ids = r => r.pool.map(q => q.id).join(',');
+    try {
+        // Nothing ticked is not "nothing" - it is the whole scope. The page offers no other way
+        // to say "just quiz me on this chapter".
+        assert.strictEqual(ids(build(base)), '1,2,3,4,5', 'no Include box ticked keeps everything in scope');
+
+        // Each box adds its own list; they are OR-ed, never AND-ed.
+        assert.strictEqual(ids(build({ ...base, incWrong: true })), '2');
+        assert.strictEqual(ids(build({ ...base, incBookmarks: true })), '3');
+        assert.strictEqual(ids(build({ ...base, incUnattempted: true })), '4');
+        assert.strictEqual(ids(build({ ...base, incCustom: true })), '5');
+        assert.strictEqual(ids(build({ ...base, incDue: true })), '5', 'the 5th box reaches the SM2 schedule');
+        assert.strictEqual(ids(build({ ...base, incWrong: true, incDue: true })), '2,5', 'two boxes union');
+
+        // The scoped list is what the count labels read, so it must stop before the Include boxes.
+        const scopedOnly = build({ ...base, subject: 'Agronomy', incWrong: true });
+        assert.deepStrictEqual(scopedOnly.scoped.map(q => q.id), ['1', '2', '3', '5'],
+            'scoped is post-subject and pre-inclusion, which is what makes "Bookmarks (n)" subject-aware'
+        );
+        assert.strictEqual(scopedOnly.survivedCategory, 4);
+        assert.strictEqual(ids(scopedOnly), '2', 'and the pool is still the Include-box union');
+
+        // A topic filter narrows further, and "Hard for me" ignores the author's grade.
+        assert.strictEqual(ids(build({ subject: 'Agronomy', topic: 'Soil', difficulty: 'all' })), '1,2,5');
+        assert.strictEqual(ids(build({ ...base, difficulty: 'weak' })), '2', 'weak reads the student\'s own record');
+        assert.strictEqual(ids(build({ ...base, difficulty: 'Easy' })), '1', 'a graded difficulty still works');
+        assert.strictEqual(build({ subject: 'Botany', topic: 'all', difficulty: 'all' }).survivedCategory, 0,
+            'an unknown subject survives nothing, which is the first branch of the failure message'
+        );
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('the preview states the real length, and warns when one setting contradicts another', () => {
+    const g = globalThis;
+    const saved = ['document', 'escapeCreatorHtml', 'describeEmptyAdvancedPool'].map(k => [k, g[k]]);
+    const nodes = {};
+    const node = () => {
+        const cls = new Set();
+        return {
+            innerHTML: '', className: '', disabled: false, cls,
+            classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } },
+            querySelector() { return this._l || (this._l = { textContent: '', dataset: {} }); }
+        };
+    };
+    g.document = { getElementById: id => (nodes[id] || (nodes[id] = node())) };
+    g.escapeCreatorHtml = s => String(s);
+    g.describeEmptyAdvancedPool = () => 'nothing matched';
+    const render = new Function('cfg', 'res', functionBody('renderAdvancedSetupPreview').slice(1, -1));
+    const res = n => ({ pool: Array.from({ length: n }, (_, i) => ({ id: String(i) })) });
+    const cfgOf = o => Object.assign({
+        subject: 'all', topic: 'all', difficulty: 'all', count: 20,
+        timer: 'off', timerMin: 20, perQTimer: 'off', perQSec: 30
+    }, o);
+    const preview = () => nodes['prac-cfg-preview'].innerHTML;
+    const warn = () => nodes['prac-cfg-warn'].innerHTML;
+    const label = () => nodes['prac-cfg-start']._l.textContent;
+
+    try {
+        // The whole point of the refactor: the number is knowable before pressing Start.
+        render(cfgOf({}), res(50));
+        assert.match(preview(), /<b>20<\/b> questions ready from <b>all subjects<\/b>/);
+        assert.match(preview(), /\(50 match, 30 held back\)/, 'and it says what the slider is holding back');
+        assert.strictEqual(label(), 'Start Practice · 20 Qs');
+        assert.strictEqual(warn(), '', 'a consistent config warns about nothing');
+
+        // count: 'all' has to bypass the slider entirely - Math.min('all', n) is NaN.
+        render(cfgOf({ count: 'all' }), res(50));
+        assert.match(preview(), /<b>50<\/b> questions ready/, '"use every match" means every match');
+        assert.ok(!/held back/.test(preview()), 'nothing is held back when the cap is off');
+        assert.strictEqual(label(), 'Start Practice · 50 Qs');
+
+        // This is the only button on the page translateAppLabels() localises, so the count must
+        // be appended to the translated verb rather than replacing it with an English sentence.
+        nodes['prac-cfg-start']._l.dataset.baseText = 'अभ्यास सुरु';
+        render(cfgOf({ count: 10 }), res(50));
+        assert.strictEqual(label(), 'अभ्यास सुरु · 10 Qs', 'a Nepali label must survive a preview refresh');
+        nodes['prac-cfg-start']._l.dataset.baseText = '';
+
+        // Asking for 50 and silently getting 12 used to look like a session that ended early.
+        render(cfgOf({ count: 50 }), res(12));
+        assert.match(warn(), /Only 12 match your filters, so this run is 12 long, not 50\./);
+
+        // Both timers on is legal but usually a mistake: 50 x 30s needs 25 min, not 20, so the
+        // paper clock would expire mid-question.
+        render(cfgOf({ count: 'all', timer: 'on', timerMin: 20, perQTimer: 'on', perQSec: 30 }), res(50));
+        assert.match(warn(), /20 min total clock ends before 50 x 30s does\. Allow ~25 min/);
+        render(cfgOf({ count: 'all', timer: 'on', timerMin: 30, perQTimer: 'on', perQSec: 30 }), res(50));
+        assert.strictEqual(warn(), '', '25 min of questions inside a 30 min clock is fine');
+
+        // An impossible config disables Start instead of letting it fail into a toast.
+        render(cfgOf({}), res(0));
+        assert.match(preview(), /nothing matched/, 'and it borrows the same explanation the toast used');
+        assert.strictEqual(nodes['prac-cfg-start'].disabled, true);
+        assert.strictEqual(label(), 'No questions match');
+        assert.ok(nodes['prac-cfg-start'].cls.has('pointer-events-none'));
+
+        render(cfgOf({}), res(1));
+        assert.match(preview(), /<b>1<\/b> question ready/, 'one question is not "1 questions"');
+        assert.strictEqual(nodes['prac-cfg-start'].disabled, false, 'and Start comes back');
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('"use every matching question" cannot slice a pool to nothing', () => {
+    const body = functionBody('startAdvancedConfiguredPractice');
+    const line = (body.split(/\r?\n/).find(l => /pool = pool\.slice\(/.test(l)) || '');
+    assert.ok(line, 'the slice in startAdvancedConfiguredPractice() moved - retarget this test');
+    const take = new Function('pool', 'cfg', line + '\nreturn pool.length;');
+    const ten = () => Array.from({ length: 10 }, (_, i) => i);
+
+    // Math.min('all', 10) is NaN and slice(0, NaN) returns [], so without its own branch the new
+    // checkbox would have started an empty session.
+    assert.strictEqual(take(ten(), { count: 'all' }), 10, '"all" keeps the whole pool');
+    assert.strictEqual(take(ten(), { count: 4 }), 4, 'a number still caps');
+    assert.strictEqual(take(ten(), { count: 99 }), 10, 'and cannot ask for more than exists');
+});
+
+test('the personal difficulty band is built from this student\'s own answers', () => {
+    const g = globalThis;
+    const saved = [['localData', g.localData], ['timingLog', g.timingLog]];
+    const hardSet = new Function(functionBody('getPersonalHardIdSet').slice(1, -1));
+    try {
+        // The author-assigned difficulty is nearly empty data - the static bank stores none and
+        // every import defaults to Medium - so the dropdown could only sort hand-graded questions.
+        // timingLog already holds {qid, timeSec, correct} for every answer ever given.
+        g.localData = { wrong: ['99'] };
+        g.timingLog = [
+            { qid: '10', correct: true, timeSec: 10 },
+            { qid: '11', correct: true, timeSec: 10 },
+            { qid: '12', correct: true, timeSec: 60 },   // right, but 2.8x the average
+            { qid: '13', correct: false, timeSec: 5 }    // wrong once is enough
+        ];
+        const hard = hardSet();
+        assert.ok(hard.has('99'), 'the unresolved mistake list seeds the band');
+        assert.ok(hard.has('13'), 'answered wrong at least once');
+        assert.ok(hard.has('12'), 'right but far slower than their own average is not yet fluent');
+        assert.ok(!hard.has('10') && !hard.has('11'), 'right and quick is not hard for them');
+
+        // Ids are normalised on both sides: timingLog stores whatever the session had.
+        g.localData = { wrong: [7] };
+        g.timingLog = [{ qid: 8, correct: false, timeSec: 3 }];
+        const mixed = hardSet();
+        assert.ok(mixed.has('7') && mixed.has('8'), 'numeric ids compare as strings');
+
+        // No history at all must not crash, and must not declare everything hard.
+        g.localData = {};
+        g.timingLog = [];
+        assert.strictEqual(hardSet().size, 0, 'a fresh install has no weak questions yet');
+        g.timingLog = [{ qid: '1', correct: true }, { qid: '2', correct: true }];
+        assert.strictEqual(hardSet().size, 0, 'untimed entries cannot make an average out of nothing');
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('saved setups ride inside the existing synced key, and an older bare config still restores', () => {
+    const g = globalThis;
+    const saved = ['KrishiStorage', 'readAdvancedSetupStore', 'writeAdvancedSetupStore']
+        .map(k => [k, g[k]]);
+    let store = {};
+    g.KrishiStorage = {
+        getItem: k => (k in store ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); }
+    };
+    const read = new Function(functionBody('readAdvancedSetupStore').slice(1, -1));
+    const write = new Function('store', functionBody('writeAdvancedSetupStore').slice(1, -1));
+    const saveLast = new Function('cfg', functionBody('saveAdvancedSetupConfig').slice(1, -1));
+    g.readAdvancedSetupStore = read;
+    g.writeAdvancedSetupStore = write;
+    const KEY = 'krishi_last_practice_config';
+
+    try {
+        assert.deepStrictEqual(read(), { last: null, presets: [] }, 'a fresh install reads clean');
+
+        // Backward compatibility: before presets existed the whole value WAS the last config.
+        // Getting this wrong would silently reset everyone's remembered setup on upgrade.
+        store[KEY] = JSON.stringify({ subject: 'Agronomy', count: 30, incWrong: true });
+        const legacy = read();
+        assert.strictEqual(legacy.last.subject, 'Agronomy', 'a pre-presets value is read as `last`');
+        assert.strictEqual(legacy.last.count, 30);
+        assert.deepStrictEqual(legacy.presets, []);
+
+        // Round-trip, and the last config survives a preset write.
+        write({ last: { subject: 'Horticulture' }, presets: [{ name: 'Morning drill', cfg: { count: 10 } }] });
+        assert.strictEqual(read().last.subject, 'Horticulture');
+        assert.strictEqual(read().presets[0].name, 'Morning drill');
+        saveLast({ subject: 'Botany' });
+        assert.strictEqual(read().presets.length, 1, 'saving the last config must not drop saved setups');
+        assert.strictEqual(read().last.subject, 'Botany');
+
+        // No new storage key. That key is already in the sync key list, the cloud field map,
+        // collect and apply - a brand-new key persisted locally but absent from the cloud payload
+        // is exactly the shape that builds an endless save -> sync -> save loop.
+        assert.deepStrictEqual(Object.keys(store), [KEY], 'only the one already-synced key is written');
+        for (const fn of ['readAdvancedSetupStore', 'writeAdvancedSetupStore', 'saveAdvancedSetupConfig',
+            'saveAdvancedSetupPreset', 'applyAdvancedSetupPreset', 'deleteAdvancedSetupPreset']) {
+            const keys = [...functionBody(fn).matchAll(/'(krishi_[a-z_]+)'/g)].map(m => m[1]);
+            assert.deepStrictEqual([...new Set(keys)].filter(k => k !== KEY), [],
+                fn + '() touches a krishi_* key the sync layer does not know about'
+            );
+        }
+
+        // Capped, because this value is part of a Firestore document with a hard 1 MB ceiling.
+        write({ last: null, presets: Array.from({ length: 30 }, (_, i) => ({ name: 'p' + i, cfg: {} })) });
+        assert.strictEqual(read().presets.length, 8, 'the saved-setup list is bounded');
+
+        // Corrupt or hostile values must not take the page down with them.
+        store[KEY] = '{not json';
+        assert.deepStrictEqual(read(), { last: null, presets: [] }, 'unparseable reads as empty');
+        store[KEY] = JSON.stringify({ last: 'a string', presets: 'not an array' });
+        assert.deepStrictEqual(read(), { last: null, presets: [] }, 'wrong types read as empty');
+        store[KEY] = JSON.stringify({ presets: [{ name: 'ok', cfg: {} }, { name: 'no cfg' }, null] });
+        assert.strictEqual(read().presets.length, 1, 'half-written presets are dropped, not rendered');
+        store[KEY] = JSON.stringify([1, 2, 3]);
+        assert.deepStrictEqual(read(), { last: null, presets: [] }, 'an array is not a config');
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('every control on the Advanced Setup page refreshes the live preview', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const start = html.indexOf('id="page-practice-config"');
+    const end = html.indexOf('id="page-mock"', start);
+    assert.ok(start > -1 && end > start, 'page-practice-config moved - retarget this test');
+    const page = html.slice(start, end);
+
+    // This is the fault the whole batch started from: six of the ten controls had no change
+    // handler at all, so the four counts and the pool they described only ever updated when the
+    // subject changed. Picking a difficulty, dragging the slider or unticking an Include box
+    // changed nothing on screen until Start either ran or produced a toast.
+    const WIRED = ['topic', 'difficulty', 'count', 'count-all', 'timer', 'timer-min',
+        'per-q-timer', 'per-q-sec', 'inc-wrong', 'inc-bookmarks', 'inc-unattempted',
+        'inc-custom', 'inc-due'];
+    for (const name of WIRED) {
+        const tag = new RegExp('<(?:select|input)[^>]*id="prac-cfg-' + name + '"[^>]*>').exec(page);
+        assert.ok(tag, 'prac-cfg-' + name + ' is missing from the page');
+        assert.match(tag[0], /on(?:change|input)="[^"]*updateSizingDiagnosticsInSetup\(\)/,
+            'prac-cfg-' + name + ' changes the pool, so it must refresh the preview'
+        );
+    }
+    // The subject select refreshes through onPracticeSubjectChanged(), which has to repopulate
+    // the topic list first and ends with the same refresh.
+    assert.match(page, /id="prac-cfg-subject" onchange="onPracticeSubjectChanged\(\)"/);
+    assert.match(functionBody('onPracticeSubjectChanged'), /updateSizingDiagnosticsInSetup\(\);\s*\n\s*\}/,
+        'onPracticeSubjectChanged() must end by refreshing the preview'
+    );
+
+    // The nodes the refresher writes into.
+    for (const id of ['prac-cfg-cnt-wrong', 'prac-cfg-cnt-bookmarks', 'prac-cfg-cnt-unattempt',
+        'prac-cfg-cnt-custom', 'prac-cfg-cnt-due', 'prac-cfg-preview', 'prac-cfg-warn',
+        'prac-cfg-start', 'prac-cfg-presets', 'prac-cfg-count-row']) {
+        assert.ok(page.includes('id="' + id + '"'), id + ' is missing, so its update is a silent no-op');
+    }
+    assert.match(page, /class="prac-cfg-start-label"/, 'the Start button needs a label node to retitle');
+    assert.match(page, /<option value="weak">/, 'the derived difficulty band needs an option');
+    assert.match(page, /onclick="targetWeakAreasInSetup\(\)/, 'the weak-area shortcut must be reachable');
+    assert.match(page, /onclick="saveAdvancedSetupPreset\(\)/, 'so must saving a setup');
+});
+
+test('translating the Start button must not delete the node that carries the live count', () => {
+    // Found in the browser, not in the source: translateAppLabels() runs at boot and did
+    // `btn.textContent = prefix + labels.startPractice` for anything whose text included
+    // "Start Practice Challenge". Assigning textContent drops every child, so the
+    // .prac-cfg-start-label span was gone before the page was ever opened and every later
+    // retitle silently found null. The button looked right, which is why source review missed it.
+    const body = functionBody('translateAppLabels');
+    const branch = body.slice(body.indexOf("orig === '🎯 Start Practice'"));
+    const block = branch.slice(0, branch.indexOf('// Save Question'));
+    assert.match(block, /querySelector\(\s*'\.prac-cfg-start-label'\s*\)/,
+        'the translator must look for the label span'
+    );
+    assert.match(block, /startLabel\.textContent\s*=\s*labels\.startPractice/,
+        'and translate the span, leaving the button structure intact'
+    );
+    assert.match(block, /startLabel\.dataset\.baseText\s*=\s*labels\.startPractice/,
+        'and record the translated verb so the count renderer can rebuild it in that language'
+    );
+    // The old destructive write may only survive as the no-span fallback.
+    const destructive = [...block.matchAll(/btn\.textContent\s*=/g)].length;
+    assert.strictEqual(destructive, 1, 'exactly one textContent write, in the else branch');
+    assert.ok(block.indexOf('btn.textContent =') > block.indexOf('startLabel.textContent'),
+        'the destructive write must be the fallback, not the default path'
+    );
+
+    // And the markup must not leave the translator to cache a label that is already dynamic.
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const tag = /<button id="prac-cfg-start"[^>]*>/.exec(html);
+    assert.ok(tag, 'prac-cfg-start button is missing');
+    assert.match(tag[0], /data-original-text="⚡ Start Practice Challenge"/,
+        'pre-declare data-original-text, or whichever ran first decides what the button "said"'
+    );
+});
+
 test('every off-scale Tailwind shade in index.html is declared in the config', () => {
+
     // Tailwind only emits a rule for a shade it knows. `dark:text-indigo-455` and
     // `dark:text-slate-350` produced no CSS at all, so the element kept whatever it inherited -
     // no error, no warning, just the wrong colour. The config block exists precisely to back

@@ -855,18 +855,57 @@ class KrishiSM2Engine {
         return feedback;
     }
 
+    // Which ids the orphan prune below is allowed to trust, or null to skip pruning entirely.
+    //
+    // The prune DELETES every record whose id is missing from the list it is given, and that
+    // delete is permanent and syncs. Handing it getAllQuestions() made two whole classes of
+    // question look like orphans:
+    //   1. status. getAllQuestions() drops draft/revision/deleted custom questions, and
+    //      saveData() re-stamps status='revision' by itself on anything validateImportQuestion
+    //      rejects - so a question failing validation silently burned its review history.
+    //   2. timing. defaultQuestions starts [] and is filled by an await; it also stays [] for
+    //      the whole session when questions.json fails offline. Custom questions arrive later
+    //      still, from IndexedDB and then from the cloud qbank chunks. Any call landing in that
+    //      window pruned records for questions that exist and were merely not loaded yet - then
+    //      pushed the shrunken schedule up, so the peer device lost them too.
+    // window.getKrishiPruneIdSet() answers with the FULL id universe (every status, deleted
+    // included) and withholds it entirely until the bank is provably hydrated.
+    static _pruneUniverse(allQuestions) {
+        const poolIds = new Set(allQuestions.map(q => String(q.id || q.q)));
+        // No host app (unit tests, a standalone page): the pool is all we can know.
+        if (typeof window.getKrishiPruneIdSet !== 'function') return poolIds;
+        let full = null;
+        try { full = window.getKrishiPruneIdSet(); } catch(e) { return null; }
+        if (!full || typeof full.has !== 'function' || full.size === 0) return null;
+        poolIds.forEach(id => full.add(id));
+        return full;
+    }
+
+    // A 'mastered' or 'suspended' record still carries a real nextReview: mastery is 21+ days
+    // out, a leech is the 3-day penalty recordAnswer() stamped as suspendUntil. Both used to be
+    // dropped on status alone with no time comparison, so the schedule was written and then
+    // ignored - the 3-day leech penalty never expired (4 wrong answers, or 4 "study later"
+    // swipes, removed a card from Spaced Review for good) and a mastered card was never seen
+    // again, which is the one thing spaced repetition exists to prevent.
+    static _isResting(rec, now) {
+        if (rec.status !== 'mastered' && rec.status !== 'suspended') return false;
+        return !rec.nextReview || rec.nextReview > now;
+    }
+
     static getDueQuestions(allQuestions) {
         if (!Array.isArray(allQuestions) || allQuestions.length === 0) return [];
         const data = this._getData();
-        const qIdSet = new Set(allQuestions.map(q => String(q.id || q.q)));
-        let cleaned = false;
-        Object.keys(data).forEach(id => {
-            if (!qIdSet.has(String(id))) {
-                delete data[id];
-                cleaned = true;
-            }
-        });
-        if (cleaned) this._saveData(data);
+        const universe = this._pruneUniverse(allQuestions);
+        if (universe) {
+            let cleaned = false;
+            Object.keys(data).forEach(id => {
+                if (!universe.has(String(id))) {
+                    delete data[id];
+                    cleaned = true;
+                }
+            });
+            if (cleaned) this._saveData(data);
+        }
 
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
@@ -877,7 +916,7 @@ class KrishiSM2Engine {
             const qId = q.id || q.q;
             const rec = data[qId];
             if (!rec) return false;
-            if (rec.status === 'mastered' || rec.status === 'suspended') return false;
+            if (this._isResting(rec, now)) return false;
             // Unresolved mistakes surface in Review Mistakes only, never Spaced Review.
             if (mistakeSet && mistakeSet.has(String(qId))) return false;
             // Due strictly by schedule — a just-failed question (nextReview = tomorrow)
@@ -906,12 +945,27 @@ class KrishiSM2Engine {
         let leechedCount = 0;
         let totalTracked = Object.keys(data).length;
         const mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : null;
+        // dueCount is a promise the tile badge makes: tap it and this many cards appear. So it has
+        // to be counted over the questions a session can actually serve, not over every record in
+        // the store. That distinction only started to matter once the prune stopped deleting records
+        // for questions that are merely hidden (draft/revision/deleted, or not loaded yet); without
+        // this filter the badge could read "5 due" while the session answers "nothing pending".
+        // The status buckets below are deliberately NOT filtered - a mastered card is still a
+        // mastered card while its question sits in the recycle bin.
+        const servable = (typeof window.getPracticeIdSet === 'function') ? window.getPracticeIdSet() : null;
 
         Object.entries(data).forEach(([id, rec]) => {
-            if (rec.status === 'mastered') { masteredCount++; return; }
-            if (rec.status === 'suspended') { leechedCount++; return; }
-            // Keep the due count in lockstep with getDueQuestions: exclude
+            // masteredCount/leechedCount are STATUS buckets - the analytics mastery card
+            // partitions totalTracked into mastered + leeched + learning, so a record must land
+            // in exactly one of them. dueCount is a separate schedule question, which is why a
+            // rested-out mastered or suspended card is counted in both: it is still mastered,
+            // and it is also due today.
+            if (rec.status === 'mastered') masteredCount++;
+            else if (rec.status === 'suspended') leechedCount++;
+            // Keep the due count in lockstep with getDueQuestions: same resting rule, exclude
             // unresolved mistakes and count strictly by schedule (nextReview).
+            if (this._isResting(rec, now)) return;
+            if (servable && !servable.has(String(id))) return;
             if (mistakeSet && mistakeSet.has(String(id))) return;
             if (rec.nextReview && rec.nextReview <= now) dueCount++;
         });

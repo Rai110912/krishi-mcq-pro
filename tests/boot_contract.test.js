@@ -503,3 +503,48 @@ test('an uncached on-demand library is fetched and then stored', async () => {
         'broken no matter how many times the feature is used online'
     );
 });
+
+// ── Practice tile wiring ───────────────────────────────────────────────────────
+// The Practice tab renders its Spaced Review tile with startSmartPracticeMode('spaced'), but the
+// dispatch only ever knew 'sm2'. An unmatched mode does not throw: pool stays [], and
+// setupMCQSession([]) hands renderMCQ() a session whose currentIndex already equals
+// totalQuestions, so it calls finishSession() - which bails on total === 0 *after*
+// clearPracticeProgress() has wiped the unfinished-session snapshot. The most prominent button on
+// the page did nothing, silently, and destroyed the resume state on the way.
+test('every mode string a tile passes to startSmartPracticeMode is actually handled', () => {
+    const body = (() => {
+        const m = /function\s+startSmartPracticeMode\s*\(/.exec(APP_JS);
+        assert.ok(m, 'startSmartPracticeMode() not found in js/app.js');
+        const open = APP_JS.indexOf('{', m.index + m[0].length);
+        let depth = 0;
+        for (let i = open; i < APP_JS.length; i++) {
+            if (APP_JS[i] === '{') depth++;
+            else if (APP_JS[i] === '}' && --depth === 0) return APP_JS.slice(open, i + 1);
+        }
+        assert.fail('unbalanced braces in startSmartPracticeMode()');
+    })();
+
+    const handled = new Set();
+    for (const m of body.matchAll(/mode\s*===\s*'([a-z0-9_]+)'/gi)) handled.add(m[1]);
+    assert.ok(handled.size >= 5, 'parsed only ' + handled.size + ' handled modes - the regex is stale');
+
+    const passed = new Set();
+    for (const src of [APP_CODE, INDEX_HTML]) {
+        for (const m of src.matchAll(/startSmartPracticeMode\(\s*'([a-z0-9_]+)'/gi)) passed.add(m[1]);
+    }
+    assert.ok(passed.has('spaced') || passed.has('sm2'), 'no Spaced Review tile found to check');
+
+    const dead = [...passed].filter(mode => !handled.has(mode));
+    assert.deepStrictEqual(dead, [],
+        'startSmartPracticeMode() is called with mode(s) it does not handle: ' + dead.join(', ') +
+        ' - an unhandled mode starts an empty session and clears the saved practice progress');
+});
+
+// The other half of that failure: even a typo'd mode must not reach setupMCQSession().
+test('startSmartPracticeMode refuses to start a session with an empty pool', () => {
+    const body = APP_CODE.slice(APP_CODE.indexOf('function startSmartPracticeMode'));
+    const call = body.indexOf('setupMCQSession(pool');
+    assert.ok(call > 0, 'setupMCQSession(pool, ...) not found in startSmartPracticeMode()');
+    const guard = /if\s*\(\s*!pool\.length\s*\)|pool\.length\s*===\s*0\s*\)/.exec(body.slice(0, call));
+    assert.ok(guard, 'no empty-pool guard between the mode dispatch and setupMCQSession(pool, ...)');
+});

@@ -4989,6 +4989,39 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         } catch (e) { return new Set(); }
     };
 
+    // The id universe KrishiSM2Engine.getDueQuestions() is allowed to prune against, or null
+    // meaning "the bank is not fully loaded, do not prune anything this call".
+    //
+    // The engine deletes every scheduling record whose id is missing from the pool it is handed,
+    // and every caller hands it getAllQuestions() - which drops draft/revision/deleted custom
+    // questions and is missing the whole static bank until `await loadStaticQuestions()` resolves
+    // (permanently, if questions.json fails offline: the catch sets defaultQuestions = []).
+    // Either way real questions looked like orphans and their FSRS history was destroyed for
+    // good, then synced, taking the peer device's copy with it.
+    //
+    // So: answer with EVERY id regardless of status (deleted included - a restored question keeps
+    // its schedule), and withhold the answer entirely until both halves of the bank are proven
+    // loaded. customQuestionsHydrated is the same flag that gates saving and uploading the bank;
+    // an empty defaultQuestions is never legitimate, the app ships questions.json.
+    window.getKrishiPruneIdSet = function() {
+        try {
+            if (!Array.isArray(defaultQuestions) || defaultQuestions.length === 0) return null;
+            if (!customQuestionsHydrated) return null;
+            const ids = new Set();
+            defaultQuestions.forEach(q => { if (q) ids.add(String(q.id || q.q)); });
+            (localData.customQuestions || []).forEach(q => { if (q) ids.add(String(q.id || q.q)); });
+            return ids;
+        } catch (e) { return null; }
+    };
+
+    // The ids a practice session can actually serve right now. KrishiSM2Engine.getStats() counts
+    // dueCount over this rather than over its whole store, so the tile badge cannot promise cards
+    // that getDueQuestions() will not hand out - see the note beside `servable` in getStats().
+    window.getPracticeIdSet = function() {
+        try { return new Set(getAllQuestions().map(q => String(q.id || q.q))); }
+        catch (e) { return null; }
+    };
+
     function getLocalDateString(date = new Date()) {
         let year = date.getFullYear();
         let month = String(date.getMonth() + 1).padStart(2, '0');
@@ -6819,21 +6852,27 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             config.perQSec = 30; // 30s quick sprint
             showToast("Speed Sprint! 30 seconds per question limit.");
         }
-        else if (mode === 'sm2') {
+        // 'spaced' is the string the Practice tab's OWN Spaced Review tile passes (the
+        // #smart-engine-container markup updatePracticePage() renders); 'sm2' is what the static
+        // #sm2-dashboard-card tile passes. 'spaced' matched no branch at all, so the most
+        // prominent Spaced Review button on the page fell through with pool = [] into
+        // setupMCQSession([]), which renderMCQ() answers by calling finishSession() - and that
+        // bails on total === 0 only AFTER clearPracticeProgress() has wiped the unfinished-session
+        // resume snapshot. A dead button, no toast, no console error, one destructive side effect.
+        else if (mode === 'sm2' || mode === 'spaced') {
             if (!window.KrishiSM2Engine || typeof window.KrishiSM2Engine.getDueQuestions !== 'function') {
                 // A missing engine previously fell through to the "all caught up"
                 // celebration message, hiding the real problem from the user.
                 showToast('⚠️ Spaced review engine unavailable — please reload the app.');
                 return;
             }
-            pool = window.KrishiSM2Engine.getDueQuestions(allQ);
-            if (pool.length === 0) {
-                showToast("🎉 सबै प्रश्नहरू कण्ठ छन्! आजका लागि सम्झनुपर्ने प्रश्न छैन।");
-                return;
-            }
-            pool = shuffle(pool).slice(0, 15);
-            config.isSpacedReview = true;
-            showToast(`🧠 FSRS Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
+            // ONE implementation for every entry point. startSpacedReview() owns the due cap, the
+            // blend of up to 5 never-seen cards (without which a freshly imported bank has nothing
+            // to review) and the isolated isSpacedReview config; the home widget and the planner
+            // recommendation already call it directly. A second due-only copy here is exactly how
+            // the two paths drifted apart.
+            startSpacedReview();
+            return;
         }
         else if (mode === 'daily') {
             let solvedToday = getSolvedTodayCount();
@@ -6849,6 +6888,15 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             config.negativeMarking = 'on'; // 20% negative score marker
             config.feedback = 'end'; // only display feedback at summary
             showToast("🏛 Simulation Loksewa launched! 45 mins limit, 20% penalty rules active.");
+        }
+
+        // Every branch above returns early on its own empty pool. This catches a mode string that
+        // matched no branch at all - the failure that made the 'spaced' tile dead. Starting a
+        // 0-question session is not harmless: renderMCQ() sends it straight to finishSession(),
+        // which clears the saved practice progress before it notices there is nothing to score.
+        if (!pool.length) {
+            showToast('No questions available for this practice mode.');
+            return;
         }
 
         state.activeConfig = config;
@@ -17912,18 +17960,29 @@ document.querySelectorAll('button').forEach(btn => {
     // Note: FSRS Spaced Repetition engine is implemented in pwa_helpers.js via KrishiSM2Engine
 
     function startSpacedReview() {
-        let pool = [];
         let allQ = getAllQuestions();
-        if (window.KrishiSM2Engine) {
-            pool = window.KrishiSM2Engine.getDueQuestions(allQ);
+        if (allQ.length === 0) {
+            showToast("No questions found in application database.");
+            return;
         }
-        
-        let data = window.KrishiSM2Engine ? window.KrishiSM2Engine._getData() : {};
-        let newQs = allQ.filter(q => {
-            let id = String(q.id || q.q);
-            let isWrong = localData.wrong && localData.wrong.some(wid => String(wid) === id);
-            return (!data[id] || data[id].status === 'new') && !isWrong;
-        });
+        // Without the engine every question has no record, so the "new card" blend below used to
+        // treat the WHOLE bank as new and serve 5 random questions as a spaced review - a silent
+        // fake. The tile now says what actually went wrong, exactly as the 'sm2' path did.
+        if (!window.KrishiSM2Engine || typeof window.KrishiSM2Engine.getDueQuestions !== 'function') {
+            showToast('⚠️ Spaced review engine unavailable — please reload the app.');
+            return;
+        }
+
+        let pool = window.KrishiSM2Engine.getDueQuestions(allQ);
+
+        // Never-graded cards, from the engine's own definition rather than a second inline copy
+        // of it (the old copy also tested status === 'new', a value recordAnswer() never writes).
+        // Unresolved mistakes belong to Review Mistakes, so they stay out of the blend - the same
+        // rule getDueQuestions() applies to the due half.
+        let mistakes = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : new Set();
+        let newQs = (typeof window.KrishiSM2Engine.getNewQuestions === 'function')
+            ? window.KrishiSM2Engine.getNewQuestions(allQ).filter(q => !mistakes.has(String(q.id || q.q)))
+            : [];
 
         if (typeof shuffle === 'function') {
             pool = shuffle(pool);
@@ -17940,10 +17999,10 @@ document.querySelectorAll('button').forEach(btn => {
         }
 
         if (pool.length === 0) {
-            showToast('🎉 No spaced review items pending!'); 
+            showToast("🎉 सबै प्रश्नहरू कण्ठ छन्! आजका लागि सम्झनुपर्ने प्रश्न छैन।");
             return;
         }
-        
+
         // Isolating Spaced Review config to prevent leakage from other practice modes
         state.activeConfig = {
             subject: 'all', topic: 'all', difficulty: 'all', count: 'all',
@@ -17951,7 +18010,8 @@ document.querySelectorAll('button').forEach(btn => {
             negativeMarking: 'off', feedback: 'immediate', shuffleQs: true, shuffleOpts: true,
             isSpacedReview: true
         };
-        
+
+        showToast(`🧠 FSRS Memory Refresh: ${pool.length} वटा प्रश्नहरू अभ्यासका लागि तयार भए!`);
         setupMCQSession(pool, false, 0);
     }
 
@@ -19064,14 +19124,27 @@ appVersion: 'Krishi MCQ Pro ' + (window.__krishiAppVersion ? ((window.__krishiAp
             let endOfToday = startOfToday + (24 * 3600 * 1000) - 1;
 
             let mistakeSet = (typeof window.getMistakeIdSet === 'function') ? window.getMistakeIdSet() : new Set();
+            // Same reason getStats() filters dueCount: this loop walks the RECORD store, and the
+            // due/overdue totals it produces are summed into the bottom-nav Practice badge. A
+            // record whose question is hidden (draft/revision/recycle bin) or not loaded yet keeps
+            // its schedule now that the prune no longer deletes it, so it has to be left out of a
+            // count that promises the student something to practise.
+            let servable = (typeof window.getPracticeIdSet === 'function') ? window.getPracticeIdSet() : null;
+            // Mirrors KrishiSM2Engine._isResting(): a mastered or suspended record is only out of
+            // the rotation WHILE its nextReview is still ahead. Testing the status alone put an
+            // expired 3-day leech penalty in no bucket at all - not due, not overdue, not upcoming,
+            // not mastered - so a card the student is meant to see today vanished from the planner
+            // and from the bottom-nav Practice badge that sums these.
+            let isResting = node => (node.status === 'mastered' || node.status === 'suspended')
+                && (!node.nextReview || node.nextReview > endOfToday);
             for (let id in sm2EngineData) {
                 let node = sm2EngineData[id];
-                if (node.status === 'mastered') {
-                    masteredCountVal++;
-                } else if (node.status !== 'suspended') {
+                if (node.status === 'mastered') masteredCountVal++;
+                if (!isResting(node)) {
                     // Unresolved mistakes are counted under Review Mistakes only,
                     // so they are excluded from the spaced-review buckets here.
                     if (mistakeSet.has(String(id))) continue;
+                    if (servable && !servable.has(String(id))) continue;
                     if (node.nextReview) {
                         if (node.nextReview < startOfToday) overdueCountVal++;
                         else if (node.nextReview <= endOfToday) dueCountVal++;
@@ -22669,6 +22742,14 @@ function updatePracticePage() {
     let dueCount = getPromoDueCount();
     let wrongCount = getValidWrongCount();
     let bookmarkedCount = (localData.bookmarked || []).length;
+
+    // #sm2-due-badge-count on the static FSRS tile (index.html) is otherwise written by exactly
+    // one function, KrishiSM2Engine.updateHUDStats(), which is itself called from exactly one
+    // place: the end of recordAnswer(). So on every fresh launch the tile showed the hardcoded 0
+    // from the markup no matter how many cards were due, and after an answer it froze at whatever
+    // that answer left behind. The count is already computed above; just publish it.
+    let sm2Badge = document.getElementById('sm2-due-badge-count');
+    if (sm2Badge) sm2Badge.textContent = dueCount;
 
     // १. नयाँ स्मार्ट इन्जिन रेन्डर गर्ने
     let engineContainer = document.getElementById('smart-engine-container');

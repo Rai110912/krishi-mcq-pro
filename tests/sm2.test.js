@@ -134,6 +134,43 @@ test('maxGrade caps a self-rated swipe at Good instead of Easy', () => {
     assert.strictEqual(recordOf('q-capped-wrong').status, 'due');
 });
 
+// The 3-day leech penalty recordAnswer() stamps as suspendUntil was written and then never read
+// again: getDueQuestions()/getStats() dropped every suspended record on status alone, with no time
+// comparison. Four wrong answers - or four "study later" swipes, which grade as wrong - retired a
+// card from Spaced Review permanently. 'mastered' had the same shape, and coming back after 21+
+// days is the entire point of the status.
+test('a rested-out leech or mature card returns to the due queue, and not one day early', () => {
+    localStorage.setItem('krishi_sm2', '{}');
+    const pool = [{ id: 'leech-serving' }, { id: 'leech-expired' }, { id: 'mature' }, { id: 'mature-due' }];
+    seed('leech-serving', { status: 'suspended', lapses: 4, nextReview: Date.now() + 2 * DAY_MS });
+    seed('leech-expired', { status: 'suspended', lapses: 4, nextReview: Date.now() - 60 * 1000 });
+    seed('mature', { status: 'mastered', reviews: 6, nextReview: Date.now() + 30 * DAY_MS });
+    seed('mature-due', { status: 'mastered', reviews: 6, nextReview: Date.now() - DAY_MS });
+
+    assert.deepStrictEqual(
+        Engine.getDueQuestions(pool).map(q => q.id).sort(),
+        ['leech-expired', 'mature-due']
+    );
+
+    // The status buckets must NOT move: the analytics mastery card partitions totalTracked into
+    // mastered + leeched + learning, so a rested-out card is still leeched/mastered. It is merely
+    // also due today, and dueCount has to agree with getDueQuestions() or the tile badge lies.
+    const stats = Engine.getStats();
+    assert.strictEqual(stats.leechedCount, 2, 'both leeches still count as leeched');
+    assert.strictEqual(stats.masteredCount, 2, 'both mature cards still count as mastered');
+    assert.strictEqual(stats.dueCount, 2, 'dueCount tracks getDueQuestions()');
+    assert.strictEqual(stats.totalTracked, 4);
+});
+
+// A record with no nextReview at all must stay parked rather than fall through as "due", which is
+// what a plain `nextReview > now` test would do.
+test('a suspended record with no nextReview stays out instead of becoming due', () => {
+    localStorage.setItem('krishi_sm2', '{}');
+    seed('leech-undated', { status: 'suspended', lapses: 4 });
+    assert.deepStrictEqual(Engine.getDueQuestions([{ id: 'leech-undated' }]), []);
+    assert.strictEqual(Engine.getStats().dueCount, 0);
+});
+
 // Runs last: getDueQuestions() prunes every record whose id is missing from the pool it is given.
 test('getNewQuestions returns the never-graded cards getDueQuestions cannot reach', () => {
     seed('seen-1', { status: 'due', nextReview: Date.now() - DAY_MS });
@@ -144,4 +181,66 @@ test('getNewQuestions returns the never-graded cards getDueQuestions cannot reac
 
     // The gap this closes: a card with no record is invisible to the scheduler.
     assert.strictEqual(Engine.getDueQuestions(pool).some(q => q.id === 'never-1'), false);
+});
+
+// The prune is the only DESTRUCTIVE thing in this engine: it deletes every record whose id is
+// missing from the pool it is handed, and that delete is permanent and syncs to the other device.
+// Callers hand it getAllQuestions(), which excludes draft/revision/deleted custom questions and is
+// missing the entire static bank until `await loadStaticQuestions()` resolves - or forever, when
+// questions.json fails offline and the catch sets defaultQuestions = []. So real questions looked
+// like orphans and their FSRS history was destroyed. window.getKrishiPruneIdSet() is the fix: the
+// full id universe, every status included, withheld entirely until the bank is proven hydrated.
+test('the orphan prune withholds while the bank is unproven, and never punishes a status change', () => {
+    localStorage.setItem('krishi_sm2', '{}');
+    seed('static-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+    seed('drafted-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+    seed('gone-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+
+    window.getKrishiPruneIdSet = () => null;
+    try {
+        // Bank not hydrated: nothing may be deleted, however short the pool looks.
+        assert.deepStrictEqual(Engine.getDueQuestions([{ id: 'static-1' }]).map(q => q.id), ['static-1']);
+        let held = JSON.parse(localStorage.getItem('krishi_sm2'));
+        assert.ok(held['drafted-1'] && held['gone-1'], 'a record was pruned while the bank was unproven');
+
+        // A throwing hook is the same answer: prune nothing.
+        window.getKrishiPruneIdSet = () => { throw new Error('bank exploded'); };
+        Engine.getDueQuestions([{ id: 'static-1' }]);
+        held = JSON.parse(localStorage.getItem('krishi_sm2'));
+        assert.ok(held['drafted-1'] && held['gone-1'], 'a throwing hook must not authorise a prune');
+
+        // Hydrated. The universe carries every id regardless of status, so a question demoted to
+        // draft/revision (saveData() does that by itself on a validation failure) or soft-deleted
+        // is absent from the practice pool yet keeps its schedule. Only a genuinely unknown id goes.
+        window.getKrishiPruneIdSet = () => new Set(['static-1', 'drafted-1']);
+        assert.deepStrictEqual(Engine.getDueQuestions([{ id: 'static-1' }]).map(q => q.id), ['static-1']);
+        const after = JSON.parse(localStorage.getItem('krishi_sm2'));
+        assert.ok(after['drafted-1'], 'a draft/revision/deleted question lost its review history');
+        assert.strictEqual(after['gone-1'], undefined, 'a truly unknown id is still pruned');
+    } finally {
+        delete window.getKrishiPruneIdSet;
+    }
+});
+
+// getStats() walks the record store, getDueQuestions() walks the question bank. Once the prune
+// stopped deleting records for hidden questions, those two populations could disagree - and
+// dueCount is what the Practice tile badge shows, so it is the one that has to be honest.
+test('dueCount counts only cards a session can serve, so the badge cannot over-promise', () => {
+    localStorage.setItem('krishi_sm2', '{}');
+    seed('live-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+    seed('hidden-1', { status: 'due', nextReview: Date.now() - DAY_MS });
+
+    window.getPracticeIdSet = () => new Set(['live-1']);
+    try {
+        const stats = Engine.getStats();
+        assert.strictEqual(stats.dueCount, 1, 'a question outside the practice pool inflated the badge');
+        assert.strictEqual(stats.totalTracked, 2, 'the hidden record is still tracked, just not due');
+        assert.strictEqual(
+            Engine.getDueQuestions([{ id: 'live-1' }, { id: 'hidden-1' }]).length,
+            2,
+            'getDueQuestions answers about the pool it is handed, unfiltered by this hook'
+        );
+    } finally {
+        delete window.getPracticeIdSet;
+    }
 });

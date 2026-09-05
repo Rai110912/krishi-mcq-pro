@@ -1670,7 +1670,9 @@ test('scheduleCloudSync() defers while a quiz is live, with a hard ceiling', () 
 test('isQuizInProgress() is self-contained and checks all three conditions', () => {
     const body = functionBody('isQuizInProgress');
 
-    assert.match(body, /practice-active-state-panels/, 'the live-quiz panel is the primary signal');
+    assert.match(body, /isQuizOnScreen\(\)/,
+        'quiz visibility is decided in exactly one place. This function used to read ' +
+        '`practice-active-state-panels` directly, with the polarity backwards.');
     assert.match(body, /practice-result-panel/,
         'the summary screen is reachable with the panels still up; syncing there is correct ' +
         'and must not be deferred');
@@ -1679,9 +1681,81 @@ test('isQuizInProgress() is self-contained and checks all three conditions', () 
         'exactly the write that matters most');
 
     assert.doesNotMatch(body, /\bquizVisible\(|\bliveSession\(|\bresultsVisible\(/,
-        'those helpers live inside the IIFE at js/app.js:22514 and are not in scope here. ' +
+        'those helpers live inside the IIFE at js/app.js:23369 and are not in scope here. ' +
         'Calling one would throw a ReferenceError inside the debounce timer, where nothing ' +
         'catches it - the sync would simply stop.');
+});
+
+// ── Quiz detection polarity ──────────────────────────────────────────────────────
+// page-mcq is not a routed page: it is a `hidden`-toggled child INSIDE page-practice,
+// a sibling of practice-active-state-panels. Starting a session hides the panels and
+// shows page-mcq, so "panels visible" means the exact opposite of "quiz live". Two
+// call sites read it the wrong way round, which put the subject picker and Recent
+// Practice History on screen on top of a live question whenever a sync landed.
+
+function runQuizOnScreen(pageMcq) {
+    const doc = {
+        getElementById(id) {
+            if (id !== 'page-mcq') throw new Error('isQuizOnScreen must only read page-mcq, got ' + id);
+            return pageMcq;
+        }
+    };
+    return new Function('document', functionBody('isQuizOnScreen').slice(1, -1))(doc);
+}
+const el = (classes, offsetParent) => ({
+    classList: { contains: c => classes.includes(c) },
+    offsetParent
+});
+
+test('quiz detection reads page-mcq and gets the polarity right', () => {
+    assert.equal(runQuizOnScreen(el([], {})), true,
+        'a page-mcq with no `hidden` class, inside a visible page, IS a live quiz');
+    assert.equal(runQuizOnScreen(el(['hidden'], {})), false,
+        'the `hidden` class is how every quiz exit path closes the card (js/app.js:5680)');
+    assert.equal(runQuizOnScreen(el([], null)), false,
+        'navigate() force-sets inline display:none on every .page, so a page-mcq with no ' +
+        '`hidden` class is still invisible when page-practice is not the active page - ' +
+        'offsetParent is the only thing that catches that');
+    assert.equal(runQuizOnScreen(null), false, 'a missing element is not a quiz');
+});
+
+test('no sync guard decides "quiz is live" from the practice panels', () => {
+    for (const fn of ['isQuizInProgress', 'isQuizOnScreen']) {
+        assert.doesNotMatch(functionBody(fn), /practice-active-state-panels/,
+            fn + '() must not read the panels. They are hidden precisely WHEN a quiz is ' +
+            'live, so `!panels.contains("hidden")` is true only when there is no quiz: the ' +
+            'deferral never engaged mid-quiz, and it fired while the user sat idle on the ' +
+            'practice page - which silently blocked that page from ever refreshing on sync.');
+    }
+
+    const assign = (APP_JS.split(/\r?\n/).find(l => /isUserInActiveQuiz\s*=/.test(l)) || '');
+    assert.ok(assign, 'the sync-render dispatcher no longer names its quiz guard - retarget this test');
+    assert.match(assign, /isQuizOnScreen\(\)/,
+        'the sync-render dispatcher had the same inversion, so mid-quiz it fell through to ' +
+        'the page-practice branch and rebuilt that page under the live question card');
+    assert.doesNotMatch(assign, /practice-active-state-panels/,
+        'and while the user sat idle on the practice page the inverted guard fired instead, ' +
+        'returning early and leaving that page stale after every sync');
+});
+
+test('a cloud sync cannot un-hide the practice panels over a live quiz', () => {
+    const body = functionBody('updateHomePage');
+    const idx = body.indexOf('practice-empty-state');
+    assert.ok(idx > -1, 'updateHomePage() no longer owns the empty-vs-active toggle - retarget this test');
+
+    const block = body.slice(idx, idx + 700);
+    assert.match(block, /isQuizOnScreen\(\)/,
+        'this block is the practice page\'s only general-purpose empty-vs-active owner and it ' +
+        'lives in the HOME renderer, so any of updateHomePage()\'s ~20 callers reaches it from ' +
+        'any screen. performSmartMerge() is one of them (js/app.js:4784): a sync landing ' +
+        'mid-quiz removed `hidden` from the panels and stacked them on top of the quiz.');
+    assert.match(block, /typeof isQuizOnScreen === 'function'/,
+        'updateHomePage() is reachable from the boot path; a bare call would throw if the ' +
+        'declaration has not been evaluated yet');
+
+    const removeIdx = block.indexOf("elActivePanels.classList.remove('hidden')");
+    assert.ok(removeIdx > -1 && block.indexOf('isQuizOnScreen') < removeIdx,
+        'the guard has to come before the un-hide, not after it');
 });
 
 // ── Every reader of a now-compressed field must be type-guarded ──────────────────

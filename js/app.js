@@ -1761,8 +1761,7 @@ function loadData(){
                 if (typeof updateStatsRibbon === 'function') updateStatsRibbon();
 
                 // Active page detection
-                const activePanels = document.getElementById('practice-active-state-panels');
-                const isUserInActiveQuiz = activePanels && !activePanels.classList.contains('hidden');
+                const isUserInActiveQuiz = typeof isQuizOnScreen === 'function' && isQuizOnScreen();
                 const activePage = document.querySelector('.page.active');
                 const activeId = activePage ? activePage.id : '';
 
@@ -15734,9 +15733,24 @@ document.querySelectorAll('button').forEach(btn => {
         let totalCount = all.length;
         
         // Toggle empty state vs active modules
+        //
+        // This block is the practice page's only general-purpose owner of empty-vs-active
+        // (the other two sites, 5656 and 6570, are one-way transitions), and it lives in the
+        // HOME renderer — so any of updateHomePage()'s ~20 callers can reach it while the user
+        // is on a different screen entirely. performSmartMerge() is one of them (4784): a cloud
+        // sync landing mid-quiz un-hid these panels underneath the live question card, leaving
+        // the subject picker and "Recent Practice History" stacked on top of the quiz with the
+        // '● Saving...' badge still showing. Both guards that should have stopped it were
+        // reading `practice-active-state-panels` with inverted polarity — see isQuizOnScreen().
+        //
+        // Skipping outright rather than forcing them hidden: the quiz-start and result paths own
+        // that, and re-hiding here would fight them. Whichever exit the user takes restores the
+        // panels (6567 on restart, 7755 on closing results), so nothing is left stuck hidden.
         let elEmpty = document.getElementById('practice-empty-state');
         let elActivePanels = document.getElementById('practice-active-state-panels');
-        if (totalCount === 0) {
+        if (typeof isQuizOnScreen === 'function' && isQuizOnScreen()) {
+            // leave the practice sub-panels exactly as the quiz set them
+        } else if (totalCount === 0) {
             if (elEmpty) elEmpty.classList.remove('hidden');
             if (elActivePanels) elActivePanels.classList.add('hidden');
         } else {
@@ -19752,16 +19766,42 @@ ${text}`;
     let syncRerunTimer = null;
 
     /**
+     * True while the quiz card is the thing the user is looking at.
+     *
+     * The one place quiz visibility is decided. `page-mcq` is NOT a routed page — it is a
+     * `hidden`-toggled child *inside* page-practice (index.html:1284), a sibling of
+     * `practice-active-state-panels` and `practice-result-panel`. Starting a session hides all
+     * three practice sub-panels and un-hides page-mcq (js/app.js:6567-6577); finishing one
+     * hides page-mcq again (5680) and un-hides the result panel (5653).
+     *
+     * So `practice-active-state-panels` is hidden *precisely when* a quiz is live, and two
+     * callers used to read it as if the opposite were true — see the note in
+     * updateHomePage() for what that cost. Reading page-mcq is what the three sites that got
+     * this right already do (js/app.js:679, 1418, 23418).
+     *
+     * offsetParent covers the enclosing page too: navigate() force-sets inline
+     * `display:none` on every .page (5296), so a page-mcq with no `hidden` class is still
+     * invisible whenever page-practice itself is not the active page.
+     *
+     * A hoisted function declaration on purpose: the sync-render dispatcher calls this from
+     * ~18,000 lines above, and nothing here wraps that region in its own IIFE.
+     */
+    function isQuizOnScreen() {
+        const page = document.getElementById('page-mcq');
+        if (!page || page.classList.contains('hidden')) return false;
+        return page.offsetParent !== null;
+    }
+
+    /**
      * True while a live question is on screen with unfinished session work behind it.
      *
      * Self-contained on purpose: the quizVisible()/liveSession()/resultsVisible() trio further
-     * down the file lives inside its own IIFE (js/app.js:22514) and is not reachable from
-     * this scope. The three conditions are the same ones that trio checks — panels visible,
+     * down the file lives inside its own IIFE (js/app.js:23369) and is not reachable from
+     * this scope. The conditions are the same ones that trio checks — quiz card visible,
      * summary screen not up, a real session in `state` that is not already finishing.
      */
     function isQuizInProgress() {
-        const panels = document.getElementById('practice-active-state-panels');
-        if (!panels || panels.classList.contains('hidden')) return false;
+        if (!isQuizOnScreen()) return false;
         const results = document.getElementById('practice-result-panel');
         if (results && !results.classList.contains('hidden')) return false;
         const st = (typeof state === 'object' && state) ? state : null;

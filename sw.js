@@ -1,4 +1,4 @@
-const CACHE_NAME = 'krishi-mcq-v246-6rnj78j';
+const CACHE_NAME = 'krishi-mcq-v247-chwoips';
 
 // Core offline shell. The app must be able to boot from these alone, with no network.
 // Kept as data (not 30 hand-written fetch calls) so install() can treat each entry
@@ -8,26 +8,26 @@ const PRECACHE_URLS = [
   './index.html',
   './manifest.json',
   './icon.svg',
-  './index.css?v=6rnj78j',
+  './index.css?v=chwoips',
   './questions.json',
   './js/libs/tailwindcss.js',
   './js/libs/lucide.js',
-  './js/canvas_charts.js?v=6rnj78j',
-  './js/pwa_helpers.js?v=6rnj78j',
-  './js/app.js?v=6rnj78j',
-  './js/elite_animations_controller.js?v=6rnj78j',
-  './js/elite_3d_engine.js?v=6rnj78j',
+  './js/canvas_charts.js?v=chwoips',
+  './js/pwa_helpers.js?v=chwoips',
+  './js/app.js?v=chwoips',
+  './js/elite_animations_controller.js?v=chwoips',
+  './js/elite_3d_engine.js?v=chwoips',
   './js/firebase-app-compat.js',
   './js/firebase-auth-compat.js',
   './js/firebase-firestore-compat.js',
-  './js/sqlite_db.js?v=6rnj78j',
-  './js/krishi_idb.js?v=6rnj78j',
-  './js/krishi_worker.js?v=6rnj78j',
+  './js/sqlite_db.js?v=chwoips',
+  './js/krishi_idb.js?v=chwoips',
+  './js/krishi_worker.js?v=chwoips',
   './js/lottie_adapter.js',
   './js/animation_orchestrator.js',
-  './js/voice_assistant.js?v=6rnj78j',
+  './js/voice_assistant.js?v=chwoips',
   './js/ambient_player.js',
-  './js/data_safety.js?v=6rnj78j',
+  './js/data_safety.js?v=chwoips',
   './js/libs/lz-string.min.js'
 ];
 
@@ -60,7 +60,7 @@ function shouldPrefetchOptional() {
   return !/(^|-)2g$/.test(c.effectiveType || '') && c.effectiveType !== 'slow-2g';
 }
 
-// Versioned URLs (`?v=6rnj78j`) are immutable, so the copy the page just downloaded is
+// Versioned URLs (`?v=chwoips`) are immutable, so the copy the page just downloaded is
 // byte-identical and reusing it costs nothing. Only the HTML is fetched with 'reload',
 // because it is the version pointer and must never be stale. Using 'reload' for
 // everything re-downloaded the whole ~1.5MB shell a second time, which is what made

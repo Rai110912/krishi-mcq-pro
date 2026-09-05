@@ -1812,6 +1812,22 @@ function loadData(){
     // cloud state can drive writes into another account's document after a switch.
     let cachedCloudUid = null;
 
+    // ── Self-write echo suppression ───────────────────────────────────────────
+    // Every delta write stamps the document with this id. Firestore then delivers the
+    // server-ack snapshot of that same write back to us: metadata.hasPendingWrites is
+    // already false by then and syncInProgress has been released, so the onSnapshot
+    // handler used to re-run the entire pipeline — hydrate, union merge, applyAllAppData,
+    // delta, qbank hash, render — for a change this device had just finished making. Every
+    // real edit therefore cost two full cycles.
+    //
+    // Per page load rather than per device on purpose: after a reload an old id no longer
+    // matches, so the first snapshot is processed normally instead of being trusted blind.
+    const syncWriterId = 'w' + Math.random().toString(36).slice(2, 10);
+    // Set when a snapshot had to be dropped because a cycle held the lock. That snapshot may
+    // have carried a peer's edit this device never merged, so the next echo must NOT be
+    // skipped even if it carries our own writer id.
+    let snapshotDroppedDuringSync = false;
+
     let currentSessionId = Math.random().toString(36).substring(2, 10);
     let sessionTouchInterval = null;
     let pendingConflictResolution = null;
@@ -3975,11 +3991,34 @@ function loadData(){
                         window.__krishiSyncListenerInitialized__ = true;
                     }
 
-                    if (syncInProgress) return;
+                    if (syncInProgress) {
+                        // A peer's edit can arrive while a cycle already holds the lock. It is
+                        // not merged here — that cycle read its own copy of the document before
+                        // this snapshot existed — so record that one was missed. The echo of
+                        // our own write must then be processed in full rather than skipped, or
+                        // the peer's edit would sit unmerged until some unrelated local change
+                        // happened to trigger the next sync.
+                        if (doc.exists) snapshotDroppedDuringSync = true;
+                        return;
+                    }
 
                     if (doc.metadata && doc.metadata.hasPendingWrites) {
                         return;
                     }
+
+                    // The server-ack echo of this device's own write. hasPendingWrites is
+                    // false by now and the lock has been released, so without this check the
+                    // whole pipeline re-ran for a change we had just finished making — merge,
+                    // ~30 storage writes, a delta over every field and a render, twice per
+                    // edit. cachedCloudData was already refreshed above, so the cache stays
+                    // correct; only the redundant work is dropped.
+                    if (doc.exists && cachedCloudData &&
+                        cachedCloudData.lastWriter === syncWriterId &&
+                        !snapshotDroppedDuringSync) {
+                        console.log('[Cloud Sync] Own write echo — already applied locally, pipeline skipped.');
+                        return;
+                    }
+                    snapshotDroppedDuringSync = false;
 
                     if (doc.exists) {
                         const cloudData = cachedCloudData;
@@ -4004,7 +4043,10 @@ function loadData(){
                             // realtime path, which is the path that runs most often.
                             prepareCloudPayload(delta, 'Realtime sync delta');
                             firestore.collection('users').doc(uid).set({ ...delta, updatedAt: now }, { merge: true })
-                                .then(() => console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud'))
+                                .then(() => {
+                                    adoptWrittenDelta(cloudData, delta, mergedPayload);
+                                    console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud');
+                                })
                                 .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
                         } else {
                             KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
@@ -18719,6 +18761,25 @@ ${text}`;
     // directly in KrishiStorage instead of in localData. Array.isArray([]) is true, so
     // the plain type checks these replaced happily overwrote a populated history with
     // an empty one.
+    /**
+     * KrishiStorage.setItem() that skips a write which would not change anything.
+     *
+     * A no-op write is not free. Every krishi_* setItem runs the storage hooks (setting
+     * clocks, tombstone diffing, syllabus stamping) and then an IndexedDB put, and
+     * applyAllAppData() re-wrote roughly thirty keys on every sync cycle whenever any one
+     * tracked field had arrived — including on a device that was already fully converged and
+     * whose merged values were byte-identical to what it already held.
+     *
+     * Compared as a string because that is what the store holds: callers pass booleans and
+     * numbers (soundEnabled, dark, retryDelay) straight through.
+     */
+    function setItemIfChanged(key, value) {
+        const next = (typeof value === 'string') ? value : String(value);
+        if (KrishiStorage.getItem(key) === next) return false;
+        KrishiStorage.setItem(key, value);
+        return true;
+    }
+
     function setJSONArraySafely(key, incoming, label) {
         if (!Array.isArray(incoming)) return;
         if (incoming.length === 0) {
@@ -18732,7 +18793,7 @@ ${text}`;
                 return;
             }
         }
-        KrishiStorage.setItem(key, JSON.stringify(incoming));
+        setItemIfChanged(key, JSON.stringify(incoming));
     }
 
     function applyAllAppData(data) {
@@ -18765,15 +18826,26 @@ ${text}`;
             if (isSafeIncomingCollection(data.streak, localData.streak, 'streak') && !Array.isArray(data.streak)) { localData.streak = data.streak; changed = true; }
             if (isSafeIncomingCollection(data.stats, localData.stats, 'stats') && !Array.isArray(data.stats)) {
                 localData.stats = data.stats;
-                KrishiStorage.setItem('krishi_stats_baseline', JSON.stringify(data.stats));
+                setItemIfChanged('krishi_stats_baseline', JSON.stringify(data.stats));
                 changed = true;
             }
             if (isSafeIncomingCollection(data.achievements, localData.achievements, 'achievements')) { localData.achievements = data.achievements; changed = true; }
             if (isSafeIncomingCollection(data.progression, localData.progression, 'progression') && !Array.isArray(data.progression)) { localData.progression = data.progression; changed = true; }
 
             if (data.sm2 && typeof data.sm2 === 'object' && Object.keys(data.sm2).length > 0) {
-                if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
-                changed = true;
+                // The review schedule is the largest single value a sync writes — ~385 KB of
+                // JSON at 2,000 answered questions — and it was handed to the engine on every
+                // cycle even when the merge produced the identical map. Compared against what
+                // the engine already holds so a converged device skips the write, and `changed`
+                // is left alone so an unchanged schedule no longer drags the whole
+                // localData rewrite below along with it.
+                const incomingSm2 = JSON.stringify(data.sm2);
+                const heldSm2 = window.KrishiSM2Engine
+                    ? JSON.stringify(window.KrishiSM2Engine._getData()) : undefined;
+                if (incomingSm2 !== heldSm2) {
+                    if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
+                    changed = true;
+                }
             }
 
             // Same non-empty guard as sm2 above: an older peer, or one whose SM2 module never
@@ -18781,10 +18853,15 @@ ${text}`;
             // local tally and drop the retention figure to 0%.
             if (data.sm2DailyLog && typeof data.sm2DailyLog === 'object' &&
                 !Array.isArray(data.sm2DailyLog) && Object.keys(data.sm2DailyLog).length > 0) {
-                if (window.KrishiSM2Engine && window.KrishiSM2Engine._saveDailyLog) {
-                    window.KrishiSM2Engine._saveDailyLog(data.sm2DailyLog);
+                const incomingDaily = JSON.stringify(data.sm2DailyLog);
+                const heldDaily = (window.KrishiSM2Engine && window.KrishiSM2Engine._getDailyLog)
+                    ? JSON.stringify(window.KrishiSM2Engine._getDailyLog()) : undefined;
+                if (incomingDaily !== heldDaily) {
+                    if (window.KrishiSM2Engine && window.KrishiSM2Engine._saveDailyLog) {
+                        window.KrishiSM2Engine._saveDailyLog(data.sm2DailyLog);
+                    }
+                    changed = true;
                 }
-                changed = true;
             }
         }
 
@@ -18793,16 +18870,26 @@ ${text}`;
             const cloudStamp = Number(data.userProfile.updatedAt || 0);
             const localStamp = Number(KrishiStorage.getItem(PROFILE_STAMP_KEY) || 0);
             if (cloudStamp >= localStamp) {
+                let profileChanged = false;
                 if (typeof data.userProfile.name === 'string') {
-                    KrishiStorage.setItem(PROFILE_NAME_KEY, data.userProfile.name.trim());
+                    profileChanged = setItemIfChanged(PROFILE_NAME_KEY, data.userProfile.name.trim()) || profileChanged;
                 }
                 if (typeof data.userProfile.photo === 'string') {
-                    if (data.userProfile.photo) KrishiStorage.setItem(PROFILE_PHOTO_KEY, data.userProfile.photo);
-                    else KrishiStorage.removeItem(PROFILE_PHOTO_KEY);
+                    if (data.userProfile.photo) {
+                        profileChanged = setItemIfChanged(PROFILE_PHOTO_KEY, data.userProfile.photo) || profileChanged;
+                    } else if (KrishiStorage.getItem(PROFILE_PHOTO_KEY) !== null) {
+                        KrishiStorage.removeItem(PROFILE_PHOTO_KEY);
+                        profileChanged = true;
+                    }
                 }
-                if (cloudStamp) KrishiStorage.setItem(PROFILE_STAMP_KEY, cloudStamp);
-                renderProfileIdentity();
-                refreshHomeGreeting();
+                if (cloudStamp) setItemIfChanged(PROFILE_STAMP_KEY, cloudStamp);
+                // The comparison above is `>=`, so an already-converged device took this branch
+                // on every single cycle and repainted the header identity and the home greeting
+                // for a name and photo that had not changed.
+                if (profileChanged) {
+                    renderProfileIdentity();
+                    refreshHomeGreeting();
+                }
             }
         }
 
@@ -18855,48 +18942,48 @@ ${text}`;
             try {
             // Save extra config lists
             if (Array.isArray(data.examProfiles)) setJSONArraySafely('krishi_exam_profiles', data.examProfiles, 'examProfiles');
-            if (data.homeSettings) KrishiStorage.setItem('krishi_home_settings', JSON.stringify(data.homeSettings));
-            if (data.appearanceSettings) KrishiStorage.setItem('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
-            if (data.customAppearanceSettings) KrishiStorage.setItem('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
-            if (data.plannerSettings) KrishiStorage.setItem('krishi_planner_settings', JSON.stringify(data.plannerSettings));
+            if (data.homeSettings) setItemIfChanged('krishi_home_settings', JSON.stringify(data.homeSettings));
+            if (data.appearanceSettings) setItemIfChanged('krishi_appearance_settings', JSON.stringify(data.appearanceSettings));
+            if (data.customAppearanceSettings) setItemIfChanged('krishi_custom_appearance_settings', JSON.stringify(data.customAppearanceSettings));
+            if (data.plannerSettings) setItemIfChanged('krishi_planner_settings', JSON.stringify(data.plannerSettings));
             setJSONArraySafely('krishi_syllabus_custom', data.syllabusCustom, 'syllabusCustom');
             setJSONArraySafely('krishi_timingLog', data.timingLog, 'timingLog');
             setJSONArraySafely('krishi_mockScores', data.mockScores, 'mockScores');
             setJSONArraySafely('krishi_practice_recent', data.practiceRecent, 'practiceRecent');
             
-            if (data.soundEnabled !== undefined && data.soundEnabled !== null) KrishiStorage.setItem('krishi_sound_enabled', data.soundEnabled);
-            if (data.soundMuted !== undefined && data.soundMuted !== null) KrishiStorage.setItem('krishi_sound_muted', data.soundMuted);
-            if (data.soundVolume !== undefined && data.soundVolume !== null) KrishiStorage.setItem('krishi_sound_volume', data.soundVolume);
+            if (data.soundEnabled !== undefined && data.soundEnabled !== null) setItemIfChanged('krishi_sound_enabled', data.soundEnabled);
+            if (data.soundMuted !== undefined && data.soundMuted !== null) setItemIfChanged('krishi_sound_muted', data.soundMuted);
+            if (data.soundVolume !== undefined && data.soundVolume !== null) setItemIfChanged('krishi_sound_volume', data.soundVolume);
 
             if (data.dark !== undefined && data.dark !== null) {
                 const isDark = (data.dark === 'true' || data.dark === true);
-                KrishiStorage.setItem('krishi_dark', isDark);
+                setItemIfChanged('krishi_dark', isDark);
                 if (isDark) document.documentElement.classList.add('dark');
                 else document.documentElement.classList.remove('dark');
             }
             if (data.batterySaver !== undefined && data.batterySaver !== null) {
-                KrishiStorage.setItem('krishi_battery_saver', data.batterySaver);
+                setItemIfChanged('krishi_battery_saver', data.batterySaver);
             }
 
-            if (data.goalSettings) KrishiStorage.setItem('krishi_goal_settings', JSON.stringify(data.goalSettings));
-            if (data.lastPracticeConfig) KrishiStorage.setItem('krishi_last_practice_config', JSON.stringify(data.lastPracticeConfig));
+            if (data.goalSettings) setItemIfChanged('krishi_goal_settings', JSON.stringify(data.goalSettings));
+            if (data.lastPracticeConfig) setItemIfChanged('krishi_last_practice_config', JSON.stringify(data.lastPracticeConfig));
             setJSONArraySafely('krishi_custom_subjects', data.customSubjects, 'customSubjects');
             if (data.customSubjectsLog && typeof data.customSubjectsLog === 'object') {
-                KrishiStorage.setItem(SUBJECT_LOG_KEY, JSON.stringify(data.customSubjectsLog));
+                setItemIfChanged(SUBJECT_LOG_KEY, JSON.stringify(data.customSubjectsLog));
             }
             // The merged tombstones must land too. Skipping them would leave this device
             // holding only its own records, so the next merge would not see the peer's
             // deletions and the union would put every one of those rows back.
             if (data.examProfilesLog && typeof data.examProfilesLog === 'object') {
-                KrishiStorage.setItem(TOMBSTONE_LISTS['krishi_exam_profiles'].logKey, JSON.stringify(data.examProfilesLog));
+                setItemIfChanged(TOMBSTONE_LISTS['krishi_exam_profiles'].logKey, JSON.stringify(data.examProfilesLog));
             }
             if (data.syllabusCustomLog && typeof data.syllabusCustomLog === 'object') {
-                KrishiStorage.setItem(TOMBSTONE_LISTS['krishi_syllabus_custom'].logKey, JSON.stringify(data.syllabusCustomLog));
+                setItemIfChanged(TOMBSTONE_LISTS['krishi_syllabus_custom'].logKey, JSON.stringify(data.syllabusCustomLog));
             }
             // Persist the merged write clocks, otherwise the next merge on this device
             // compares the incoming value against a stale stamp and flips it straight back.
             if (data.settingStamps && typeof data.settingStamps === 'object') {
-                KrishiStorage.setItem(SETTING_STAMPS_KEY, JSON.stringify(data.settingStamps));
+                setItemIfChanged(SETTING_STAMPS_KEY, JSON.stringify(data.settingStamps));
             }
             setJSONArraySafely('krishi_layout_backups', data.layoutBackups, 'layoutBackups');
 
@@ -18907,7 +18994,7 @@ ${text}`;
              ['activePlanMode', 'krishi_active_plan_mode'],
              ['retryDelay',     'krishi_retry_delay']].forEach(([field, key]) => {
                 if (data[field] !== undefined && data[field] !== null) {
-                    KrishiStorage.setItem(key, data[field]);
+                    setItemIfChanged(key, data[field]);
                 }
             });
             } finally {
@@ -19437,6 +19524,53 @@ ${text}`;
         return merged;
     }
 
+    // ── Cloud-side string cache for the delta comparison ─────────────────────
+    // getDifferentialSyncDelta() stringifies both sides of ~40 fields on every cycle purely
+    // to detect change, and the cloud side is the snapshot object — the same object, with the
+    // same contents, for every cycle until a new snapshot arrives. `sm2` alone is ~385 KB of
+    // JSON at 2,000 answered questions and timingLog is comparable, so that was ~13 ms of
+    // main-thread stringify (measured; 4-5x that on a mid-range phone) repeated for nothing.
+    //
+    // Keyed by object identity in a WeakMap: Firestore hands out a fresh object for every
+    // snapshot, so a new document can never read a stale string, and nothing has to remember
+    // to clear this. The one case that does mutate a cached object in place —
+    // adoptWrittenDelta() folding in a delta we just wrote — invalidates it explicitly.
+    const _cloudFieldStrings = new WeakMap();
+
+    function cloudFieldString(cloud, key) {
+        if (!cloud || typeof cloud !== 'object') return undefined;
+        let cache = _cloudFieldStrings.get(cloud);
+        if (!cache) { cache = new Map(); _cloudFieldStrings.set(cloud, cache); }
+        if (!cache.has(key)) cache.set(key, JSON.stringify(cloud[key]));
+        return cache.get(key);
+    }
+
+    function invalidateCloudFieldStrings(cloud) {
+        if (cloud && typeof cloud === 'object') _cloudFieldStrings.delete(cloud);
+    }
+
+    /**
+     * Records a delta this device successfully wrote onto the cached cloud snapshot.
+     *
+     * cachedCloudData is otherwise only refreshed when a snapshot arrives, so in the window
+     * before the server-ack echo came back the next cycle compared against a document state
+     * that no longer existed, rebuilt the identical delta and sent it to Firestore again.
+     *
+     * Values are taken from `source` (the merged payload), not from the delta: the delta's
+     * own copies of timingLog/mockScores/sm2 were LZ-compressed in place by
+     * prepareCloudPayload(), and the cached snapshot has to stay in the decompressed shape
+     * the comparison above expects.
+     */
+    function adoptWrittenDelta(cloud, delta, source) {
+        if (!cloud || !delta || !source) return;
+        Object.keys(delta).forEach(key => {
+            if (key === 'updatedAt' || key === 'lastWriter') return;
+            if (source[key] !== undefined) cloud[key] = source[key];
+        });
+        cloud.lastWriter = syncWriterId;
+        invalidateCloudFieldStrings(cloud);
+    }
+
     function getDifferentialSyncDelta(local, cloud) {
         const delta = {};
         let changed = false;
@@ -19465,7 +19599,7 @@ ${text}`;
         keysToCheck.forEach(key => {
             if (local[key] !== undefined) {
                 const localStr = JSON.stringify(local[key]);
-                const cloudStr = cloud ? JSON.stringify(cloud[key]) : undefined;
+                const cloudStr = cloud ? cloudFieldString(cloud, key) : undefined;
                 if (localStr !== cloudStr) {
                     delta[key] = local[key];
                     changed = true;
@@ -19866,6 +20000,11 @@ ${text}`;
     function prepareCloudPayload(payload, label) {
         if (!payload) return payload;
         compressUnboundedFields(payload);
+        // Stamp the writer so the realtime listener can recognise the server-ack echo of this
+        // very write and skip re-running the whole pipeline for it. Set here because this is
+        // the one choke point all five users/{uid} writers already pass through — putting it
+        // at the call sites is how compression and the size check drifted apart before.
+        payload.lastWriter = syncWriterId;
         assertPayloadFits(payload, label);
         return payload;
     }
@@ -20003,6 +20142,7 @@ ${text}`;
                         // Fallback to set with merge if doc does not exist yet (though checked earlier, race condition possible)
                         await docRef.set({ ...delta, updatedAt: now }, { merge: true });
                     });
+                    adoptWrittenDelta(currentCloudData, delta, mergedPayload);
                     console.log('[Cloud Sync] CRDT merged DELTA payload written back to cloud.');
                     logSyncActivity('Merged ' + Object.keys(delta).length + ' changed sub-collections to cloud (Delta Sync).');
                 } else {
@@ -20157,15 +20297,20 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     async function downloadQbankChunks(userDocRef, chunkCount) {
         const n = Math.max(0, parseInt(chunkCount, 10) || 0);
         if (n === 0) return null;
-        const parts = [];
-        for (let i = 0; i < n; i++) {
-            const snap = await qbankChunkRef(userDocRef, i).get();
+        // Issued together, not one after another. Sequential awaits cost a full round-trip
+        // per chunk (200-600ms each on mobile data) before the merge could even begin, and
+        // the chunks are independent documents — nothing about the read depends on order.
+        // map() keeps `parts` in index order, which the join below relies on.
+        const indexes = [];
+        for (let i = 0; i < n; i++) indexes.push(i);
+        const snaps = await Promise.all(indexes.map(i => qbankChunkRef(userDocRef, i).get()));
+        const parts = snaps.map((snap, i) => {
             const d = snap.exists ? snap.data() : null;
             if (!d || typeof d.data !== 'string') {
                 throw new Error('[Qbank] Missing chunk ' + i + ' of ' + n);
             }
-            parts.push(d.data);
-        }
+            return d.data;
+        });
         return parts.join('');
     }
 
@@ -20176,13 +20321,21 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         for (let p = 0; p < compressedStr.length; p += QBANK_CHUNK_CHARS) {
             slices.push(compressedStr.slice(p, p + QBANK_CHUNK_CHARS));
         }
-        for (let i = 0; i < slices.length; i++) {
-            await qbankChunkRef(userDocRef, i).set({ data: slices[i], isCompressed: true });
-        }
+        // Both loops go out in parallel. Sequentially this was one round-trip per chunk plus
+        // one per leftover chunk, all of it ahead of the metadata write in syncQbankToChunks()
+        // that makes the new chunks discoverable — so a large bank held the whole sync open.
+        // The metadata write deliberately stays last and separate: it is what publishes the
+        // chunks, and a torn set of chunks is already handled (downloadQbankChunks throws on
+        // a missing one and hydrateQbankFromChunks keeps the local bank).
+        await Promise.all(slices.map((slice, i) =>
+            qbankChunkRef(userDocRef, i).set({ data: slice, isCompressed: true })
+        ));
         const prev = Math.max(0, parseInt(prevChunks, 10) || 0);
-        for (let i = slices.length; i < prev; i++) {
-            await qbankChunkRef(userDocRef, i).delete().catch(() => {});
-        }
+        const orphans = [];
+        for (let i = slices.length; i < prev; i++) orphans.push(i);
+        // Best-effort, as before: once the metadata records the smaller count a leftover
+        // chunk is unreachable, and failing the upload over one would be the worse outcome.
+        await Promise.all(orphans.map(i => qbankChunkRef(userDocRef, i).delete().catch(() => {})));
         return slices.length;
     }
 
@@ -20264,11 +20417,28 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         }
     }
 
+    /**
+     * Appends one line to the sync history modal's log and persists ONLY that key.
+     *
+     * It must never call saveData(). saveData() ends in scheduleCloudSync('Data saved'), and
+     * performCloudSync() calls this helper on every successful cycle — including the
+     * "already up to date" branch (js/app.js:20010). syncActivityLog appears in neither
+     * getDifferentialSyncDelta()'s key list nor collectAllAppData()'s payload, so the sync
+     * that write scheduled could not produce a delta: it landed in the same branch, logged
+     * again, and scheduled again 800ms later. An unbounded ~1s loop for as long as the user
+     * stayed signed in, each turn re-running the union merge, rewriting every krishi_* key
+     * and clear-then-rewriting the whole question bank into IndexedDB.
+     */
     function logSyncActivity(msg) {
         if (!localData.syncActivityLog) localData.syncActivityLog = [];
         localData.syncActivityLog.unshift({ time: Date.now(), msg: msg });
         if (localData.syncActivityLog.length > 20) localData.syncActivityLog.pop();
-        saveData();
+        try {
+            Storage.setJSON('krishi_syncActivityLog', localData.syncActivityLog);
+            Storage.flush();
+        } catch (e) {
+            console.warn('[Cloud Sync] Could not persist the sync activity log.', e);
+        }
     }
 
     window.openSyncHistoryModal = function() {

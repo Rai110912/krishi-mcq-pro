@@ -1581,3 +1581,177 @@ test('a snapshot that landed is not reported as failed because the bookkeeping a
         'the date is stamped once the snapshot itself is written, not once the index is'
     );
 });
+
+// ── Sync cost: work a cycle must not repeat ─────────────────────────────────────
+// Everything below was measured, not guessed. None of it was a wrong result — the app
+// reported "Synced" and the data was correct. It was the same correct answer computed
+// over and over, which on a phone is battery and heat.
+
+test('a sync activity log entry cannot schedule another sync', () => {
+    const body = functionBody('logSyncActivity');
+    assert.ok(!/\bsaveData\(\)/.test(body),
+        'saveData() ends in scheduleCloudSync("Data saved"), and performCloudSync() calls ' +
+        'logSyncActivity() on EVERY successful cycle including the "already up to date" ' +
+        'branch. Calling it here scheduled another sync 800ms later, forever.'
+    );
+    assert.match(body, /setJSON\('krishi_syncActivityLog'/,
+        'the entry still has to be persisted - just this one key, not the whole store'
+    );
+});
+
+test('the log key that broke the loop is in neither the delta nor the payload', () => {
+    // This is WHY logSyncActivity() could not be allowed to schedule a sync: the write it
+    // made was invisible to the comparison, so the sync it scheduled always found nothing
+    // to send, logged "already up to date", and scheduled itself again.
+    assert.ok(!/'syncActivityLog'/.test(functionBody('getDifferentialSyncDelta')),
+        'syncActivityLog is deliberately not a synced field'
+    );
+    assert.ok(!/syncActivityLog/.test(functionBody('collectAllAppData')),
+        'syncActivityLog is deliberately not part of the cloud payload'
+    );
+});
+
+test('every outgoing write is stamped with the writer id at the one choke point', () => {
+    assert.match(functionBody('prepareCloudPayload'), /payload\.lastWriter\s*=\s*syncWriterId/,
+        'stamped in prepareCloudPayload() because all five users-doc writers pass through ' +
+        'it; stamping at the call sites is how compression and the size check drifted before'
+    );
+    assert.match(APP_JS, /const syncWriterId\s*=\s*'w'\s*\+\s*Math\.random/,
+        'per page load, so a stale id from a previous session is never trusted'
+    );
+    assert.ok(!/'lastWriter'/.test(functionBody('getDifferentialSyncDelta')),
+        'the stamp must never itself look like a change to send'
+    );
+});
+
+test('the realtime listener skips the server echo of this device own write', () => {
+    const at = APP_JS.indexOf('cachedCloudData.lastWriter === syncWriterId');
+    assert.ok(at > -1,
+        'the echo check is gone: every real edit costs two full pipelines again - the write, ' +
+        'then the ack snapshot re-running hydrate, merge, apply, delta, qbank hash and render'
+    );
+    const guard = APP_JS.slice(at - 400, at + 400);
+    assert.match(guard, /!snapshotDroppedDuringSync/,
+        'the echo may only be skipped when no snapshot was missed while a cycle held the lock'
+    );
+    // The order matters: hasPendingWrites is Firestore telling us the write has not been
+    // acked yet, which is a different (and cheaper) reason to return.
+    assert.ok(APP_JS.indexOf('hasPendingWrites') < at,
+        'the pending-write guard runs before the echo check'
+    );
+});
+
+test('a snapshot dropped while a cycle held the lock forces the next one to be processed', () => {
+    const at = APP_JS.indexOf('if (syncInProgress) {');
+    assert.ok(at > -1, 'the listener lock guard moved - update this test');
+    // Comments stripped: the branch explains its own reasoning at length, and a windowed
+    // substring search would otherwise measure the prose rather than the code.
+    const guard = APP_JS.slice(at, at + 1400).replace(/\/\/[^\n]*/g, '');
+    assert.match(guard, /snapshotDroppedDuringSync\s*=\s*true/,
+        'a peer edit arriving mid-cycle is not merged by that cycle. Without recording it, ' +
+        'the echo skip would swallow the only snapshot that still carried it.'
+    );
+    assert.match(APP_JS, /snapshotDroppedDuringSync\s*=\s*false/,
+        'the flag has to be cleared once a snapshot is actually processed'
+    );
+});
+
+test('a delta this device wrote is folded into the cached snapshot, from the raw source', () => {
+    const body = functionBody('adoptWrittenDelta');
+    assert.match(body, /source\[key\]/,
+        'values must come from the merged payload: prepareCloudPayload() LZ-compressed the ' +
+        'delta own copies in place, and the cached snapshot has to stay decompressed'
+    );
+    assert.match(body, /invalidateCloudFieldStrings\(cloud\)/,
+        'this is the one place a cached snapshot object is mutated, so it is the one place ' +
+        'that must drop the memoised strings keyed on it'
+    );
+    for (const caller of ['performCloudSync']) {
+        assert.match(functionBody(caller), /adoptWrittenDelta\(/,
+            caller + '() must record what it wrote, or the next cycle rebuilds the identical ' +
+            'delta and sends it to Firestore again'
+        );
+    }
+});
+
+test('the cloud side of the delta comparison is stringified once per snapshot, not per cycle', () => {
+    const body = functionBody('getDifferentialSyncDelta');
+    assert.match(body, /cloudFieldString\(cloud, key\)/,
+        'sm2 alone is ~385 KB of JSON at 2,000 answered questions and the cloud object does ' +
+        'not change between cycles; re-stringifying it was ~13 ms of pure waste per cycle'
+    );
+    assert.match(body, /JSON\.stringify\(local\[key\]\)/,
+        'the LOCAL side must NOT be cached - it is the side that changes, and a stale local ' +
+        'string is a change that never gets synced'
+    );
+    assert.match(functionBody('cloudFieldString'), /_cloudFieldStrings/);
+    assert.match(APP_JS, /const _cloudFieldStrings\s*=\s*new WeakMap\(\)/,
+        'keyed by object identity: Firestore hands out a fresh object per snapshot, so a new ' +
+        'document cannot read a stale string and nothing has to remember to clear this'
+    );
+});
+
+test('a storage write that would change nothing is skipped', () => {
+    const body = functionBody('setItemIfChanged');
+    assert.match(body, /KrishiStorage\.getItem\(key\) === next/,
+        'compare before writing: every krishi_* setItem runs the storage hooks (setting ' +
+        'clocks, tombstone diffing, syllabus stamping) and then an IndexedDB put'
+    );
+    assert.match(body, /typeof value === 'string'\) \? value : String\(value\)/,
+        'callers pass booleans and numbers (soundEnabled, dark, retryDelay) straight through, ' +
+        'and the store holds strings'
+    );
+    // The array writer is the one that carries timingLog and the syllabus, so it matters most.
+    assert.match(functionBody('setJSONArraySafely'), /setItemIfChanged\(key, JSON\.stringify\(incoming\)\)/,
+        'the safe array writer must go through it too'
+    );
+});
+
+test('a converged device rewrites nothing, including the two biggest values', () => {
+    const body = functionBody('applyAllAppData');
+    // The review schedule is the largest single value a sync writes.
+    const sm2At = body.indexOf('KrishiSM2Engine._saveData(data.sm2)');
+    assert.ok(sm2At > -1, 'the sm2 write moved - update this test');
+    const sm2Guard = body.slice(Math.max(0, sm2At - 500), sm2At);
+    assert.match(sm2Guard, /incomingSm2 !== heldSm2/,
+        'the schedule was handed to the engine on every cycle even when the merge produced ' +
+        'the identical map'
+    );
+    assert.match(body, /incomingDaily !== heldDaily/,
+        'the daily review tally needs the same comparison'
+    );
+    // The profile block repainted the header and the home greeting on every cycle, because
+    // the stamp comparison is `>=` and a converged device ties.
+    assert.match(body, /if \(profileChanged\) \{/,
+        'renderProfileIdentity()/refreshHomeGreeting() must only run when the name or photo ' +
+        'actually changed'
+    );
+    for (const key of ['krishi_home_settings', 'krishi_planner_settings', 'krishi_goal_settings',
+                       'krishi_sound_enabled', 'krishi_dark', 'krishi_battery_saver']) {
+        assert.match(body, new RegExp('setItemIfChanged\\(\'' + key + '\''),
+            key + ' must go through the compare-first writer'
+        );
+    }
+    assert.ok(!/KrishiStorage\.setItem\('krishi_home_settings'/.test(body),
+        'no settings key may keep writing unconditionally'
+    );
+});
+
+test('the question bank chunks transfer in parallel', () => {
+    assert.match(functionBody('downloadQbankChunks'), /await Promise\.all\(indexes\.map/,
+        'sequential awaits cost one full round-trip per chunk (200-600ms each on mobile ' +
+        'data) before the merge could even begin'
+    );
+    const up = functionBody('uploadQbankChunks');
+    assert.match(up, /await Promise\.all\(slices\.map/, 'chunk writes go out together');
+    assert.match(up, /await Promise\.all\(orphans\.map/, 'the orphan cleanup goes out together');
+    assert.ok(!/for \([^)]*\)\s*\{\s*await/.test(up),
+        'no await may be left inside a loop in the upload path'
+    );
+    // The metadata write stays last and separate: it is what publishes the chunks, and a
+    // torn set is already handled (download throws, hydrate keeps the local bank).
+    const sync = functionBody('syncQbankToChunks');
+    assert.ok(sync.indexOf('uploadQbankChunks') < sync.indexOf('qbankHash: hash'),
+        'the metadata that makes the chunks discoverable must be written after them'
+    );
+});

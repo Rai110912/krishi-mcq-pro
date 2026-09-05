@@ -149,22 +149,62 @@ test('the daily review log and retention rate use the same store', () => {
     );
 });
 
+/** A yyyy-mm-dd key `n` days before today, so a test never depends on the calendar. */
+const dayKey = n => new Date(Date.now() - n * 86400000).toISOString().split('T')[0];
+
 test('a stray daily log is merged by the larger per-day tally', () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = dayKey(0);
+    const lastWeek = dayKey(7);
     installKrishiStorage({
         krishi_sm2_daily_log: JSON.stringify({ [today]: { total: 2, correct: 1 } })
     });
     localStorage.setItem('krishi_sm2_daily_log', JSON.stringify({
         [today]: { total: 8, correct: 6 },
-        '2026-01-01': { total: 3, correct: 3 }
+        [lastWeek]: { total: 3, correct: 3 }
     }));
 
     Engine.recordDailyReview(null);   // read + reconcile without counting an attempt
 
     const log = JSON.parse(globalThis.window.KrishiStorage.getItem('krishi_sm2_daily_log'));
     assert.equal(log[today].total, 8, 'the fuller tally wins rather than one side overwriting');
-    assert.equal(log['2026-01-01'].total, 3, 'and days only the stray copy had are kept');
+    assert.equal(log[lastWeek].total, 3, 'and days only the stray copy had are kept');
     assert.equal(localStorage.getItem('krishi_sm2_daily_log'), null, 'stray copy drained');
+});
+
+test('the daily log is pruned to the retention window, and only on a parseable date', () => {
+    const ks = installKrishiStorage();
+    const keep = dayKey(Engine.DAILY_LOG_KEEP_DAYS - 10);
+    const drop = dayKey(Engine.DAILY_LOG_KEEP_DAYS + 30);
+
+    Engine._saveDailyLog({
+        [keep]: { total: 5, correct: 4 },
+        [drop]: { total: 9, correct: 9 },
+        'not-a-date': { total: 1, correct: 1 }
+    });
+
+    const log = JSON.parse(ks._dump().krishi_sm2_daily_log);
+    assert.ok(log[keep], 'a day inside the window survives');
+    assert.equal(log[drop], undefined,
+        'this log has no other ceiling — one entry per active day, forever, and it now rides ' +
+        'in the synced document'
+    );
+    assert.ok(log['not-a-date'],
+        'an unparseable key is not evidence of age; deleting it would be destroying data on ' +
+        'a guess'
+    );
+});
+
+test('the daily log is readable without recording a phantom review', () => {
+    const ks = installKrishiStorage({
+        krishi_sm2_daily_log: JSON.stringify({ [dayKey(0)]: { total: 4, correct: 3 } })
+    });
+
+    const log = Engine._getDailyLog();
+    assert.equal(log[dayKey(0)].total, 4, 'the tally is returned as stored');
+    assert.equal(JSON.parse(ks._dump().krishi_sm2_daily_log)[dayKey(0)].total, 4,
+        'and reading it did not add an attempt — collectAllAppData() calls this on every ' +
+        'sync, so a read that counted would inflate the retention denominator forever'
+    );
 });
 
 test('the legacy krishi_review migration is cleared from both stores', () => {

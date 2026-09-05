@@ -866,23 +866,74 @@ class KrishiSM2Engine {
         if (masteredEl) masteredEl.textContent = stats.masteredCount;
     }
 
-    static recordDailyReview(isCorrect = null) {
+    /**
+     * The per-day {total, correct} review tally, reconciled and pruned.
+     *
+     * Split out of recordDailyReview() so the cloud sync can read and write this log without
+     * counting a phantom attempt. It was previously reachable only by recording a review, so
+     * collectAllAppData() had no way to carry it — the log was never synced at all and the
+     * retention figure was per-device: 80% on the phone, 0% on a tablet holding the same
+     * account and the same schedule.
+     */
+    static _getDailyLog() {
         let log = {};
         try {
-        log = JSON.parse(this._store().getItem(this.DAILY_LOG_KEY) || '{}');
-        // Same store split as the schedule itself: this log lived in localStorage, which
-        // KrishiStorage.init() empties, so getRetentionRate() read 0% after every boot.
-        const strays = this._drainStrayLocalStorage(this.DAILY_LOG_KEY);
-        if (strays) {
-            Object.entries(strays).forEach(([day, rec]) => {
-                if (!rec) return;
-                const held = log[day];
-                // Per-day counters, so the larger tally is the more complete one rather
-                // than one side overwriting the other.
-                if (!held || (rec.total || 0) > (held.total || 0)) log[day] = rec;
-            });
-        }
-    } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_read', e); }
+            log = JSON.parse(this._store().getItem(this.DAILY_LOG_KEY) || '{}');
+            if (!log || typeof log !== 'object' || Array.isArray(log)) log = {};
+            // Same store split as the schedule itself: this log lived in localStorage, which
+            // KrishiStorage.init() empties, so getRetentionRate() read 0% after every boot.
+            const strays = this._drainStrayLocalStorage(this.DAILY_LOG_KEY);
+            if (strays) {
+                this.mergeDailyLogs(log, strays);
+            }
+        } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_read', e); }
+        return log;
+    }
+
+    /**
+     * Folds `incoming` into `into` in place and returns it. Per-day counters, so the larger
+     * tally is the more complete one — a timestamp rule would be wrong here, because the two
+     * sides are partial counts of the same day rather than two versions of one record.
+     * Shared by the stray-localStorage reconciliation and the cloud merge so both can never
+     * drift apart on the rule.
+     */
+    static mergeDailyLogs(into, incoming) {
+        if (!incoming || typeof incoming !== 'object') return into;
+        Object.entries(incoming).forEach(([day, rec]) => {
+            if (!rec || typeof rec !== 'object') return;
+            const held = into[day];
+            if (!held || (rec.total || 0) > (held.total || 0)) into[day] = rec;
+        });
+        return into;
+    }
+
+    /**
+     * Days older than the retention window. Unlike the schedule this log has no natural
+     * ceiling — one entry per active day, forever, and now it rides in the synced document.
+     * 180 days is well past anything the UI reads (getRetentionRate looks at today only) and
+     * still leaves a season of history for any future trend view.
+     */
+    static DAILY_LOG_KEEP_DAYS = 180;
+
+    static _pruneDailyLog(log) {
+        const cutoff = Date.now() - (this.DAILY_LOG_KEEP_DAYS * 24 * 3600 * 1000);
+        Object.keys(log).forEach(day => {
+            const t = Date.parse(day);
+            // An unparseable key is not evidence of age — leave it rather than delete data
+            // on a guess.
+            if (!isNaN(t) && t < cutoff) delete log[day];
+        });
+        return log;
+    }
+
+    static _saveDailyLog(log) {
+        try {
+            this._store().setItem(this.DAILY_LOG_KEY, JSON.stringify(this._pruneDailyLog(log || {})));
+        } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_write', e); }
+    }
+
+    static recordDailyReview(isCorrect = null) {
+        const log = this._getDailyLog();
 
         const dateStr = new Date().toISOString().split('T')[0];
         if (!log[dateStr]) log[dateStr] = { total: 0, correct: 0 };
@@ -893,14 +944,12 @@ class KrishiSM2Engine {
             if (isCorrect) log[dateStr].correct += 1;
         }
 
-        try {
-            this._store().setItem(this.DAILY_LOG_KEY, JSON.stringify(log));
-        } catch(e) { window.krishiLogSilent && krishiLogSilent('sm2.daily_write', e); }
+        this._saveDailyLog(log);
     }
 
     static getRetentionRate() {
         try {
-            let log = JSON.parse(this._store().getItem(this.DAILY_LOG_KEY) || '{}');
+            let log = this._getDailyLog();
             const dateStr = new Date().toISOString().split('T')[0];
             let today = log[dateStr];
             if (!today || today.total === 0) return 0;

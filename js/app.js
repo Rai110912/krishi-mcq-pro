@@ -4453,7 +4453,11 @@ scheduleMidnightCloudVault();
             }
 
             const applied = applyVaultSnapshot(d);
-            if (d.sm2 && window.KrishiSM2Engine) { window.KrishiSM2Engine._saveData(d.sm2); applied.push('sm2'); }
+            // Type-guarded like the timingLog line below it. The vault writes
+            // collectAllAppData() raw, so this is an object today — but sm2 is now on the
+            // compressed-field list for the users/{uid} document, and handing a compressed
+            // string to _saveData() would overwrite the whole review schedule with it.
+            if (d.sm2 && typeof d.sm2 === 'object' && !Array.isArray(d.sm2) && window.KrishiSM2Engine) { window.KrishiSM2Engine._saveData(d.sm2); applied.push('sm2'); }
             if (Array.isArray(d.timingLog) && isSafeIncomingCollection(d.timingLog, timingLog, 'vault.timingLog')) { timingLog = d.timingLog; applied.push('timingLog'); }
             const ms = Array.isArray(d.mockTestScores) ? d.mockTestScores : (Array.isArray(d.mockScores) ? d.mockScores : null);
             if (ms && isSafeIncomingCollection(ms, mockTestScores, 'vault.mockScores')) { mockTestScores = normalizeMockScores(ms); applied.push('mockScores'); }
@@ -18495,6 +18499,14 @@ ${text}`;
             // Omit rather than send {} — an unloaded SM2 module must not blank the
             // cloud copy of all spaced-repetition scheduling state.
             if (window.KrishiSM2Engine) payload.sm2 = window.KrishiSM2Engine._getData();
+            // The per-day review tally behind the retention figure. It was never carried by
+            // any sync stage, so the schedule synced across devices while "how well am I
+            // recalling it" did not — the phone showed 80% and a tablet on the same account
+            // showed 0%. _getDailyLog() exists so this can be read without recording a
+            // phantom review attempt.
+            if (window.KrishiSM2Engine && window.KrishiSM2Engine._getDailyLog) {
+                payload.sm2DailyLog = window.KrishiSM2Engine._getDailyLog();
+            }
             
             // config data packs
             payload.examProfiles = safeJsonParse(KrishiStorage.getItem('krishi_exam_profiles'), []);
@@ -18622,6 +18634,17 @@ ${text}`;
 
             if (data.sm2 && typeof data.sm2 === 'object' && Object.keys(data.sm2).length > 0) {
                 if (window.KrishiSM2Engine) window.KrishiSM2Engine._saveData(data.sm2);
+                changed = true;
+            }
+
+            // Same non-empty guard as sm2 above: an older peer, or one whose SM2 module never
+            // loaded, sends no sm2DailyLog at all, and writing {} down from it would erase the
+            // local tally and drop the retention figure to 0%.
+            if (data.sm2DailyLog && typeof data.sm2DailyLog === 'object' &&
+                !Array.isArray(data.sm2DailyLog) && Object.keys(data.sm2DailyLog).length > 0) {
+                if (window.KrishiSM2Engine && window.KrishiSM2Engine._saveDailyLog) {
+                    window.KrishiSM2Engine._saveDailyLog(data.sm2DailyLog);
+                }
                 changed = true;
             }
         }
@@ -18784,8 +18807,11 @@ ${text}`;
             if (data.progression) { _krishiDirty.home = true; _krishiDirty.analytics = true; }
             // Time stats, response breakdown, mastery grid and the performance curve all
             // read from these — mark analytics dirty so a live sync refreshes the tab.
+            // sm2DailyLog is what the retention figure reads, so a peer's tally arriving has
+            // to repaint it too.
             if (Array.isArray(data.timingLog) || Array.isArray(data.mockScores) ||
-                (data.sm2 && typeof data.sm2 === 'object')) { _krishiDirty.analytics = true; }
+                (data.sm2 && typeof data.sm2 === 'object') ||
+                (data.sm2DailyLog && typeof data.sm2DailyLog === 'object')) { _krishiDirty.analytics = true; }
             if (data.examProfiles){ _krishiDirty.profiles = true; }
             if (data.plannerSettings) { _krishiDirty.planner = true; }
             if (data.appearanceSettings || data.customAppearanceSettings) {
@@ -18809,20 +18835,41 @@ ${text}`;
         // string reach .forEach() below threw an uncaught TypeError that latched
         // syncInProgress and silently killed sync for the rest of the session, and
         // substituting [] would push the local copy over the cloud's real history.
-        ['timingLog', 'mockScores', 'customQuestions'].forEach(field => {
-            if (typeof cloud[field] === 'string') {
-                if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
-                    throw new Error('[Sync] Cannot read compressed ' + field + ': LZString unavailable. Sync skipped to protect existing history.');
-                }
-                try {
-                    cloud[field] = JSON.parse(LZString.decompressFromUTF16(cloud[field]) || '[]');
-                } catch (e) {
-                    console.error('[Sync] Decompression failed for ' + field, e);
-                    throw new Error('[Sync] Corrupt compressed ' + field + '. Sync skipped to protect existing history.');
-                }
+        //
+        // This mutates the object it is handed, which is deliberate and load-bearing: the
+        // caller passes the live cloud snapshot and then diffs it against the merge result
+        // via getDifferentialSyncDelta(). Decompressing in place is what lets that diff
+        // compare like with like — otherwise every field in this list would read as
+        // "changed" on every cycle (decompressed array vs compressed string) and be
+        // re-uploaded forever.
+        //
+        // `sm2` is a MAP keyed by question id, not an array, so it cannot share the coercion
+        // below: `Array.isArray({}) === false` would replace a decoded schedule with [] and
+        // then the union at merged.sm2 would spread an array into an object. It also must be
+        // decoded before the sm2 block, because `{ ...someString }` does not fail loudly —
+        // it silently produces {0:'ᯡ', 1:'ç', ...} and writes that to the engine as the
+        // user's entire review schedule.
+        const decodeCompressed = (field, empty) => {
+            if (typeof cloud[field] !== 'string') return;
+            if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) {
+                throw new Error('[Sync] Cannot read compressed ' + field + ': LZString unavailable. Sync skipped to protect existing history.');
             }
+            try {
+                cloud[field] = JSON.parse(LZString.decompressFromUTF16(cloud[field]) || empty);
+            } catch (e) {
+                console.error('[Sync] Decompression failed for ' + field, e);
+                throw new Error('[Sync] Corrupt compressed ' + field + '. Sync skipped to protect existing history.');
+            }
+        };
+        ['timingLog', 'mockScores', 'customQuestions'].forEach(field => {
+            decodeCompressed(field, '[]');
             if (!Array.isArray(cloud[field])) cloud[field] = [];
         });
+        decodeCompressed('sm2', '{}');
+        if (cloud.sm2 !== undefined &&
+            (!cloud.sm2 || typeof cloud.sm2 !== 'object' || Array.isArray(cloud.sm2))) {
+            cloud.sm2 = {};
+        }
 
         let local = collectAllAppData();
         let merged = {};
@@ -18993,6 +19040,24 @@ ${text}`;
             }
         });
         merged.sm2 = sm2Map;
+
+        // The per-day review tally behind the retention figure. Merged on the LARGER tally
+        // per day, not on a timestamp: the two sides are partial counts of the same day
+        // (20 reviews on the phone this morning, 5 on the tablet tonight) rather than two
+        // versions of one record, so last-write-wins would throw away real attempts. Summing
+        // them would be worse — a day already synced would be double-counted on every
+        // subsequent cycle, and the rate would drift past 100%.
+        //
+        // The rule lives in the engine so this site and the stray-localStorage
+        // reconciliation inside _getDailyLog() can never disagree about it.
+        if (local.sm2DailyLog !== undefined || cloud.sm2DailyLog !== undefined) {
+            const dailyBase = { ...(cloud.sm2DailyLog || {}) };
+            if (window.KrishiSM2Engine && window.KrishiSM2Engine.mergeDailyLogs) {
+                merged.sm2DailyLog = window.KrishiSM2Engine.mergeDailyLogs(dailyBase, local.sm2DailyLog);
+            } else {
+                merged.sm2DailyLog = { ...dailyBase, ...(local.sm2DailyLog || {}) };
+            }
+        }
 
         // Custom Exam profiles merging - Unique by id, then the deletion log on top. The
         // union alone can only grow, so deleteProfileDirectly() was undone by any peer that
@@ -19197,7 +19262,7 @@ ${text}`;
             'wrong', 'wrongLog',
             // customQuestions is intentionally omitted — it is synced to the Firestore
             // qbank subcollection by syncQbankToChunks(), never inline in the users doc.
-            'streak', 'stats', 'achievements', 'sm2', 'progression',
+            'streak', 'stats', 'achievements', 'sm2', 'sm2DailyLog', 'progression',
             'examProfiles', 'examProfilesLog', 'homeSettings', 'appearanceSettings',
             'customAppearanceSettings', 'plannerSettings', 'syllabusCustom', 'syllabusCustomLog',
             'timingLog', 'mockScores', 'practiceRecent',
@@ -19235,22 +19300,68 @@ ${text}`;
     // Coalesces a sync request that arrives while another cycle already holds the lock.
     let syncRerunTimer = null;
 
+    /**
+     * True while a live question is on screen with unfinished session work behind it.
+     *
+     * Self-contained on purpose: the quizVisible()/liveSession()/resultsVisible() trio further
+     * down the file lives inside its own IIFE (js/app.js:22514) and is not reachable from
+     * this scope. The three conditions are the same ones that trio checks — panels visible,
+     * summary screen not up, a real session in `state` that is not already finishing.
+     */
+    function isQuizInProgress() {
+        const panels = document.getElementById('practice-active-state-panels');
+        if (!panels || panels.classList.contains('hidden')) return false;
+        const results = document.getElementById('practice-result-panel');
+        if (results && !results.classList.contains('hidden')) return false;
+        const st = (typeof state === 'object' && state) ? state : null;
+        return !!(st && Array.isArray(st.questions) && st.questions.length > 0 && !st.isFinishing);
+    }
+
+    // Ceiling on how long an answer may wait while a quiz is live, so a long mock test is
+    // still backed up periodically instead of holding everything to the final question.
+    // Deliberately a function, not a module-level `const`: scheduleCloudSync() is reached
+    // from the boot path before this region of the file has executed, and a `const` read in
+    // that window throws on the temporal dead zone. Same rule as syncWatchdogMs().
+    function quizSyncMaxDeferMs() { return 120000; }
+
     function scheduleCloudSync(reason = "") {
         const key = getSyncKey();
         if (!key) return;
 
         KrishiStorage.setItem('krishi_sync_pending', 'true');
-        
+
         let pendingCount = parseInt(KrishiStorage.getItem('krishi_sync_pending_count') || '0');
         pendingCount += 1;
         KrishiStorage.setItem('krishi_sync_pending_count', pendingCount.toString());
-        
+
         setSyncStatus('Syncing...');
         updateOfflineQueueBadge();
 
-        // Snappy direct debounced sync (800ms) for true instant real-time performance
+        // Snappy direct debounced sync (800ms) for true instant real-time performance,
+        // re-armed in 5s steps while a quiz is live.
+        //
+        // saveData() schedules a sync on every submitted answer, so a 50-question session
+        // used to fire up to 50 full cycles — each one a server read, a CRDT merge over the
+        // whole payload and a write whose `sm2` field alone reaches ~385 KB at 2,000 answered
+        // questions. That is tens of MB of upload and 50 merge passes competing with the
+        // question transition for the main thread, to back up work the user is still doing.
+        //
+        // Deferring is safe because the answer is already durable: saveData() has written it
+        // to KrishiStorage before this function is called, so the only thing waiting is the
+        // cloud copy. Capped at quizSyncMaxDeferMs() so a long mock still checkpoints.
         if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
-        syncDebounceTimer = setTimeout(() => {
+        const requestedAt = Date.now();
+        syncDebounceTimer = setTimeout(function tick() {
+            if (isQuizInProgress() && (Date.now() - requestedAt) < quizSyncMaxDeferMs()) {
+                // The deferral window is deliberately longer than syncWatchdogMs(), so the
+                // watchdog has to be kept alive or it would retire this still-queued sync as
+                // 'Sync failed' at 60s. Re-armed without setSyncStatus() to skip its
+                // updateSyncUI() repaint on every step.
+                armSyncWatchdog();
+                syncDebounceTimer = setTimeout(tick, 5000);
+                return;
+            }
+            syncDebounceTimer = null;
             performCloudSync();
         }, 800);
 
@@ -19260,6 +19371,81 @@ ${text}`;
                 return reg.sync.register('sync-cloud-data');
             }).catch(err => {});
         }
+    }
+
+    // Backoff ladder for a failed sync cycle. Functions, not module-level `const`, for the
+    // same temporal-dead-zone reason as syncWatchdogMs() — and the attempt counter lives on
+    // `window` because scheduleSyncRetry() is reachable from the boot route's error paths.
+    function syncRetryDelays() { return [5000, 15000, 60000]; }
+
+    /**
+     * Re-runs a failed sync on 5s / 15s / 60s backoff, then stands down.
+     *
+     * Nothing used to retry a failed *write* at all. performCloudSync() set 'Sync failed' and
+     * returned; the file's only retry was the onSnapshot error callback, which fires when the
+     * listener itself breaks, not when a push fails. So a cycle that lost its server read on
+     * a flaky connection stayed failed until the user happened to change data again or the
+     * device produced a genuine offline→online transition — and as the read-failure path
+     * itself notes, navigator.onLine reads `true` on captive portals and data-saver links, so
+     * that transition never arrives. `krishi_sync_pending` sat at 'true' with nothing draining
+     * it and the queue badge counted up.
+     *
+     * Not armed for an oversized payload: that failure is deterministic. Three more attempts
+     * would fail identically, burn quota and re-raise the same toast. It clears when the user
+     * trims data, which schedules a sync of its own.
+     */
+    function scheduleSyncRetry(reason) {
+        const delays = syncRetryDelays();
+        const attempt = window.__krishiSyncRetryAttempt || 0;
+        // One pending retry, not one per failure — two overlapping ladders would double the
+        // request rate against a connection that is already failing.
+        if (window.__krishiSyncRetryTimer) return;
+        if (attempt >= delays.length) {
+            console.warn('[Cloud Sync] Retry budget spent after ' + reason +
+                '; waiting for the next data change, reconnect or foreground.');
+            return;
+        }
+        window.__krishiSyncRetryAttempt = attempt + 1;
+        window.__krishiSyncRetryTimer = setTimeout(() => {
+            window.__krishiSyncRetryTimer = null;
+            // Something else may have drained it in the meantime (a snapshot write-back, a
+            // manual Sync Now). Retrying then would be a pointless full cycle.
+            if (KrishiStorage.getItem('krishi_sync_pending') !== 'true') return;
+            console.log('[Cloud Sync] Retry ' + window.__krishiSyncRetryAttempt + '/' +
+                delays.length + ' after ' + reason);
+            performCloudSync();
+        }, delays[attempt]);
+    }
+
+    // A cycle that reached 'Synced' resets the ladder. Without this the first failure after a
+    // long healthy session would start at 60s and the one after it would give up for good.
+    function clearSyncRetry() {
+        if (window.__krishiSyncRetryTimer) {
+            clearTimeout(window.__krishiSyncRetryTimer);
+            window.__krishiSyncRetryTimer = null;
+        }
+        window.__krishiSyncRetryAttempt = 0;
+    }
+
+    /**
+     * Sends a sync that was left pending — from a previous run of the app, or from a failure
+     * whose retry ladder ran out while nobody was watching.
+     *
+     * `krishi_sync_pending` lives in KrishiStorage and survives a relaunch, but nothing on the
+     * boot path ever pushed it: scheduleCloudSync() is reached at startup only from the
+     * snapshot handler's `else` branch, i.e. only when the cloud document does not exist yet.
+     * A device that went offline mid-answer and was then killed came back with pending='true',
+     * a queue badge showing N, and no code path that would ever send it.
+     *
+     * performCloudSync() directly rather than scheduleCloudSync(): a drain is not a new
+     * change, and scheduleCloudSync() would bump krishi_sync_pending_count and inflate the
+     * offline-queue badge by one on every launch.
+     */
+    function drainPendingSync(reason) {
+        if (KrishiStorage.getItem('krishi_sync_pending') !== 'true') return;
+        if (!navigator.onLine || !getSyncKey()) return;
+        console.log('[Cloud Sync] Draining a pending sync (' + reason + ').');
+        performCloudSync();
     }
 
     // Firestore hard-limits a document to 1 MiB. Refuse an oversized write rather than
@@ -19291,26 +19477,95 @@ ${text}`;
         // users/{uid}/qbank subcollection — deleting MCQs now frees nothing here, so the one
         // actionable message the user ever gets was sending them to destroy their own bank
         // for no benefit. Cleared automatically by the next successful sync.
+        //
+        // The fields are now ranked and measured rather than named from a guess. The previous
+        // wording always blamed timing history and mock results, which was the right answer
+        // when those were the only compressed fields — but `sm2` grows by one 197-byte record
+        // per distinct question answered and passes the whole 900 KB budget on its own at
+        // ~4,600 questions, so for a heavy user the advice pointed at two fields that together
+        // held a fraction of the bytes. Clearing them would not have resumed backup, and the
+        // user would have deleted real history for nothing.
+        let biggest = '';
+        try {
+            const top = rankCloudDocFields(3);
+            if (top.length) {
+                biggest = 'Biggest: ' + top.map(f =>
+                    cloudFieldLabel(f.field) + ' ~' + f.kb + ' KB').join(', ') + '. ';
+            }
+        } catch (err) { /* a toast that names nothing still beats no toast */ }
+
         showToast('⚠️ Backup paused: data (~' + kb + ' KB) crosses the 900 KB cloud-document limit. ' +
-            'Clear old timing history / mock results in Settings to resume backup (your question bank is stored separately and is not the cause).', 9000);
+            biggest +
+            'Clear the largest of these in Settings to resume backup (your question bank is stored separately and is not the cause).', 9000);
     }
 
-    // Compresses the two unbounded arrays in place. Split out of prepareCloudPayload() so the
+    // Plain-language names for the fields this toast can name. A raw payload key is not an
+    // instruction — a user cannot act on "sm2". A function rather than a module-level `const`
+    // for the temporal-dead-zone reason documented on syncWatchdogMs(): handlePayloadTooBigError()
+    // is reachable from the boot route's catch blocks, before this region has executed.
+    function cloudFieldLabel(field) {
+        return ({
+            timingLog: 'per-question timing history',
+            sm2: 'spaced-repetition review schedule',
+            sm2DailyLog: 'daily review tally',
+            mockScores: 'mock test results',
+            wrong: 'wrong-answer list',
+            wrongLog: 'wrong-answer history',
+            bookmarked: 'bookmarks',
+            bookmarkedLog: 'bookmark history',
+            practiceRecent: 'recent practice sessions',
+            layoutBackups: 'saved home layouts',
+            examProfiles: 'exam profiles',
+            syllabusCustom: 'custom syllabus',
+            customSubjects: 'custom subjects',
+            stats: 'subject statistics'
+        })[field] || field;
+    }
+
+    /**
+     * The fields occupying the users/{uid} document, largest first, in KB.
+     *
+     * Measured on the same probe the size meter uses, so the "~N KB" in the toast and the
+     * per-field breakdown beside it can never disagree about what the document contains.
+     */
+    function rankCloudDocFields(limit = 3) {
+        const probe = buildCloudDocProbe();
+        return Object.keys(probe).map(field => {
+            let bytes = 0;
+            try { bytes = JSON.stringify(probe[field]).length; } catch (err) {}
+            return { field: field, kb: Math.round(bytes / 1024) };
+        }).sort((a, b) => b.kb - a.kb).filter(f => f.kb > 0).slice(0, limit);
+    }
+
+    // Compresses the unbounded fields in place. Split out of prepareCloudPayload() so the
     // backup-size meter can measure exactly the bytes a write will send without also inheriting
     // the throw from assertPayloadFits() — a throw inside the meter's try/catch would silently
     // leave a stale number on screen at precisely the moment the number matters.
+    //
+    // `sm2` belongs here and was the one unbounded field left out. It grows by one record per
+    // distinct question the user ever answers, and a record measures 197 bytes serialized
+    // ({reviews, interval, difficulty, stability, retrievability, easeFactor, lapses,
+    // lastAnswered, nextReview, status} plus the id key). That is ~192 KB at 1,000 answered
+    // questions, ~385 KB at 2,000, and it crosses the whole 900 KB document budget on its own
+    // at ~4,600 — entirely reachable, because the bank is user-imported and the static seed is
+    // 4 questions. Worse, the one actionable message a user gets at the ceiling
+    // (handlePayloadTooBigError) points at timing history and mock results, so following it
+    // would not have freed the bytes that were actually full.
+    //
+    // These are all short numeric records with ten identical repeated key names, which is the
+    // shape LZ compresses hardest — the same reason timing records shrink 10-20x.
+    const COMPRESSED_CLOUD_FIELDS = ['timingLog', 'mockScores', 'sm2'];
     function compressUnboundedFields(payload) {
         if (!payload) return payload;
         if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
-            if (payload.timingLog !== undefined && typeof payload.timingLog !== 'string') {
-                payload.timingLog = LZString.compressToUTF16(JSON.stringify(payload.timingLog));
-            }
-            if (payload.mockScores !== undefined && typeof payload.mockScores !== 'string') {
-                payload.mockScores = LZString.compressToUTF16(JSON.stringify(payload.mockScores));
-            }
-            if (payload.timingLog !== undefined || payload.mockScores !== undefined) {
-                payload.isCompressed = true;
-            }
+            let touched = false;
+            COMPRESSED_CLOUD_FIELDS.forEach(field => {
+                if (payload[field] !== undefined && typeof payload[field] !== 'string') {
+                    payload[field] = LZString.compressToUTF16(JSON.stringify(payload[field]));
+                }
+                if (payload[field] !== undefined) touched = true;
+            });
+            if (touched) payload.isCompressed = true;
         }
         return payload;
     }
@@ -19325,11 +19580,19 @@ ${text}`;
     //     before assertPayloadFits() sees them, and timing records compress roughly 10-20x.
     // The old number drove the amber/red thresholds and a toast advising the user to delete
     // custom MCQs — an action that, since the qbank offload, does not shrink the document.
-    function measureCloudDocKB() {
+    //
+    // Built once here and shared with rankCloudDocFields(), which names the biggest fields in
+    // the too-big toast. Two probes measuring the same limit is precisely how the meter and
+    // the write path drifted apart before.
+    function buildCloudDocProbe() {
         const probe = collectAllAppData();
         delete probe.customQuestions;      // mirrors syncQbankToChunks()'s unconditional strip
         compressUnboundedFields(probe);    // mirrors prepareCloudPayload()
-        return Math.round(JSON.stringify(probe).length / 1024);
+        return probe;
+    }
+
+    function measureCloudDocKB() {
+        return Math.round(JSON.stringify(buildCloudDocProbe()).length / 1024);
     }
 
     // Single place where an outgoing users/{uid} payload is made write-safe: compress the
@@ -19457,6 +19720,7 @@ ${text}`;
                     // connections, so this path is reached routinely.
                     console.warn('[Cloud Sync] Server read failed; sync deferred instead of guessing document state.', e);
                     setSyncStatus('Sync failed');
+                    scheduleSyncRetry('server read failure');
                     return;
                 }
             }
@@ -19520,6 +19784,7 @@ if (typeof updateSyncUI === 'function') updateSyncUI();
                     } catch (e) {
                         console.warn('[Cloud Sync] Could not confirm document absence with the server; initial push skipped.', e);
                         setSyncStatus('Sync failed');
+                        scheduleSyncRetry('absence check failure');
                         return;
                     }
                     if (serverDoc.exists) {
@@ -19551,7 +19816,13 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             }
         } catch (err) {
             console.error('[Cloud Sync] Sync execution error:', err);
-            if (isPayloadTooBigError(err)) handlePayloadTooBigError(err);
+            if (isPayloadTooBigError(err)) {
+                // Deterministic — see scheduleSyncRetry(). Retrying an oversized document
+                // fails identically three more times and only burns quota.
+                handlePayloadTooBigError(err);
+            } else {
+                scheduleSyncRetry('write failure');
+            }
             setSyncStatus('Sync failed');
         } finally {
             // Without this, any throw above latched syncInProgress true for the rest of
@@ -19788,6 +20059,24 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         return 60000;
     }
 
+    // Arms the stranded-'Syncing...' watchdog. Extracted from setSyncStatus() because the
+    // quiz deferral in scheduleCloudSync() has to hold it open across a window that is
+    // deliberately longer than syncWatchdogMs(), and has to do that WITHOUT setSyncStatus()'s
+    // updateSyncUI() repaint on every 5s step. One copy of the rule, two callers.
+    function armSyncWatchdog() {
+        if (window.__krishiSyncWatchdog) clearTimeout(window.__krishiSyncWatchdog);
+        window.__krishiSyncWatchdog = setTimeout(function () {
+            window.__krishiSyncWatchdog = null;
+            if (KrishiStorage.getItem('krishi_sync_status') !== 'Syncing...') return;
+            // Written straight to storage instead of through setSyncStatus(): clearing a
+            // stranded badge is not a completed sync and must not stamp a fresh
+            // "Last Synced" time on a sync that never reported success.
+            KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
+            console.warn('[Cloud Sync] Watchdog retired a sync that never reported back.');
+            updateSyncUI();
+        }, syncWatchdogMs());
+    }
+
     function setSyncStatus(status) {
         KrishiStorage.setItem('krishi_sync_status', status);
 
@@ -19799,6 +20088,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             KrishiStorage.setItem('krishi_last_sync_time', new Date().toLocaleTimeString());
             // A completed cycle is proof the payload fit, so the size-stop marker is stale.
             KrishiStorage.removeItem('krishi_sync_payload_too_big');
+            // ...and proof the connection works, so the backoff ladder starts fresh next time.
+            clearSyncRetry();
         }
 
         // 'Syncing...' is persisted like every other status, and nothing used to retire it:
@@ -19808,21 +20099,11 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // routinely at boot. A dropped snapshot therefore froze the amber pulse in localStorage
         // and it survived every relaunch — the panel read "Syncing..." forever while the data
         // was in fact backed up. Whatever the cause, the watchdog resolves it.
-        if (window.__krishiSyncWatchdog) {
+        if (status === 'Syncing...') {
+            armSyncWatchdog();
+        } else if (window.__krishiSyncWatchdog) {
             clearTimeout(window.__krishiSyncWatchdog);
             window.__krishiSyncWatchdog = null;
-        }
-        if (status === 'Syncing...') {
-            window.__krishiSyncWatchdog = setTimeout(function () {
-                window.__krishiSyncWatchdog = null;
-                if (KrishiStorage.getItem('krishi_sync_status') !== 'Syncing...') return;
-                // Written straight to storage instead of through setSyncStatus(): clearing a
-                // stranded badge is not a completed sync and must not stamp a fresh
-                // "Last Synced" time on a sync that never reported success.
-                KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
-                console.warn('[Cloud Sync] Watchdog retired a sync that never reported back.');
-                updateSyncUI();
-            }, syncWatchdogMs());
         }
 
         updateSyncUI();
@@ -19831,11 +20112,30 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
     // Reconnection listener
     window.addEventListener('online', () => {
         if (KrishiStorage.getItem('krishi_sync_pending') === 'true') {
+            // A real reconnect is fresh evidence, so the ladder starts over rather than
+            // resuming at the 60s step it may have crawled to while the link was down.
+            clearSyncRetry();
             scheduleCloudSync('Reconnected to internet');
         } else {
             updateSyncUI();
         }
     });
+
+    // Returning to the foreground is the one reliable signal left on mobile: the write can
+    // fail while the app is backgrounded, the retry ladder then runs out unseen, and the OS
+    // freezes the tab before any 'online' event is delivered — so neither the ladder nor the
+    // reconnect listener above ever gets the backlog out.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        if (KrishiStorage.getItem('krishi_sync_pending') !== 'true') return;
+        clearSyncRetry();
+        drainPendingSync('returned to foreground');
+    });
+
+    // Late enough that the boot snapshot listener has had its chance to clear the backlog on
+    // its own; drainPendingSync() re-reads the flag, so a snapshot that already succeeded
+    // makes this a no-op.
+    setTimeout(() => drainPendingSync('app start'), 8000);
 
 function updatePracticePage() {
     let container = document.getElementById('subject-buttons-container');

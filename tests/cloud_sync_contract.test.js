@@ -40,6 +40,13 @@ function functionBody(name) {
 
 // ── Payload size guard on EVERY users/{uid} write ───────────────────────────────
 
+/** The single list that drives both compression on write and decoding on read. */
+function compressedCloudFields() {
+    const m = APP_JS.match(/const COMPRESSED_CLOUD_FIELDS\s*=\s*\[([^\]]*)\]/);
+    assert.ok(m, 'COMPRESSED_CLOUD_FIELDS was renamed or removed - update this test');
+    return m[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+}
+
 test('prepareCloudPayload() compresses the unbounded arrays and asserts the size', () => {
     const body = functionBody('prepareCloudPayload');
     assert.match(body, /compressUnboundedFields\(/,
@@ -50,15 +57,61 @@ test('prepareCloudPayload() compresses the unbounded arrays and asserts the size
         'prepareCloudPayload() must end in assertPayloadFits() - it is the only thing standing ' +
         'between a heavy user and Firestore\'s 1 MiB hard limit.');
 
+    const fields = compressedCloudFields();
+    ['timingLog', 'mockScores'].forEach(f => {
+        assert.ok(fields.includes(f), f + ' is not compressed');
+    });
+    assert.ok(fields.includes('sm2'),
+        'sm2 must be compressed. It grows by one 197-byte record per distinct question the ' +
+        'user ever answers - ~385 KB at 2,000 answered questions and past the whole 900 KB ' +
+        'document budget on its own at ~4,600 - and the too-big message points the user at ' +
+        'timing history and mock results, so following it would not free the full bytes.');
+
     const helper = functionBody('compressUnboundedFields');
-    assert.match(helper, /timingLog/, 'timingLog is not compressed');
-    assert.match(helper, /mockScores/, 'mockScores is not compressed');
+    assert.match(helper, /COMPRESSED_CLOUD_FIELDS/,
+        'compressUnboundedFields() must drive off the shared field list, not its own inline ' +
+        'copy: mergeCloudAndLocalData() decodes the same names on the way back in, and a ' +
+        'field compressed on write but not decoded on read reaches the merge as a string.');
+});
+
+test('every compressed field is decoded again on the way in', () => {
+    const merge = functionBody('mergeCloudAndLocalData');
+
+    // Two decode shapes exist on purpose: array-shaped fields share a loop that also
+    // coerces with Array.isArray(), and sm2 is decoded on its own because it is a map.
+    const arrayList = merge.match(/\[([^\]]*)\]\.forEach\(field => \{\s*\r?\n\s*decodeCompressed/);
+    assert.ok(arrayList, 'the array-shaped decode loop was restructured - update this test');
+    const loopFields = arrayList[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+
+    compressedCloudFields().forEach(field => {
+        const decoded = loopFields.includes(field) ||
+            new RegExp('decodeCompressed\\(\\s*[\'"]' + field + '[\'"]').test(merge);
+        assert.ok(decoded,
+            field + ' is compressed on write but never decoded in mergeCloudAndLocalData(). ' +
+            'The merge would then read a compressed string: `{ ...aString }` does not throw, ' +
+            'it silently yields {0:"a",1:"b",...} and that gets written down as the ' +
+            'user\'s data.');
+    });
+
+    // sm2 is a map, not an array, so it must not be swept into the array coercion: the
+    // Array.isArray() guard there would replace a decoded schedule with [].
+    assert.ok(!loopFields.includes('sm2'),
+        'sm2 is an object keyed by question id. Coercing it with Array.isArray() blanks the ' +
+        'whole review schedule.');
+    assert.match(merge, /decodeCompressed\(\s*'sm2'\s*,\s*'\{\}'\s*\)/,
+        'sm2 must decode with an object fallback - \'[]\' would hand the sm2 union an array.');
 });
 
 // ── The size the user is shown must be the size that is written ─────────────────
 
 test('measureCloudDocKB() measures the document the write path actually sends', () => {
-    const body = functionBody('measureCloudDocKB');
+    // The probe is shared with rankCloudDocFields(), which names the biggest fields in the
+    // too-big toast. Both numbers describe the same 900 KB limit, so they are built once.
+    assert.match(functionBody('measureCloudDocKB'), /buildCloudDocProbe\(\)/,
+        'the meter must measure the shared probe. A second probe of its own is exactly how ' +
+        'the meter and the write path drifted apart before.');
+
+    const body = functionBody('buildCloudDocProbe');
 
     assert.match(body, /delete\s+probe\.customQuestions/,
         'the backup-size meter still counts customQuestions. syncQbankToChunks() deletes that ' +
@@ -71,6 +124,29 @@ test('measureCloudDocKB() measures the document the write path actually sends', 
         'the meter must apply the same compression the write path applies before ' +
         'assertPayloadFits() sees the payload, or it reports timingLog at its raw size - ' +
         'timing records compress roughly 10-20x, and timingLog is the single largest field.');
+});
+
+test('the too-big toast names the fields that are actually full', () => {
+    const body = functionBody('handlePayloadTooBigError');
+
+    assert.match(body, /rankCloudDocFields\(/,
+        'the toast named "timing history / mock results" unconditionally. That was right when ' +
+        'those were the only compressed fields, but sm2 grows by one 197-byte record per ' +
+        'distinct question answered and passes the whole 900 KB budget alone at ~4,600 - so ' +
+        'for the heavy user who actually hits this, the advice pointed at two fields holding a ' +
+        'fraction of the bytes. Clearing them would not resume backup and the history would be ' +
+        'gone for nothing.');
+    assert.match(body, /cloudFieldLabel\(/,
+        'a raw payload key is not an instruction - a user cannot act on "sm2"');
+    assert.match(body, /catch\s*\(err\)/,
+        'the ranking runs collectAllAppData() and must not be able to suppress the toast: a ' +
+        'toast that names nothing still beats no toast at the one moment backup has stopped');
+
+    const rank = functionBody('rankCloudDocFields');
+    assert.match(rank, /buildCloudDocProbe\(\)/,
+        'ranking a differently-built payload would let the "~N KB" total and the per-field ' +
+        'breakdown beside it disagree about what the document contains');
+    assert.match(rank, /sort\(\(a, b\) => b\.kb - a\.kb\)/, 'largest first, or it names the wrong field');
 });
 
 test('the backup meter renders through measureCloudDocKB(), not a raw collect', () => {
@@ -95,7 +171,11 @@ test("setSyncStatus() arms a watchdog for 'Syncing...' and clears it otherwise",
         'in localStorage and the only success-path clear on the initCloudSync() route sits ' +
         'behind two early returns in the snapshot handler, so a dropped snapshot froze the ' +
         'amber pulse across every relaunch.');
-    assert.match(body, /resolveStuckSyncStatus\(\)/,
+    assert.match(body, /armSyncWatchdog\(\)/,
+        "the 'Syncing...' branch must arm the watchdog. The timer body lives in " +
+        'armSyncWatchdog() because the quiz deferral in scheduleCloudSync() re-arms it too, ' +
+        'and two copies of a timeout rule drift apart.');
+    assert.match(functionBody('armSyncWatchdog'), /resolveStuckSyncStatus\(\)/,
         'the watchdog must resolve the badge against krishi_sync_pending rather than guess.');
 });
 
@@ -112,13 +192,13 @@ test("setSyncStatus('Synced') stamps the last-sync time for every path", () => {
 });
 
 test('the watchdog does not fake a successful sync', () => {
-    const body = functionBody('setSyncStatus');
+    const body = functionBody('armSyncWatchdog');
     // Comments stripped first: the code here is *explained* in terms of setSyncStatus(), so a
     // raw text match reads the explanation as a violation of the thing it explains.
     const watchdog = body
         .slice(body.indexOf('__krishiSyncWatchdog = setTimeout'))
         .replace(/\/\/[^\n]*/g, '');
-    assert.ok(watchdog.length > 0, 'watchdog timer not found in setSyncStatus()');
+    assert.ok(watchdog.length > 0, 'watchdog timer not found in armSyncWatchdog()');
     assert.doesNotMatch(watchdog, /setSyncStatus\(/,
         'the watchdog must write krishi_sync_status directly. Routing back through ' +
         'setSyncStatus() would stamp a fresh "Last Synced" time for a sync that never ' +
@@ -1015,3 +1095,189 @@ test('the SM2 engine no longer reads or writes native localStorage', () => {
     );
 });
 
+
+// ── The retention tally has to travel with the schedule ─────────────────────────
+
+test('sm2DailyLog is wired through all four sync stages', () => {
+    assert.match(functionBody('collectAllAppData'), /payload\.sm2DailyLog\s*=/,
+        'collectAllAppData() never reads the daily review log. It was reachable only by ' +
+        'recording a review, so no sync stage could carry it: the schedule synced across ' +
+        'devices and the retention figure behind it did not - 80% on the phone, 0% on a ' +
+        'tablet holding the same account.'
+    );
+    assert.match(functionBody('applyAllAppData'), /data\.sm2DailyLog/,
+        'applyAllAppData() never writes the peer tally down, so a pull leaves retention local'
+    );
+    assert.match(functionBody('mergeCloudAndLocalData'), /merged\.sm2DailyLog\s*=/,
+        'the merge must carry sm2DailyLog forward or it is dropped on write-back'
+    );
+    assert.match(functionBody('getDifferentialSyncDelta'), /'sm2DailyLog'/,
+        'missing from keysToCheck means it merges correctly here and is never sent'
+    );
+});
+
+test('the daily log merges on the larger tally, never a sum and never last-write-wins', () => {
+    const merge = functionBody('mergeCloudAndLocalData');
+    const from = merge.indexOf('sm2DailyLog');
+    const block = merge.slice(from, from + 900);
+
+    assert.match(block, /mergeDailyLogs/,
+        'the merge must reuse KrishiSM2Engine.mergeDailyLogs(). The same rule runs in ' +
+        '_getDailyLog() when reconciling a stray localStorage copy, and two copies of a ' +
+        'merge rule are how the capped-list numbers drifted apart.'
+    );
+    assert.doesNotMatch(block, /\+\s*\(\s*(local|cloud)\.sm2DailyLog/,
+        'summing the two sides double-counts every day that was already synced and walks ' +
+        'the retention rate past 100%'
+    );
+
+    // mergeDailyLogs is a `static` class method, so functionBody()'s declaration regex does
+    // not reach it - match the method head in pwa_helpers.js directly.
+    const helpers = fs.readFileSync(path.join(ROOT, 'js', 'pwa_helpers.js'), 'utf8');
+    const ruleAt = helpers.indexOf('static mergeDailyLogs(');
+    assert.ok(ruleAt > -1, 'KrishiSM2Engine.mergeDailyLogs() was renamed - update this test');
+    const rule = helpers.slice(ruleAt, ruleAt + 600);
+    assert.match(rule, /\(rec\.total \|\| 0\) > \(held\.total \|\| 0\)/,
+        'per-day counters: the fuller tally is the more complete one. A timestamp rule is ' +
+        'wrong here - the two sides are partial counts of the SAME day, not two versions of ' +
+        'one record, so last-write-wins throws away real attempts.'
+    );
+});
+
+// ── A failed write has to be retried, and a pending one has to be drained ────────
+
+test('performCloudSync() arms a retry on every failure except an oversized payload', () => {
+    const body = functionBody('performCloudSync');
+
+    // The three ways a cycle ends without the data landing.
+    const failures = body.match(/setSyncStatus\('Sync failed'\)/g) || [];
+    assert.equal(failures.length, 3,
+        'the failure paths in performCloudSync() changed - re-check that each one still arms ' +
+        'a retry (server read, absence confirmation, and the catch-all)');
+
+    assert.match(body, /scheduleSyncRetry\('server read failure'\)/,
+        'a failed server read left krishi_sync_pending at true and returned with no retry. ' +
+        'The only retry in the file is the onSnapshot error callback, which fires for a broken ' +
+        'listener, not a failed write - and navigator.onLine reads true on captive portals, so ' +
+        "no offline->online transition ever came to trigger the 'online' listener either.");
+    assert.match(body, /scheduleSyncRetry\('absence check failure'\)/,
+        'the initial-push path fails the same way and needs the same ladder');
+    assert.match(body, /scheduleSyncRetry\('write failure'\)/,
+        'the catch-all must retry too, or a transient write error is permanent for the session');
+
+    // An oversized document fails identically every time.
+    const tooBig = body.slice(body.indexOf('isPayloadTooBigError(err)'));
+    assert.match(tooBig, /handlePayloadTooBigError\(err\)[\s\S]{0,120}\}\s*else\s*\{[\s\S]{0,200}scheduleSyncRetry/,
+        'the size stop must sit on the OTHER side of the retry branch. Retrying an oversized ' +
+        'payload three times cannot succeed - it just burns quota and re-raises the toast.');
+});
+
+test('the retry ladder backs off, keeps one timer, and resets on success', () => {
+    const delays = functionBody('syncRetryDelays');
+    const steps = (delays.match(/\d+/g) || []).map(Number);
+    assert.deepEqual(steps, [5000, 15000, 60000],
+        'the backoff steps changed - a flat or unbounded ladder hammers a link that is ' +
+        'already failing');
+
+    const retry = functionBody('scheduleSyncRetry');
+    assert.match(retry, /if\s*\(window\.__krishiSyncRetryTimer\)\s*return/,
+        'without the single-timer guard every failing save stacks another ladder and the ' +
+        'request rate multiplies against the connection that is already down');
+    assert.match(retry, /attempt >= delays\.length/, 'the ladder must be bounded');
+    assert.match(retry, /krishi_sync_pending'\)\s*!==\s*'true'\)\s*return/,
+        'a retry that fires after something else drained the queue is a pointless full cycle');
+    assert.match(retry, /window\.__krishiSyncRetryAttempt/,
+        'the attempt counter must live on window: scheduleSyncRetry() is reachable from the ' +
+        'boot route, where a module-level binding in this region is still in its temporal ' +
+        'dead zone - the same reason syncWatchdogMs() is a function.');
+
+    assert.match(functionBody('setSyncStatus'), /clearSyncRetry\(\)/,
+        "reaching 'Synced' must reset the ladder, or the first failure after a long healthy " +
+        'session starts at 60s and the next one gives up permanently');
+});
+
+test('a sync left pending is drained at boot and on foreground', () => {
+    const drain = functionBody('drainPendingSync');
+    assert.match(drain, /performCloudSync\(\)/,
+        'a drain must go straight to performCloudSync(). scheduleCloudSync() would increment ' +
+        'krishi_sync_pending_count and inflate the offline-queue badge by one every launch.');
+    assert.match(drain, /navigator\.onLine/, 'draining while offline just repaints Offline');
+
+    assert.match(APP_JS, /setTimeout\(\(\) => drainPendingSync\('app start'\)/,
+        'nothing on the boot path ever sent a pending sync: scheduleCloudSync() is reached at ' +
+        'startup only from the snapshot handler else-branch (the create path), so a device ' +
+        'killed while offline came back with pending=true, a queue badge showing N, and no ' +
+        'code path that would ever send it.');
+    assert.match(APP_JS, /visibilityState !== 'visible'\) return;\s*\r?\n\s*if \(KrishiStorage\.getItem\('krishi_sync_pending'\)/,
+        'returning to the foreground is the only reliable retry signal left on mobile: the ' +
+        'write fails while backgrounded, the ladder runs out unseen, and the OS freezes the ' +
+        "tab before any 'online' event is delivered.");
+});
+
+// ── A live quiz must not pay for 50 full sync cycles ─────────────────────────────
+
+test('scheduleCloudSync() defers while a quiz is live, with a hard ceiling', () => {
+    const body = functionBody('scheduleCloudSync');
+
+    assert.match(body, /isQuizInProgress\(\)[\s\S]{0,120}quizSyncMaxDeferMs\(\)/,
+        'the debounce must re-arm while a quiz is live. saveData() schedules a sync per ' +
+        'submitted answer, so a 50-question session fired up to 50 full cycles - each a ' +
+        'server read, a CRDT merge over the whole payload, and a write whose sm2 field alone ' +
+        'reaches ~385 KB at 2,000 answered questions.');
+    assert.match(body, /setTimeout\(tick, 5000\)/, 'the re-arm step is gone');
+    assert.ok(/armSyncWatchdog\(\)/.test(body),
+        'the deferral window is longer than syncWatchdogMs(), so the watchdog has to be held ' +
+        "open - otherwise it retires a still-queued sync as 'Sync failed' at 60s, mid-quiz.");
+
+    const ceiling = Number((functionBody('quizSyncMaxDeferMs').match(/\d+/) || [])[0]);
+    assert.ok(ceiling > 0 && ceiling <= 300000,
+        'the ceiling is what keeps a long mock test checkpointed rather than holding every ' +
+        'answer to the final question; unbounded deferral is a data-loss risk, not an ' +
+        'optimisation');
+});
+
+test('isQuizInProgress() is self-contained and checks all three conditions', () => {
+    const body = functionBody('isQuizInProgress');
+
+    assert.match(body, /practice-active-state-panels/, 'the live-quiz panel is the primary signal');
+    assert.match(body, /practice-result-panel/,
+        'the summary screen is reachable with the panels still up; syncing there is correct ' +
+        'and must not be deferred');
+    assert.match(body, /isFinishing/,
+        'a session already finishing is not a live question - deferring its final write is ' +
+        'exactly the write that matters most');
+
+    assert.doesNotMatch(body, /\bquizVisible\(|\bliveSession\(|\bresultsVisible\(/,
+        'those helpers live inside the IIFE at js/app.js:22514 and are not in scope here. ' +
+        'Calling one would throw a ReferenceError inside the debounce timer, where nothing ' +
+        'catches it - the sync would simply stop.');
+});
+
+// ── Every reader of a now-compressed field must be type-guarded ──────────────────
+
+test('the cloud-vault restore will not hand a compressed sm2 to the engine', () => {
+    const body = functionBody('restoreFromCloudVault');
+    const line = (body.split(/\r?\n/).find(l => l.includes('KrishiSM2Engine._saveData')) || '');
+    assert.ok(line, 'the vault restore no longer writes sm2 - update this test');
+    assert.match(line, /typeof d\.sm2 === 'object'/,
+        'the vault stores collectAllAppData() raw, so d.sm2 is an object today - but sm2 is now ' +
+        'on COMPRESSED_CLOUD_FIELDS, and _saveData() does not validate. Passing the compressed ' +
+        'string would replace the entire review schedule with it, and nothing would throw.');
+    assert.match(line, /!Array\.isArray\(d\.sm2\)/,
+        'an array would be written down as a schedule keyed 0,1,2...');
+});
+
+test('a cloud sm2 of the wrong shape is normalised, not spread', () => {
+    const merge = functionBody('mergeCloudAndLocalData');
+    const guardAt = merge.indexOf("decodeCompressed('sm2'");
+    assert.ok(guardAt > -1, "the sm2 decode moved - update this test");
+    const guard = merge.slice(guardAt, guardAt + 400);
+
+    assert.match(guard, /Array\.isArray\(cloud\.sm2\)/,
+        'the union at merged.sm2 spreads cloud.sm2. An array spreads to {0:...,1:...} and a ' +
+        'decode that returned one - from a peer that wrote the field as a list, or a truncated ' +
+        'blob - would be written down as the schedule.');
+    assert.match(guard, /cloud\.sm2 = \{\}/, 'the fallback has to be an object, matching the union');
+    assert.ok(merge.indexOf('...(cloud.sm2') > guardAt,
+        'the guard must run BEFORE the union reads cloud.sm2, or it guards nothing');
+});

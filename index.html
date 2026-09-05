@@ -86,7 +86,7 @@
          updateSyncUI(). Both stay in the service worker's optional precache list, so
          offline QR keeps working. -->
     <script src="./js/libs/lz-string.min.js"></script>
-    <link href="./index.css?v=qiz75vi" rel="stylesheet">
+    <link href="./index.css?v=bnzjlwf" rel="stylesheet">
     <script>
         // Break PWA caching deadlocks by forcing a service-worker update check.
         // Cache eviction is NOT done here: sw.js's own activate handler already deletes
@@ -1338,7 +1338,9 @@
                         </div>
                     </div>
 
-                    <p id="q-text" class="font-bold text-base leading-relaxed text-slate-800 dark:text-slate-100" style="color:var(--text);"></p>
+                    <!-- A <div>, not a <p>: a question that carries formatting is rendered as
+                         <p> elements by setRichTextContent(), and <p> cannot nest inside <p>. -->
+                    <div id="q-text" class="font-bold text-base leading-relaxed text-slate-800 dark:text-slate-100" style="color:var(--text);"></div>
                     <div id="q-options" class="space-y-2.5"></div>
 
                     <!-- Custom confidence selector hidden for automatic Cognitive Hesitation Tracker -->
@@ -2731,7 +2733,7 @@
                         <h3 class="text-xs font-black uppercase text-slate-400">⚙️ App Version & Updates</h3>
                         <p class="text-[9px] text-slate-500">Manage application caches and system updates in real-time.</p>
                     </div>
-                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v253-qiz75vi (202609051428)</span>
+                    <span id="app-version-badge" class="text-[9px] font-black px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full font-mono">App Version: v254-bnzjlwf (202609051511)</span>
                 </div>
                 
                 <div class="flex flex-col gap-2 text-xs">
@@ -2815,11 +2817,13 @@
 
                     <!-- Question / Content -->
                     <div class="flex-1 flex flex-col justify-center text-center space-y-4 py-4 overflow-y-auto">
-                        <p id="tinder-card-q" class="font-bold text-sm leading-relaxed text-slate-850 dark:text-white"></p>
+                        <!-- <div> rather than <p>/<span>: both of these are filled through
+                             setRichTextContent(), which can emit <p> and <ul>. -->
+                        <div id="tinder-card-q" class="font-bold text-sm leading-relaxed text-slate-850 dark:text-white"></div>
                         <p id="tinder-card-hint-text" class="text-[10px] text-slate-400 italic">Tap to show answer / explanation</p>
                         <div id="tinder-card-expl-container" class="hidden p-3.5 bg-slate-50 dark:bg-slate-950/20 border border-emerald-500/20 rounded-2xl text-[11px] text-left leading-relaxed text-emerald-800 dark:text-emerald-300">
                             <span class="font-black block uppercase text-[8px] text-slate-400 tracking-wider mb-1">Answer explanation:</span>
-                            <span id="tinder-card-expl"></span>
+                            <div id="tinder-card-expl"></div>
                         </div>
                     </div>
 
@@ -3418,7 +3422,7 @@
                     </div>
                     <div id="cr-preview" class="p-3 border-2 border-dashed border-emerald-500 rounded-lg hidden text-xs bg-emerald-50 dark:bg-emerald-950/20">
                         <p class="font-bold text-emerald-600">📋 Preview</p>
-                        <p id="cr-preview-q" class="font-medium mt-1"></p>
+                        <div id="cr-preview-q" class="font-medium mt-1"></div>
                         <div id="cr-preview-opts" class="space-y-0.5 mt-1"></div>
                         <p id="cr-preview-ans" class="text-emerald-600 font-bold mt-1"></p>
                     </div>
@@ -4011,14 +4015,14 @@
          `window.LottieAdapter` existing. -->
     <script src="./js/lottie_adapter.js" defer></script>
     <script src="./js/animation_orchestrator.js" defer></script>
-    <script src="./js/elite_animations_controller.js?v=qiz75vi" defer></script>
-    <script src="./js/elite_3d_engine.js?v=qiz75vi" defer></script>
-    <script src="./js/canvas_charts.js?v=qiz75vi" defer></script>
+    <script src="./js/elite_animations_controller.js?v=bnzjlwf" defer></script>
+    <script src="./js/elite_3d_engine.js?v=bnzjlwf" defer></script>
+    <script src="./js/canvas_charts.js?v=bnzjlwf" defer></script>
 
-    <script src="./js/pwa_helpers.js?v=qiz75vi" defer></script>
-    <script src="./js/sqlite_db.js?v=qiz75vi" defer></script>
-    <script src="./js/krishi_idb.js?v=qiz75vi"></script>
-    <script src="./js/app.js?v=qiz75vi" defer></script>
+    <script src="./js/pwa_helpers.js?v=bnzjlwf" defer></script>
+    <script src="./js/sqlite_db.js?v=bnzjlwf" defer></script>
+    <script src="./js/krishi_idb.js?v=bnzjlwf"></script>
+    <script src="./js/app.js?v=bnzjlwf" defer></script>
 
 
     <!--
@@ -4046,8 +4050,8 @@
     </div>
 
     <script src="./js/ambient_player.js" defer></script>
-<script src="./js/data_safety.js?v=qiz75vi" defer></script>
-    <script src="./js/voice_assistant.js?v=qiz75vi" defer></script>
+<script src="./js/data_safety.js?v=bnzjlwf" defer></script>
+    <script src="./js/voice_assistant.js?v=bnzjlwf" defer></script>
 </body>
 </html>
 

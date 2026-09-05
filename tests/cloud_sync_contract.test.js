@@ -2588,6 +2588,178 @@ test('translating the Start button must not delete the node that carries the liv
     );
 });
 
+// ---------------------------------------------------------------------------------------------
+// Rich question text (q.q plain + q.qHtml optional)
+//
+// The Creator's Quill editors used to write their HTML straight into q.q, and nearly every other
+// reader in the app puts q.q into .textContent - so a question typed in the Creator appeared on
+// the quiz screen as a literal "<p>dfgdsgdfsg</p>". The fix keeps q.q plain and canonical (search,
+// dedupe, validation, export and the `q.id || q.q` SM2 fallback all read it) and stores the markup
+// beside it in q.qHtml, only when it carries formatting.
+// ---------------------------------------------------------------------------------------------
+
+test('rich markup is only stored when it says more than the plain text does', () => {
+    const g = globalThis;
+    const saved = ['creatorPlainText', 'escapeCreatorHtml'].map(k => [k, g[k]]);
+    try {
+        g.creatorPlainText = new Function('html', functionBody('creatorPlainText').slice(1, -1));
+        g.escapeCreatorHtml = new Function('s', functionBody('escapeCreatorHtml').slice(1, -1));
+        const adds = new Function('html', 'plain', functionBody('richTextAddsFormatting').slice(1, -1));
+
+        // The reported bug: Quill wraps even untouched typing, so this pair must NOT be stored -
+        // otherwise every question in the bank carries a redundant second copy to the cloud.
+        assert.strictEqual(adds('<p>dfgdsgdfsg</p>', 'dfgdsgdfsg'), false);
+        assert.strictEqual(adds('hello', 'hello'), false);
+        assert.strictEqual(adds('', ''), false);
+        assert.strictEqual(adds('<p><br></p>', ''), false, 'an untouched Quill editor is not formatting');
+        assert.strictEqual(adds('   ', 'x'), false);
+        // Near misses that a plain string comparison would have stored for nothing: a trailing
+        // space, or an &nbsp; where the plain copy holds an ordinary space.
+        assert.strictEqual(adds('<p>trailing </p>', 'trailing'), false);
+        assert.strictEqual(adds('<p>a&nbsp;b</p>', 'a b'), false);
+        assert.strictEqual(adds('<p>N &lt; P &amp; K</p>', 'N < P & K'), false);
+
+        assert.strictEqual(adds('<p><b>bold</b> word</p>', 'bold word'), true);
+        assert.strictEqual(adds('<p>a<br>b</p>', 'a b'), true, 'a line break is formatting');
+        assert.strictEqual(adds('<p>one</p><p>two</p>', 'one two'), true, 'two paragraphs are structure the plain text cannot hold');
+        assert.strictEqual(adds('<ul><li>a</li><li>b</li></ul>', 'a b'), true);
+
+        // creatorPlainText() decodes entities, and &amp; has to be decoded last: doing it first
+        // turns "&amp;lt;" into a real "<" and a question about an inequality comes back as markup.
+        assert.strictEqual(g.creatorPlainText('<p>a &amp;lt; b</p>'), 'a &lt; b');
+        assert.strictEqual(g.creatorPlainText('<p>N &lt; P &amp; K</p>'), 'N < P & K');
+        assert.strictEqual(g.creatorPlainText('<p>माटो&nbsp;परीक्षण</p>'), 'माटो परीक्षण');
+        // Block tags become a space, inline tags become nothing. Both halves matter: the first
+        // keeps two paragraphs from running together, and the second keeps formatting applied
+        // inside a word from splitting it - this text is what search, dedupe and export read.
+        assert.strictEqual(g.creatorPlainText('<p>one</p><p>two</p>'), 'one two');
+        assert.strictEqual(g.creatorPlainText('<ul><li>a</li><li>b</li></ul>'), 'a b');
+        assert.strictEqual(g.creatorPlainText('<p>H<sub>2</sub>O is <b>wa</b>ter</p>'), 'H2O is water');
+        assert.strictEqual(g.creatorPlainText('<p>Fe is a <i>micro</i>nutrient</p>'), 'Fe is a micronutrient');
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('the sanitiser parses into an inert node and keeps no attribute at all', () => {
+    const body = functionBody('sanitizeRichText');
+    // Parsed through a <template>, whose content is an inert fragment: no script runs, no
+    // <img src> is fetched, no onerror fires. Assigning to a live element's innerHTML would
+    // do all three, so this must never be "simplified".
+    assert.match(body, /createElement\('template'\)/);
+    assert.doesNotMatch(body, /createElement\('div'\)/, 'a live <div> is not an inert parse target');
+    for (const tag of ['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'FORM', 'SVG']) {
+        assert.ok(body.includes("'" + tag + "'"), tag + ' must be dropped with its contents');
+    }
+    // Attributes go wholesale rather than by an on* blacklist: `style` alone can lay an invisible
+    // box over the answer buttons, and href/src reach the network.
+    assert.match(body, /attributes\).*removeAttribute\(a\.name\)/s);
+    const allowed = /const ALLOWED = \[([^\]]*)\]/.exec(body);
+    assert.ok(allowed, 'the allowlist must stay an explicit list');
+    const tags = allowed[1].match(/'([A-Z0-9]+)'/g).map(s => s.replace(/'/g, ''));
+    assert.deepStrictEqual(tags.filter(t => ['A', 'IMG', 'SPAN', 'DIV', 'TABLE', 'FONT'].includes(t)), [],
+        'the allowlist is text formatting only - anything else is unwrapped');
+    // Unwrapped, not deleted: an unexpected wrapper must not swallow the words inside it, or a
+    // question synced from another device loses its text and not just its styling.
+    assert.match(body, /while \(node\.firstChild\) parent\.insertBefore/);
+    // node has no DOM, and returning unchecked markup there would be worse than losing the tags.
+    assert.match(body, /typeof document === 'undefined'/);
+
+    const g = globalThis;
+    const saved = ['creatorPlainText', 'escapeCreatorHtml', 'richTextMaxLen'].map(k => [k, g[k]]);
+    try {
+        g.creatorPlainText = new Function('html', functionBody('creatorPlainText').slice(1, -1));
+        g.escapeCreatorHtml = new Function('s', functionBody('escapeCreatorHtml').slice(1, -1));
+        g.richTextMaxLen = new Function(functionBody('richTextMaxLen').slice(1, -1));
+        const clean = new Function('html', functionBody('sanitizeRichText').slice(1, -1));
+        assert.strictEqual(clean('<img src=x onerror=alert(1)>'), '', 'the no-DOM path yields text, never markup');
+        assert.strictEqual(clean('plain text'), 'plain text');
+        assert.strictEqual(clean('a < b'), 'a &lt; b', 'text that merely looks like a tag is escaped');
+        assert.ok(g.richTextMaxLen() > 0 && g.richTextMaxLen() < 100000);
+    } finally {
+        for (const [k, v] of saved) { if (v === undefined) delete g[k]; else g[k] = v; }
+    }
+});
+
+test('nothing renders a question or explanation as unsanitised HTML', () => {
+    // The Manage list used to do a bare `qEl.innerHTML = q.q`, which ran whatever markup arrived
+    // from OCR, an imported file, or a peer device over cloud sync.
+    const offenders = APP_JS.split('\n')
+        .map((text, i) => ({ line: i + 1, text: text.trim() }))
+        .filter(o => !o.text.startsWith('//') && !o.text.startsWith('*'))   // prose, not code
+        .filter(o => /\.innerHTML\s*=/.test(o.text))
+        .filter(o => /\bq\.(q|expl)\b|\bquestion\.(q|expl)\b/.test(o.text))
+        .filter(o => !/sanitizeRichText|escapeCreatorHtml/.test(o.text));
+    assert.deepStrictEqual(offenders, [],
+        'js/app.js assigns a question field to innerHTML without sanitising it');
+    // And the readers that used .textContent (which showed the tags as text) go through the
+    // shared helper instead, so a formatted question actually renders.
+    for (const fn of ['setRichTextContent']) {
+        assert.ok(APP_JS.includes('function ' + fn + '('), fn + '() is missing');
+    }
+    const uses = (APP_JS.match(/setRichTextContent\(/g) || []).length;
+    assert.ok(uses >= 8, 'expected every question/explanation reader to route through the helper, saw ' + uses);
+    assert.match(functionBody('setRichTextContent'), /classList\.add\('rich-text-body'\)/);
+    assert.match(functionBody('setRichTextContent'), /classList\.remove\('rich-text-body'\)/);
+    const css = fs.readFileSync(path.join(ROOT, 'index.css'), 'utf8');
+    assert.match(css, /\.rich-text-body > p \{ margin: 0; \}/,
+        'without this Tailwind preflight leaves every paragraph flush against the next');
+    assert.match(css, /\.rich-text-body ul \{ list-style: disc/,
+        'the sanitiser strips Quill list classes, so the markers have to come from here');
+    assert.match(css, /\.quiz-review-expl > strong \{/,
+        'a <strong> the user typed inside an explanation must not be restyled as the block heading');
+    // <p> cannot nest inside <p>, and the rich version of a question is made of <p> elements.
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    for (const id of ['q-text', 'tinder-card-q', 'tinder-card-expl', 'cr-preview-q']) {
+        assert.match(html, new RegExp('<div id="' + id + '"'), id + ' must be a <div> to hold rich text');
+    }
+});
+
+test('the plain text stays canonical, and a stale rich copy is dropped rather than rendered', () => {
+    // q.q is what search, dedupe, validation, export and the `q.id || q.q` SM2 fallback read, so
+    // the Creator must store the plain text there and the markup separately.
+    const collect = functionBody('collectFormQuestion');
+    assert.match(collect, /splitRichText\(document\.getElementById\('cr-q'\)\.value\)/);
+    assert.match(collect, /splitRichText\(document\.getElementById\('cr-expl'\)\.value\)/);
+    assert.match(collect, /q: qParts\.plain/);
+    assert.match(collect, /qHtml: qParts\.html \|\| undefined/);
+    assert.match(collect, /expl: explParts\.plain/);
+    assert.match(collect, /explHtml: explParts\.html \|\| undefined/);
+
+    // saveData() re-runs normalizeQuestion() over every customQuestion, so a key it does not
+    // copy is erased on the very next save.
+    const norm = functionBody('normalizeQuestion');
+    assert.match(norm, /qHtml: qHtml \|\| undefined/);
+    assert.match(norm, /explHtml: explHtml \|\| undefined/);
+    // Legacy rows still hold Quill's HTML in q.q. One cheap regex, false for every already
+    // migrated row, so re-running it over the whole bank on each save costs nothing.
+    assert.match(norm, /RICH_TAG_RE\.test\(q\)/);
+    assert.match(norm, /RICH_TAG_RE\.test\(expl\)/);
+    assert.match(norm, /q = split\.plain; qHtml = split\.html;/);
+    // The invariant that keeps the field-level merge honest: deepMergeCustomQuestion() spreads
+    // the cloud copy and only overwrites keys the local object HAS, so a qHtml the local side
+    // deliberately dropped comes back from an older peer - and the rich copy is what renders.
+    assert.match(norm, /if \(qHtml && creatorPlainText\(qHtml\) !== q\) qHtml = '';/);
+    assert.match(norm, /if \(explHtml && creatorPlainText\(explHtml\) !== expl\) explHtml = '';/);
+    assert.match(functionBody('splitRichText'), /creatorPlainText\(html\)/,
+        'plain must be derived from the sanitised html, or that invariant fires on good data');
+
+    // Bulk edit shows the plain text in a one-line <input>. It used to show the raw markup and
+    // save it back verbatim, which turned "<p>x</p>" into permanent literal text.
+    const rows = functionBody('showEditMCQPage');
+    assert.match(rows, /value="\$\{escapeCreatorHtml\(creatorPlainText\(q\.q \|\| ''\)\)\}" id="ed-q-/);
+    assert.match(rows, /value="\$\{escapeCreatorHtml\(creatorPlainText\(q\.expl \|\| ''\)\)\}" id="ed-expl-/);
+    const collectEdits = functionBody('collectEditedMCQs');
+    assert.match(collectEdits, /if\(qText\.value !== creatorPlainText\(q\.q \|\| ''\)\) delete q\.qHtml;/);
+    assert.match(collectEdits, /delete q\.explHtml;/);
+
+    // Reopening a question in the Creator must hand Quill the markup, and must escape when there
+    // is none - a plain question containing "<" would otherwise be parsed as markup on reopen.
+    const load = APP_JS.slice(APP_JS.indexOf('const qLoad = '), APP_JS.indexOf('const qLoad = ') + 500);
+    assert.match(load, /q\.qHtml \? sanitizeRichText\(q\.qHtml\) : escapeCreatorHtml\(q\.q \|\| ''\)/);
+    assert.match(load, /q\.explHtml \? sanitizeRichText\(q\.explHtml\) : escapeCreatorHtml\(q\.expl \|\| ''\)/);
+});
+
 test('every off-scale Tailwind shade in index.html is declared in the config', () => {
 
     // Tailwind only emits a rule for a shade it knows. `dark:text-indigo-455` and

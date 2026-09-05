@@ -7115,7 +7115,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // If not silent simulator
         if (!showAnswersEnd) {
             document.getElementById('q-explanation-container').classList.remove('hidden');
-            document.getElementById('q-explanation').textContent = q.expl || 'Explanation not provided.';
+            setRichTextContent(document.getElementById('q-explanation'),
+                q.expl || 'Explanation not provided.', q.expl ? q.explHtml : '');
         }
         document.getElementById('submit-btn').classList.add('hidden');
 
@@ -7153,7 +7154,7 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             if (typeof state.hybridHearts === 'undefined') state.hybridHearts = 5;
             hybridHearts.textContent = state.hybridHearts;
         }
-        document.getElementById('q-text').textContent = q.q;
+        setRichTextContent(document.getElementById('q-text'), q.q, q.qHtml);
         
         // Setup details text
         document.getElementById('q-subject-badge').textContent = q.sub||'General';
@@ -7478,7 +7479,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // Hide or show explanation container
         if (!showAnswersEnd) {
             document.getElementById('q-explanation-container').classList.remove('hidden');
-            document.getElementById('q-explanation').textContent = q.expl || 'Explanation not provided.';
+            setRichTextContent(document.getElementById('q-explanation'),
+                q.expl || 'Explanation not provided.', q.expl ? q.explHtml : '');
         }
         
         let sBtn = document.getElementById('submit-btn');
@@ -8945,9 +8947,9 @@ if (state.isMock) {
             }
             return `<div class="p-3 border rounded-xl space-y-2 text-xs" style="background:var(--card);border-color:var(--border);" data-idx="${i}">
                 <label class="font-bold">Question ${i+1}</label>
-                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(q.q || '')}" id="ed-q-${i}" placeholder="Question text">
+                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(creatorPlainText(q.q || ''))}" id="ed-q-${i}" placeholder="Question text">
                 ${optHtml}
-                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(q.expl || '')}" id="ed-expl-${i}" placeholder="Explanation (optional)">
+                <input class="w-full p-2 border rounded" value="${escapeCreatorHtml(creatorPlainText(q.expl || ''))}" id="ed-expl-${i}" placeholder="Explanation (optional)">
                 <div class="flex gap-2 items-center flex-wrap">
                     <select class="p-2 border rounded" id="ed-sub-${i}">
                         ${getAllSubjects().map(s=>`<option value="${escapeCreatorHtml(s)}" ${s===q.sub?'selected':''}>${escapeCreatorHtml(s)}</option>`).join('')}
@@ -8979,6 +8981,12 @@ if (state.isMock) {
         (state.tempGeneratedQuestions || []).forEach((q, i) => {
             const qText = document.getElementById('ed-q-'+i);
             if(!qText) return;
+            // These are one-line <input> boxes, so they show the plain text and can carry nothing
+            // else. Compare against exactly what was put in them: if the wording changed, the
+            // rich copy still holds the *old* wording and is what the quiz renders, so the edit
+            // made here would appear to do nothing at all. Dropping the formatting is the
+            // cheaper half to give up.
+            if(qText.value !== creatorPlainText(q.q || '')) delete q.qHtml;
             q.q = qText.value;
             const opts = [];
             for(let k = 0; k < 5; k++){
@@ -8991,7 +8999,11 @@ if (state.isMock) {
             q.opts = opts;
             const get = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
             q.sub = get('ed-sub-'+i) || q.sub;
-            q.expl = get('ed-expl-'+i) !== undefined ? get('ed-expl-'+i) : q.expl;
+            const newExpl = get('ed-expl-'+i);
+            if(newExpl !== undefined) {
+                if(newExpl !== creatorPlainText(q.expl || '')) delete q.explHtml;   // see above
+                q.expl = newExpl;
+            }
             q.difficulty = get('ed-diff-'+i) || q.difficulty || 'Medium';
             const a = parseInt(get('ed-ans-'+i));
             if(!isNaN(a)) q.ans = a;
@@ -9168,7 +9180,8 @@ if (state.isMock) {
         if(!qText) { preview.classList.add('hidden'); return; }
         
         preview.classList.remove('hidden');
-        document.getElementById('cr-preview-q').innerHTML = qText;
+        document.getElementById('cr-preview-q').innerHTML = sanitizeRichText(qText);
+        document.getElementById('cr-preview-q').classList.add('rich-text-body');
         
         let count = parseInt(document.getElementById('cr-opt-count').value)||4;
         let optsHtml = '';
@@ -9191,12 +9204,18 @@ if (state.isMock) {
         for(let i=0; i<count; i++){
             opts.push(document.getElementById('cr-o'+i).value.trim());
         }
+        // The two hidden inputs hold Quill's HTML. Split it: the plain text is what q.q means
+        // everywhere else in the app, and the markup is only kept when it carries formatting.
+        const qParts = splitRichText(document.getElementById('cr-q').value);
+        const explParts = splitRichText(document.getElementById('cr-expl').value);
         return {
             id: Date.now(),
-            q: document.getElementById('cr-q').value,
+            q: qParts.plain,
+            qHtml: qParts.html || undefined,
             opts: opts,
             ans: parseInt(document.getElementById('cr-ans').value)||0,
-            expl: document.getElementById('cr-expl').value,
+            expl: explParts.plain,
+            explHtml: explParts.html || undefined,
             sub: document.getElementById('cr-sub').value,
             topic: document.getElementById('cr-topic').value,
             difficulty: document.getElementById('cr-difficulty').value,
@@ -9221,11 +9240,148 @@ if (state.isMock) {
     // has to go through the tags first.
     function creatorPlainText(html){
         return String(html || '')
-            .replace(/<[^>]*>/g, ' ')
+            // Block-level tags become a space, so two paragraphs or two list items do not run
+            // their words together. Inline tags become nothing: formatting applied inside a word -
+            // "H<sub>2</sub>O", or half of a word bolded - would otherwise come out split in two,
+            // and this text is what search, dedupe and export read.
+            .replace(/<\/?(?:p|div|br|li|ul|ol|tr|td|th|table|tbody|thead|h[1-6]|blockquote|pre|hr)\b[^>]*>/gi, ' ')
+            .replace(/<[^>]*>/g, '')
             .replace(/&nbsp;/g, ' ')
+            // &amp; is decoded last on purpose: decoding it first would turn "&amp;lt;" into
+            // "&lt;" and then into a real "<", so a question about an inequality would come
+            // back as markup on the next save.
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
             .replace(/&amp;/g, '&')
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Rich question text: one plain field, one optional HTML field.
+    //
+    // The Creator's Quill editors write HTML, but almost everything else in the app treats q.q
+    // as plain text - duplicate detection, live validation, export, the import preview, and the
+    // `q.id || q.q` identity the SM2 engine falls back on. Keeping markup in q.q is why a
+    // freshly created question appeared on the quiz screen as a literal "<p>dfgdsgdfsg</p>":
+    // that reader used .textContent, so the tags were simply text.
+    //
+    // The split: q.q / q.expl stay plain and stay canonical, and the rich version rides
+    // alongside in q.qHtml / q.explHtml - written only when it says something the plain text
+    // cannot, so a question typed with no formatting adds nothing to the synced payload. Every
+    // reader goes through setRichTextContent(), which sanitises. Nothing that reads q.q had to
+    // change, which is also what makes this easy to roll back.
+    // -----------------------------------------------------------------------------------------
+
+    // A hostile or broken sync payload must not be able to push an unbounded blob into the qbank
+    // chunks, and no real question needs more than this. Deliberately a function and not a
+    // top-level `const`: the boot path calls normalizeQuestion() from far above this line, and a
+    // `const` read before its own declaration has run throws instead of reading undefined.
+    function richTextMaxLen(){ return 8000; }
+
+    /**
+     * Cut a question's HTML down to text formatting and nothing else.
+     *
+     * Question text is not trusted input: it arrives from OCR, from pasted files, from AI
+     * generation, and - the case that makes this mandatory rather than tidy - from another
+     * device over cloud sync. The whole policy is an allowlist of tags with *every* attribute
+     * removed; `style` on its own would be enough to lay an invisible box over the answer
+     * buttons, and `on*` needs no explanation.
+     */
+    function sanitizeRichText(html){
+        const s = String(html == null ? '' : html).slice(0, richTextMaxLen());
+        if (s.indexOf('<') === -1) return escapeCreatorHtml(s);
+        if (typeof document === 'undefined' || !document.createElement) {
+            // No DOM to parse with (the contract tests run in node): fall back to plain text
+            // rather than hand back markup that nothing has actually inspected.
+            return escapeCreatorHtml(creatorPlainText(s));
+        }
+        const ALLOWED = ['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'OL', 'UL', 'LI'];
+        // Dropped with their contents. Everything else that is not allowed is unwrapped
+        // instead, so an <a> or a <font> keeps its words.
+        const DROP = ['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE',
+                      'NOSCRIPT', 'SVG', 'MATH', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA',
+                      'SELECT', 'OPTION', 'AUDIO', 'VIDEO', 'SOURCE', 'TRACK', 'CANVAS',
+                      'FRAME', 'FRAMESET', 'APPLET', 'TITLE'];
+        // A <template>'s content is an inert document fragment, so this parses the markup
+        // without running a script, fetching an <img src>, or firing an onerror. Assigning the
+        // same string to a live element's innerHTML would do all three.
+        const tpl = document.createElement('template');
+        try { tpl.innerHTML = s; } catch(e){ return escapeCreatorHtml(creatorPlainText(s)); }
+        const clean = (parent) => {
+            Array.prototype.slice.call(parent.childNodes).forEach(node => {
+                if (node.nodeType === 3) return;                                  // text
+                if (node.nodeType !== 1) { if (node.remove) node.remove(); return; }
+                const tag = String(node.tagName || '').toUpperCase();
+                if (DROP.indexOf(tag) !== -1) { node.remove(); return; }
+                clean(node);
+                if (ALLOWED.indexOf(tag) === -1) {
+                    // Unwrapped, not deleted: an unexpected wrapper must not swallow the words
+                    // inside it, or a question synced from another device would quietly lose
+                    // its text instead of just its styling.
+                    while (node.firstChild) parent.insertBefore(node.firstChild, node);
+                    node.remove();
+                    return;
+                }
+                Array.prototype.slice.call(node.attributes).forEach(a => node.removeAttribute(a.name));
+            });
+        };
+        clean(tpl.content);
+        return tpl.innerHTML;
+    }
+
+    /**
+     * Is this HTML worth storing next to the plain text?
+     *
+     * Quill wraps even untouched typing in <p>...</p>, so keeping every editor output would put
+     * a second copy of every question into the synced payload in exchange for nothing. Only
+     * markup that survives sanitising *and* differs from the plain text wrapped in one
+     * paragraph counts as formatting.
+     */
+    function richTextAddsFormatting(html, plain){
+        const h = String(html == null ? '' : html).trim();
+        if (!h) return false;
+        if (!creatorPlainText(h)) return false;              // "<p><br></p>" and friends
+        // A single <p> wrapper with no tag of its own inside it is exactly what Quill produces for
+        // untouched typing. Testing the wrapper rather than only string-matching the plain text
+        // also catches the near misses - a trailing space, or an &nbsp; where the plain copy has a
+        // normal one - which would otherwise store a redundant second copy of the question.
+        const inner = /^<p>([\s\S]*)<\/p>$/i.exec(h);
+        if (inner && inner[1].indexOf('<') === -1) return false;
+        const esc = escapeCreatorHtml(String(plain == null ? '' : plain));
+        return h !== esc && h !== '<p>' + esc + '</p>';
+    }
+
+    /**
+     * Put a question's text into `el`: the sanitised rich version when there is one, the plain
+     * text otherwise. Every reader that used to assign q.q straight to .textContent (which
+     * showed the tags as text) or straight to .innerHTML (which ran markup from another device
+     * as-is) goes through here.
+     */
+    function setRichTextContent(el, plain, html){
+        if (!el) return;
+        const rich = html ? sanitizeRichText(html) : '';
+        if (rich && creatorPlainText(rich)) {
+            el.innerHTML = rich;
+            el.classList.add('rich-text-body');
+        } else {
+            el.textContent = plain == null ? '' : String(plain);
+            el.classList.remove('rich-text-body');
+        }
+    }
+
+    /**
+     * Split one editor value into the pair that gets stored. Used by the Creator's save path and
+     * by normalizeQuestion()'s migration of rows written before q.qHtml existed.
+     *
+     * The plain text is derived from the *sanitised* HTML, not from the raw input, so the pair is
+     * consistent by construction: `creatorPlainText(html) === plain` always holds, which is the
+     * invariant normalizeQuestion() later leans on to spot a rich copy that has gone stale.
+     */
+    function splitRichText(value){
+        const html = sanitizeRichText(value);
+        const plain = creatorPlainText(html);
+        return { plain: plain, html: richTextAddsFormatting(html, plain) ? html : '' };
     }
 
     function validateCreatorEntry(q, opts) {
@@ -9458,10 +9614,15 @@ if (state.isMock) {
         setVal('cr-difficulty', q.difficulty);
         setVal('cr-marks', q.marks || 1);
         setVal('cr-status', q.status || 'published');
-        const qEl = document.getElementById('cr-q'); if(qEl) qEl.value = q.q || '';
-        const eEl = document.getElementById('cr-expl'); if(eEl) eEl.value = q.expl || '';
-        if(quillQ) quillQ.root.innerHTML = q.q || '';
-        if(quillExpl) quillExpl.root.innerHTML = q.expl || '';
+        // Editing an existing question: hand Quill the rich version when the question has one,
+        // and the escaped plain text otherwise - a plain question containing "<" or "&" would
+        // otherwise be parsed as markup the moment it was reopened.
+        const qLoad = q.qHtml ? sanitizeRichText(q.qHtml) : escapeCreatorHtml(q.q || '');
+        const eLoad = q.explHtml ? sanitizeRichText(q.explHtml) : escapeCreatorHtml(q.expl || '');
+        const qEl = document.getElementById('cr-q'); if(qEl) qEl.value = qLoad;
+        const eEl = document.getElementById('cr-expl'); if(eEl) eEl.value = eLoad;
+        if(quillQ) quillQ.root.innerHTML = qLoad;
+        if(quillExpl) quillExpl.root.innerHTML = eLoad;
         updateCreatorPreview();
         validateCreatorLive();
     }
@@ -10021,6 +10182,39 @@ if (state.isMock) {
         let expl = raw.expl || raw.Expl || raw.explanation || raw.Explanation || raw.notes || raw.Notes || raw.desc || raw.Desc || raw.description || raw.Description || "";
         expl = String(expl).trim();
 
+        // The rich-text pair. q/expl carry the plain canonical text; qHtml/explHtml carry markup
+        // and only exist when there is formatting worth keeping. This is also the migration point
+        // for rows written before the split, which stored Quill's HTML straight into q.q - the
+        // tag test is one cheap regex and is false for every already-migrated row, so re-running
+        // this over the whole bank on each saveData() costs nothing after the first pass.
+        const RICH_TAG_RE = /<\/?(?:p|br|b|i|u|strong|em|span|div|ul|ol|li|sub|sup|a|font|h[1-6]|pre|code|table|tbody|tr|td|th|img|script|style)\b[^>]*>/i;
+        let qHtml = typeof raw.qHtml === 'string' ? raw.qHtml.trim() : '';
+        let explHtml = typeof raw.explHtml === 'string' ? raw.explHtml.trim() : '';
+        if (RICH_TAG_RE.test(q)) {
+            const split = splitRichText(qHtml || q);
+            q = split.plain; qHtml = split.html;
+        } else if (qHtml && !richTextAddsFormatting(qHtml, q)) {
+            qHtml = '';
+        }
+        if (RICH_TAG_RE.test(expl)) {
+            const split = splitRichText(explHtml || expl);
+            expl = split.plain; explHtml = split.html;
+        } else if (explHtml && !richTextAddsFormatting(explHtml, expl)) {
+            explHtml = '';
+        }
+        if (!q) qHtml = '';
+        if (!expl) explHtml = '';
+        if (qHtml.length > richTextMaxLen()) qHtml = '';
+        if (explHtml.length > richTextMaxLen()) explHtml = '';
+        // Self-healing invariant, and what keeps the field-level customQuestions merge honest: if
+        // the rich copy no longer says the same words as the plain text, then the plain text is
+        // the side that was edited. deepMergeCustomQuestion() spreads the cloud copy first and
+        // only overwrites keys the local object *has*, so a qHtml the local side deliberately
+        // dropped (bulk edit) comes straight back from an older peer - and it is the rich copy
+        // that gets rendered, so the edit would look like it never happened.
+        if (qHtml && creatorPlainText(qHtml) !== q) qHtml = '';
+        if (explHtml && creatorPlainText(explHtml) !== expl) explHtml = '';
+
         let topic = raw.topic || raw.Topic || raw.chapter || raw.Chapter || raw.unit || raw.Unit || "";
         topic = String(topic).trim();
 
@@ -10036,6 +10230,11 @@ if (state.isMock) {
         return {
             id: raw.id || (Date.now() + Math.random()),
             q: q,
+            // Carried through here and not only stamped where it is created, for the same reason
+            // as importBatchId below: saveData() re-runs this function over every
+            // customQuestion, so a key it does not copy is gone on the very next save.
+            qHtml: qHtml || undefined,
+            explHtml: explHtml || undefined,
             opts: opts,
             ans: ans,
             sub: sub,
@@ -11968,10 +12167,14 @@ function openEditImportModal(idx) {
         const contentWrap = document.createElement('div');
         contentWrap.className = 'flex-1 space-y-2';
 
-        const qEl = document.createElement('p');
+        // A <div>, not a <p>: the rich version of a question is itself made of <p> elements, and
+        // nesting a <p> inside a <p> is not valid markup the parser will keep.
+        const qEl = document.createElement('div');
         qEl.className = 'font-bold';
-        // Preserve rich text if present (some questions are created via Quill)
-        qEl.innerHTML = q.q || '';
+        // Rich text is preserved where a question has it, but it is sanitised on the way in.
+        // This used to be a bare `qEl.innerHTML = q.q`, which ran whatever markup arrived from
+        // OCR, an imported file, or another device over cloud sync.
+        setRichTextContent(qEl, q.q, q.qHtml);
 
         const meta = document.createElement('p');
         meta.className = 'text-gray-500';
@@ -23130,13 +23333,20 @@ window.initNepalGlobe = function() {
             }
         }
 
-        if (qText) qText.textContent = q.q;
+        if (qText) setRichTextContent(qText, q.q, q.qHtml);
         if (explText) {
             let correctOptionText = '';
             if (q.opts && typeof q.ans !== 'undefined' && q.opts[q.ans]) {
-                correctOptionText = `<span class="font-extrabold text-[12px] text-emerald-600 block mb-1">✅ सही उत्तर: ${q.opts[q.ans]}</span>`;
+                correctOptionText = `<span class="font-extrabold text-[12px] text-emerald-600 block mb-1">✅ सही उत्तर: ${escapeCreatorHtml(q.opts[q.ans])}</span>`;
             }
-            explText.innerHTML = correctOptionText + (q.expl || 'यो प्रश्नको लागि थप व्याख्या उपलब्ध छैन।');
+            // The explanation is sanitised rather than trusted: this line has always assigned
+            // innerHTML, so before the rich-text split it was rendering whatever markup an
+            // imported or synced question happened to carry.
+            const explBody = q.expl
+                ? (q.explHtml ? sanitizeRichText(q.explHtml) : escapeCreatorHtml(q.expl))
+                : 'यो प्रश्नको लागि थप व्याख्या उपलब्ध छैन।';
+            explText.innerHTML = correctOptionText + explBody;
+            explText.classList.add('rich-text-body');
         }
     };
 
@@ -24167,7 +24377,7 @@ window.initNepalGlobe = function() {
 
         let qCard = document.createElement('div');
         qCard.className = 'quiz-review-q';
-        qCard.textContent = q.q || '';
+        setRichTextContent(qCard, q.q, q.qHtml);
         host.appendChild(qCard);
 
         let list = document.createElement('div');
@@ -24217,8 +24427,10 @@ window.initNepalGlobe = function() {
             let h = document.createElement('strong');
             h.textContent = '💡 Explanation';
             ex.appendChild(h);
-            let p = document.createElement('p');
-            p.textContent = q.expl;
+            // A <div>: a rich explanation is itself made of <p> elements, which cannot nest
+            // inside a <p>.
+            let p = document.createElement('div');
+            setRichTextContent(p, q.expl, q.explHtml);
             ex.appendChild(p);
             host.appendChild(ex);
         } else if (!reveal) {

@@ -3584,7 +3584,9 @@ body.ui-density-spacious    { --quiz-col: 46rem; }
     font-size: 0.75rem;
     line-height: 1.55;
 }
-.quiz-review-expl strong {
+/* Direct child only: the explanation body below is now rich text, and a <strong> the user typed
+   inside it must stay inline bold instead of being restyled as this block heading. */
+.quiz-review-expl > strong {
     display: block;
     margin-bottom: 0.25rem;
     font-size: 10px;
@@ -3807,5 +3809,28 @@ body.custom-text-active #home-customizer-modal {
     color: var(--text-secondary) !important;
     color: color-mix(in srgb, var(--text-secondary) var(--cap-mix, 55%), var(--text)) !important;
 }
+
+/* ==========================================================================
+   Rich question text
+   ==========================================================================
+   Added by setRichTextContent() on any element it fills with a question's q.qHtml /
+   q.explHtml instead of the plain text. Two things make this necessary: Tailwind's
+   preflight zeroes <p> margins, so paragraphs would run together, and the sanitiser
+   strips every attribute - including the classes Quill uses to mark its own list
+   items - so a list would otherwise lose its markers and its indent. */
+.rich-text-body > p { margin: 0; }
+.rich-text-body > p + p { margin-top: 0.45em; }
+.rich-text-body ul,
+.rich-text-body ol {
+    margin: 0.3em 0;
+    padding-left: 1.35em;
+    text-align: left;
+}
+.rich-text-body ul { list-style: disc outside; }
+.rich-text-body ol { list-style: decimal outside; }
+.rich-text-body li { margin: 0.15em 0; }
+.rich-text-body b,
+.rich-text-body strong { font-weight: 800; }
+.rich-text-body u { text-underline-offset: 2px; }
 
 

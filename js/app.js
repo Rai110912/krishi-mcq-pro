@@ -22891,6 +22891,78 @@ window.initNepalGlobe = function() {
     // Completely removed as requested
 };
 
+// ==================== ONE BACK PRESS, TWO CALLERS ====================
+/**
+ * Handle a single back press. Returns true when something was closed or navigated - the caller has
+ * to keep the user inside the app - and false when we are already at the top of the app, where
+ * back means "leave".
+ *
+ * Deliberately at module scope instead of inside initCapacitorNativeFeatures() below: that IIFE
+ * returns early on the web, so anything defined in it is unreachable to the browser half of the
+ * back button (initWebBackButton), and both halves have to run the exact same cascade.
+ */
+window.krishiHandleBack = function krishiHandleBack() {
+    // 1. Bottom sheet open — close it first
+    const sheet = document.getElementById('nav-bottom-sheet');
+    if (sheet && sheet.classList.contains('sheet-open')) {
+        if (typeof window.closeNavSheet === 'function') {
+            window.closeNavSheet();
+        } else {
+            sheet.classList.remove('sheet-open');
+            const backdrop = document.getElementById('nav-sheet-backdrop');
+            if (backdrop) backdrop.classList.remove('sheet-backdrop-active');
+        }
+        return true;
+    }
+
+    // 2. A modal is open — close it.
+    // The Question Map is closed through its own handler so that the keyboard shortcuts and the
+    // reread view reset with it; a bare classList.add('hidden') would leave the module thinking it
+    // is still open. It is tested first because it is the only overlay that opens on top of live
+    // gameplay, where falling through to step 3 would put an "exit the exam?" prompt in front of
+    // the user.
+    const quizMap = document.getElementById('quiz-map-modal');
+    if (quizMap && !quizMap.classList.contains('hidden')) {
+        if (typeof window.krishiQuestionMapBack === 'function') {
+            window.krishiQuestionMapBack();
+        } else if (typeof window.krishiCloseQuestionMap === 'function') {
+            window.krishiCloseQuestionMap();
+        } else {
+            quizMap.classList.add('hidden');
+        }
+        return true;
+    }
+
+    const openModal = document.querySelector('.modal-overlay:not(.hidden), #home-customizer-modal:not(.hidden), #db-config-modal:not(.hidden)');
+    if (openModal) {
+        openModal.classList.add('hidden');
+        return true;
+    }
+    // 3. Live exam/mock gameplay — ask before the attempt is dropped
+    const activePage = document.querySelector('.page.active');
+    if (activePage && activePage.id === 'page-practice') {
+        const mcqPage = document.getElementById('page-mcq');
+        if (mcqPage && !mcqPage.classList.contains('hidden')) {
+            if (typeof window.confirmExitExam === 'function') {
+                window.confirmExitExam();
+            }
+            return true;
+        }
+    }
+
+    // 4. On a sub-page — back to the Home Hub
+    if (activePage && activePage.id !== 'page-home') {
+        if (typeof navigate === 'function') {
+            navigate('page-home');
+        }
+        return true;
+    }
+
+    // 5. Home, nothing open. What "leave" means is the caller's call: exitApp() in the APK, a real
+    //    history navigation on the web.
+    return false;
+};
+
 // ==================== CAPACITOR NATIVE FEATURES INITIALIZATION ====================
 // Feature 5: Back Button Handler + Feature 11: In-App Update
 // Only activates in native APK — zero effect on browser/PWA
@@ -22913,67 +22985,10 @@ window.initNepalGlobe = function() {
         const AppPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
         if (AppPlugin) {
             AppPlugin.addListener('backButton', function(e) {
-                // 1. Check if bottom sheet is open — close it first
-                const sheet = document.getElementById('nav-bottom-sheet');
-                if (sheet && sheet.classList.contains('sheet-open')) {
-                    if (typeof window.closeNavSheet === 'function') {
-                        window.closeNavSheet();
-                    } else {
-                        sheet.classList.remove('sheet-open');
-                        const backdrop = document.getElementById('nav-sheet-backdrop');
-                        if (backdrop) backdrop.classList.remove('sheet-backdrop-active');
-                    }
-                    return;
-                }
+                // The cascade itself lives at module scope, so the web half runs the same steps.
+                if (window.krishiHandleBack && window.krishiHandleBack()) return;
 
-                // 2. Check if any modal is open — close it
-                // The Question Map is closed through its own handler so that the
-                // keyboard shortcuts and the reread view reset with it; a bare
-                // classList.add('hidden') would leave the module thinking it is
-                // still open. It is listed first because it is the only overlay that
-                // opens on top of live gameplay, where falling through to step 3
-                // would put an "exit the exam?" prompt in front of the user.
-                const quizMap = document.getElementById('quiz-map-modal');
-                if (quizMap && !quizMap.classList.contains('hidden')) {
-                    if (typeof window.krishiQuestionMapBack === 'function') {
-                        window.krishiQuestionMapBack();
-                    } else if (typeof window.krishiCloseQuestionMap === 'function') {
-                        window.krishiCloseQuestionMap();
-                    } else {
-                        quizMap.classList.add('hidden');
-                    }
-                    return;
-                }
-
-                const openModal = document.querySelector('.modal-overlay:not(.hidden), #home-customizer-modal:not(.hidden), #db-config-modal:not(.hidden)');
-                if (openModal) {
-                    openModal.classList.add('hidden');
-                    return;
-                }
-
-                // 3. Check if we are in exam/mock gameplay
-                const activePage = document.querySelector('.page.active');
-                if (activePage && activePage.id === 'page-practice') {
-                    // Check if nested MCQ gameplay is visible
-                    const mcqPage = document.getElementById('page-mcq');
-                    if (mcqPage && !mcqPage.classList.contains('hidden')) {
-                        if (typeof window.confirmExitExam === 'function') {
-                            window.confirmExitExam();
-                        }
-                        return;
-                    }
-                }
-
-                // 4. Check if we are on a sub-page (not home)
-                if (activePage && activePage.id !== 'page-home') {
-                    // Navigate back to Home Hub
-                    if (typeof navigate === 'function') {
-                        navigate('page-home');
-                    }
-                    return;
-                }
-
-                // 5. We are on home page — confirm exit with double-tap
+                // Home page, nothing open — confirm exit with a double press.
                 const now = Date.now();
                 if (window.__lastBackPress__ && (now - window.__lastBackPress__) < 2000) {
                     AppPlugin.exitApp();
@@ -22985,6 +23000,15 @@ window.initNepalGlobe = function() {
                 }
             });
             console.log('[BackButton] Native back button handler registered ✅');
+        } else {
+            // Loud on purpose, because this failed silently for weeks. @capacitor/app was dropped
+            // from package.json on 2026-08-16 along with the Capacitor 6 -> 5 downgrade, and
+            // Capacitor 5's own core carries no back-button handling at all - it is entirely in
+            // this plugin, whose load() registers the activity's OnBackPressedCallback. With the
+            // plugin gone, Plugins.App was undefined, the listener above was never registered, and
+            // the Activity fell through to its default finish(): one back press closed the app.
+            console.error('[BackButton] @capacitor/app missing — the hardware back button will close ' +
+                          'the app. Fix: npm i @capacitor/app@5.0.8 --save-exact && npx cap sync android');
         }
     } catch(backErr) {
         console.warn('[BackButton] Failed to register back button handler:', backErr);
@@ -23063,6 +23087,49 @@ window.initNepalGlobe = function() {
     } catch(pushErr) {
         console.warn('[Push] Initialization failed:', pushErr);
     }
+})();
+
+// ==================== WEB / PWA BACK BUTTON ====================
+// The APK receives the hardware back button as a Capacitor App plugin event above. A browser tab or
+// an installed PWA gets no such event - the browser's own Back just leaves the site, which in a
+// standalone PWA window looks exactly like the app closing itself. One history guard entry turns
+// that press into the same cascade the APK runs.
+(function initWebBackButton() {
+    'use strict';
+
+    const cap = window.Capacitor;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform()) return;   // the plugin owns it there
+    if (!window.history || typeof history.pushState !== 'function') return;
+
+    let rearm = null;
+    function pushGuard() {
+        // No URL argument, so the address bar never changes and Hosting never sees a new path.
+        try { history.pushState({ krishiBack: Date.now() }, ''); } catch(e) {}
+    }
+
+    window.addEventListener('popstate', function() {
+        if (rearm) { clearTimeout(rearm); rearm = null; }
+
+        if (window.krishiHandleBack && window.krishiHandleBack()) {
+            pushGuard();                       // something closed: restore the guard, stay put
+            return;
+        }
+
+        // Home with nothing open. Leaving is a real navigation, so rather than forcing one, the
+        // guard is simply not replaced yet: press Back again inside this window and the browser
+        // walks off the page by itself. If nothing comes of it - an installed PWA usually has no
+        // earlier entry to walk back to - the guard returns and keeps protecting the app.
+        const now = Date.now();
+        const second = !!(window.__lastBackPress__ && (now - window.__lastBackPress__) < 2000);
+        window.__lastBackPress__ = second ? 0 : now;
+        if (!second && typeof showToast === 'function') {
+            showToast('Exit गर्न Back एकपटक थप थिच्नुहोस् 👋');
+        }
+        rearm = setTimeout(function(){ rearm = null; pushGuard(); }, 2000);
+    });
+
+    pushGuard();
+    console.log('[BackButton] Web/PWA history guard armed ✅');
 })();
 
 // Everything below this line used to sit INSIDE initCapacitorNativeFeatures(), i.e. after its

@@ -11,7 +11,10 @@
     "capacitor:sync": "npx cap sync"
   },
   "dependencies": {
+    "@capacitor/app": "5.0.8",
     "@capacitor/core": "^5.7.0",
+    "@capacitor/haptics": "5.0.8",
+    "@capacitor/status-bar": "5.0.8",
     "@codetrix-studio/capacitor-google-auth": "^3.3.6"
   },
   "devDependencies": {

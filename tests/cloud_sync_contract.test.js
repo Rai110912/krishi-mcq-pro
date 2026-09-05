@@ -2799,3 +2799,149 @@ test('every off-scale Tailwind shade in index.html is declared in the config', (
     // The two that started this, pinned by name so a config rewrite cannot quietly drop them.
     assert.ok(declared.indigo.has(455) && declared.slate.has(350), 'indigo-455 and slate-350 stay declared');
 });
+
+// The hardware back button closed the whole app on one press for weeks. The JS handler was fine;
+// @capacitor/app - the plugin that owns Android's OnBackPressedCallback, since Capacitor 5's core
+// has no back handling of its own - had been dropped from package.json with the Cap 6 -> 5
+// downgrade, so Plugins.App was undefined and the listener never registered. Nothing logged.
+test('the back button plugin stays installed, and on the version Capacitor 5 can load', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+
+    assert.ok(deps['@capacitor/app'],
+        '@capacitor/app is gone from package.json again - without it Android runs its default ' +
+        'onBackPressed and a single back press finishes the Activity');
+    // Pinned to a 5.x line: a 6.x plugin against Capacitor 5 core is exactly how the Google
+    // sign-in "missing initial state" bug was introduced.
+    const core = String(deps['@capacitor/core'] || '').replace(/[^\d.]/g, '');
+    for (const p of ['@capacitor/app', '@capacitor/status-bar', '@capacitor/haptics']) {
+        if (!deps[p]) continue;
+        assert.strictEqual(String(deps[p]).replace(/[^\d.]/g, '').split('.')[0], core.split('.')[0],
+            p + ' must share a major version with @capacitor/core');
+    }
+
+    // cap sync writes the gradle include list (committed) and capacitor.plugins.json (gitignored).
+    // Without an entry in both, the plugin's Java class is never registered and the JS handle stays
+    // undefined - which is exactly how this failed: installed in npm, invisible to Android.
+    const gradle = fs.readFileSync(path.join(ROOT, 'android', 'capacitor.settings.gradle'), 'utf8');
+    assert.match(gradle, /include ':capacitor-app'/,
+        'run `npx cap sync android` - the App plugin is not in the Android build');
+
+    const pluginsJson = path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'capacitor.plugins.json');
+    if (fs.existsSync(pluginsJson)) {          // absent on a fresh clone until the first cap sync
+        const classpaths = JSON.parse(fs.readFileSync(pluginsJson, 'utf8')).map(r => r.classpath).join(' ');
+        assert.match(classpaths, /com\.capacitorjs\.plugins\.app\.AppPlugin/,
+            'run `npx cap sync android` - AppPlugin is not registered natively');
+        assert.match(classpaths, /GoogleAuth/,
+            'the Google sign-in plugin must survive every cap sync');
+    }
+});
+test('one back press runs one cascade, shared by the native and the web caller', () => {
+    const defIdx = APP_JS.indexOf('window.krishiHandleBack = function');
+    const iifeIdx = APP_JS.indexOf('function initCapacitorNativeFeatures()');
+    assert.ok(defIdx > -1, 'window.krishiHandleBack is gone');
+    assert.ok(iifeIdx > -1 && defIdx < iifeIdx,
+        'krishiHandleBack must stay above initCapacitorNativeFeatures() - that IIFE returns early ' +
+        'on web, so anything defined inside it is invisible to the browser back button');
+
+    // The native listener must delegate, not carry its own copy of the cascade.
+    const listener = APP_JS.slice(APP_JS.indexOf("AppPlugin.addListener('backButton'"));
+    const body = listener.slice(0, listener.indexOf('console.log(\'[BackButton]'));
+    assert.match(body, /window\.krishiHandleBack\s*&&\s*window\.krishiHandleBack\(\)/);
+    assert.match(body, /AppPlugin\.exitApp\(\)/, 'the double-press exit stays native-only');
+    assert.doesNotMatch(body, /quiz-map-modal|nav-bottom-sheet/,
+        'the cascade was duplicated back into the listener - the two callers will drift apart');
+
+    // A missing plugin must never be silent again.
+    assert.match(APP_JS, /console\.error\('\[BackButton\] @capacitor\/app missing/);
+
+    // Order matters: the Question Map opens on top of live gameplay, so it has to be tested before
+    // the exam-exit prompt, and the exam prompt before the plain "go home" branch.
+    const cascade = functionBody('krishiHandleBack');
+    const at = (s) => { const i = cascade.indexOf(s); assert.ok(i > -1, s + ' left the cascade'); return i; };
+    assert.ok(at('quiz-map-modal') < at('.modal-overlay:not(.hidden)'));
+    assert.ok(at('.modal-overlay:not(.hidden)') < at('page-mcq'));
+    assert.ok(at('page-mcq') < at("navigate('page-home')"));
+    assert.match(cascade, /return false;\s*\}?\s*$/,
+        'the cascade must end in `return false` - that is how a caller learns back means "leave"');
+});
+test('the cascade closes the top-most thing and only then reports "leave"', () => {
+    const run = new Function('document', 'window', 'navigate', functionBody('krishiHandleBack').slice(1, -1));
+
+    const node = (classes) => {
+        const set = new Set(classes || []);
+        return { _set: set, classList: {
+            contains: c => set.has(c), add: c => set.add(c), remove: c => set.delete(c) } };
+    };
+    const dom = (o) => {
+        const ids = {
+            'nav-bottom-sheet': node(o.sheetOpen ? ['sheet-open'] : []),
+            'nav-sheet-backdrop': node(['sheet-backdrop-active']),
+            'quiz-map-modal': node(o.mapOpen ? [] : ['hidden']),
+            'page-mcq': node(o.examLive ? [] : ['hidden'])
+        };
+        const page = o.activePage ? Object.assign(node(['page', 'active']), { id: o.activePage }) : null;
+        const modal = o.modalOpen ? node(['modal-overlay']) : null;
+        return { ids, page, modal, doc: {
+            getElementById: id => ids[id] || null,
+            querySelector: sel => sel.indexOf('.page.active') === 0 ? page
+                                : sel.indexOf('.modal-overlay') === 0 ? modal : null
+        } };
+    };
+
+    // Home, nothing open: the only case where back means leave.
+    let d = dom({ activePage: 'page-home' });
+    assert.strictEqual(run(d.doc, {}, () => assert.fail('must not navigate')), false);
+
+    // A sub-page goes home instead of leaving.
+    d = dom({ activePage: 'page-settings' });
+    let went = null;
+    assert.strictEqual(run(d.doc, {}, p => { went = p; }), true);
+    assert.strictEqual(went, 'page-home');
+
+    // The sheet outranks everything, and its own closer is preferred.
+    d = dom({ sheetOpen: true, activePage: 'page-home' });
+    let closed = false;
+    assert.strictEqual(run(d.doc, { closeNavSheet: () => { closed = true; } }, () => {}), true);
+    assert.ok(closed);
+
+    // Mid-exam with the Question Map open: the map closes, and the "exit the exam?" prompt must
+    // NOT be the thing the user is shown.
+    d = dom({ mapOpen: true, examLive: true, activePage: 'page-practice' });
+    let mapBack = false;
+    assert.strictEqual(run(d.doc,
+        { krishiQuestionMapBack: () => { mapBack = true; },
+          confirmExitExam: () => assert.fail('the exam prompt jumped the Question Map') }, () => {}), true);
+    assert.ok(mapBack);
+
+    // Same page, map already closed: now the exam prompt is correct, and no navigation happens.
+    d = dom({ examLive: true, activePage: 'page-practice' });
+    let asked = false;
+    assert.strictEqual(run(d.doc, { confirmExitExam: () => { asked = true; } },
+        () => assert.fail('an exam must not be dropped without the prompt')), true);
+    assert.ok(asked);
+
+    // A plain modal closes by getting .hidden back.
+    d = dom({ modalOpen: true, activePage: 'page-home' });
+    assert.strictEqual(run(d.doc, {}, () => {}), true);
+    assert.ok(d.modal._set.has('hidden'));
+});
+test('the web half guards with history and never touches the URL', () => {
+    const i = APP_JS.indexOf('function initWebBackButton()');
+    assert.ok(i > -1, 'initWebBackButton() is gone - browser Back leaves the site again');
+    const web = APP_JS.slice(i, APP_JS.indexOf("console.log('[BackButton] Web/PWA"));
+
+    // Native owns the button there; running both would double-handle one press.
+    assert.match(web, /isNativePlatform\(\)\)\s*return/);
+    assert.match(web, /addEventListener\('popstate'/);
+    // A URL argument would put a new path in the address bar, which Hosting would then have to
+    // rewrite on reload. Two arguments only.
+    assert.match(web, /history\.pushState\(\{[^}]*\},\s*''\s*\)/);
+    assert.doesNotMatch(web, /history\.pushState\([^)]*,[^)]*,[^)]*\)/, 'pushState must take no URL');
+    // Handled press -> the guard goes straight back, so the user stays put.
+    assert.match(web, /krishiHandleBack\(\)\)\s*\{\s*\n\s*pushGuard\(\)/);
+    // Unhandled press -> the guard is *not* replaced immediately (that is what lets a second press
+    // leave), but it must come back on a timer or the button would stay dead afterwards.
+    assert.match(web, /rearm\s*=\s*setTimeout\(function\(\)\s*\{\s*rearm\s*=\s*null;\s*pushGuard\(\);\s*\}/);
+    assert.match(web, /pushGuard\(\);\s*$/, 'the guard has to be armed once at startup');
+});

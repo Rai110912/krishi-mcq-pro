@@ -2081,6 +2081,29 @@ function loadData(){
         return s;
     }
 
+    // A count that means the same thing whatever form the document holds the field in: an
+    // array, a map keyed by question id, or the LZ string that COMPRESSED_CLOUD_FIELDS
+    // writes. `(cloud.timingLog || []).length` on a compressed blob returns its CHARACTER
+    // count — 8,432 "logs" against 214 local ones — which is what put a conflict modal
+    // quoting nonsense in front of the user on virtually every manual "Sync Now".
+    //
+    // Returns -1 for "not comparable" (absent, or a blob this build cannot decode) so the
+    // caller can leave that field out of the comparison instead of inventing a difference.
+    function cloudCollectionCount(value) {
+        if (value === undefined || value === null) return -1;
+        if (Array.isArray(value)) return value.length;
+        if (typeof value === 'object') return Object.keys(value).length;
+        if (typeof value !== 'string') return -1;
+        if (value === '') return 0;
+        if (typeof LZString === 'undefined' || !LZString.decompressFromUTF16) return -1;
+        try {
+            const parsed = JSON.parse(LZString.decompressFromUTF16(value) || 'null');
+            if (Array.isArray(parsed)) return parsed.length;
+            if (parsed && typeof parsed === 'object') return Object.keys(parsed).length;
+            return -1;
+        } catch (e) { return -1; }
+    }
+
     function checkForSyncConflicts(local, cloud) {
         const localB = (local.bookmarked || []).length;
         const cloudB = (cloud.bookmarked || []).length;
@@ -2088,22 +2111,34 @@ function loadData(){
         const cloudW = (cloud.wrong || []).length;
         const localS = calculateStreakFromStreakObject(local.streak);
         const cloudS = calculateStreakFromStreakObject(cloud.streak);
-        const localL = (local.timingLog || []).length;
-        const cloudL = (cloud.timingLog || []).length;
+        const localL = cloudCollectionCount(local.timingLog);
+        const cloudL = cloudCollectionCount(cloud.timingLog);
         const localC = (local.customQuestions || []).length;
-        // Was never declared. Referencing it below threw a ReferenceError that aborted
-        // this function and silently killed the entire manual "Sync Now" path.
-        const cloudC = (cloud.customQuestions || []).length;
+        // The question bank left this document for users/{uid}/qbank, so cloud.customQuestions
+        // is absent on every current document and used to read as a flat 0 — "Cloud: 0 MCQs"
+        // beside a fully intact cloud bank, which invited the user to overwrite it. The count
+        // now comes from the metadata the chunk writer publishes, falling back to the inline
+        // field for a pre-migration document.
+        const cloudC = (cloud.qbankCount !== undefined)
+            ? (parseInt(cloud.qbankCount, 10) || 0)
+            : cloudCollectionCount(cloud.customQuestions);
+        // An unhydrated local bank is not a difference: collectAllAppData() omits
+        // customQuestions until IndexedDB has been read, so this would otherwise report 0
+        // local questions against the real cloud count on every launch.
+        const bankComparable = customQuestionsHydrated && cloudC >= 0;
+        const logsComparable = localL >= 0 && cloudL >= 0;
 
         // Auto-Pull Protection: If local device is fresh/empty (0 data), bypass conflict modal and auto-pull cloud data!
-        if (localB === 0 && localW === 0 && localS === 0 && localL === 0 && localC === 0) {
+        if (localB === 0 && localW === 0 && localS === 0 && localL <= 0 && localC === 0) {
             return null;
         }
 
-        if (localB !== cloudB || localW !== cloudW || localS !== cloudS || localL !== cloudL || localC !== cloudC) {
+        if (localB !== cloudB || localW !== cloudW || localS !== cloudS ||
+            (logsComparable && localL !== cloudL) ||
+            (bankComparable && localC !== cloudC)) {
             return {
-                local: { bookmarks: localB, mistakes: localW, streak: localS, logs: localL, customQuestions: localC },
-                cloud: { bookmarks: cloudB, mistakes: cloudW, streak: cloudS, logs: cloudL, customQuestions: cloudC }
+                local: { bookmarks: localB, mistakes: localW, streak: localS, logs: Math.max(localL, 0), customQuestions: localC },
+                cloud: { bookmarks: cloudB, mistakes: cloudW, streak: cloudS, logs: Math.max(cloudL, 0), customQuestions: Math.max(cloudC, 0) }
             };
         }
         return null;
@@ -4039,17 +4074,27 @@ function loadData(){
                             mergedPayload.updatedAt = Date.now();
                             KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
                             // Same treatment as the performCloudSync() delta write. Without
-                            // this, timingLog/mockScores went up raw and unchecked from the
-                            // realtime path, which is the path that runs most often.
+                            // prepareCloudPayload(), timingLog/mockScores went up raw and
+                            // unchecked from the realtime path — the path that runs most often —
+                            // and assertProjectedCloudDocFits() is what catches a delta that fits
+                            // on its own but pushes the stored document past the limit.
+                            //
+                            // The write is awaited. Fire-and-forget cleared krishi_sync_pending
+                            // and set the badge to 'Synced' below while it was still in flight,
+                            // and a REJECTED write (permission-denied, invalid-argument, a
+                            // document at Firestore's own 1 MiB cap) reached nothing but a
+                            // console.error: no 'Sync failed', no retry, and the pending flag
+                            // already cleared, so nothing tried again until the next local
+                            // change. It also let adoptWrittenDelta() land after the following
+                            // cycle had already read cachedCloudData, which re-sent the identical
+                            // delta that the echo guard exists to prevent.
                             prepareCloudPayload(delta, 'Realtime sync delta');
-                            firestore.collection('users').doc(uid).set({ ...delta, updatedAt: now }, { merge: true })
-                                .then(() => {
-                                    adoptWrittenDelta(cloudData, delta, mergedPayload);
-                                    console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud');
-                                })
-                                .catch(err => console.error('[Cloud Sync] Real-time push back failed:', err));
+                            assertProjectedCloudDocFits(cloudData, delta, 'Projected cloud document');
+                            await firestore.collection('users').doc(uid).set({ ...delta, updatedAt: now }, { merge: true });
+                            adoptWrittenDelta(cloudData, delta, mergedPayload);
+                            console.log('[Cloud Sync] Real-time merged local changes pushed back to cloud');
                         } else {
-                            KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
+                            KrishiStorage.setItem('krishi_last_updated_at', cloudUpdatedAtMs(cloudData.updatedAt) || Date.now());
                         }
 
                         // One-time cleanup of any legacy inline Firestore customQuestions field.
@@ -4078,7 +4123,12 @@ scheduleMidnightCloudVault();
                         // Without this, any throw in the merge left syncInProgress latched
                         // true for the rest of the session, silently killing all sync.
                         console.error('[Cloud Sync] Snapshot handler failed:', e);
+                        // A failed realtime cycle used to end here and wait for the next local
+                        // change; the delta write is awaited now, so krishi_sync_pending is
+                        // still set and a retry can actually finish the job. Oversized payloads
+                        // are deterministic and deliberately not retried — see scheduleSyncRetry().
                         if (isPayloadTooBigError(e)) handlePayloadTooBigError(e);
+                        else scheduleSyncRetry('realtime merge failure');
                         setSyncStatus('Sync failed');
                     } finally {
                         if (ownsSyncLock) syncInProgress = false;
@@ -4786,10 +4836,21 @@ scheduleMidnightCloudVault();
                                 const now = Date.now();
                                 const localDataPayload = collectAllAppData();
                                 localDataPayload.updatedAt = now;
+                                // The bank belongs in users/{uid}/qbank, not in the document.
+                                // prepareCloudPayload() does not strip customQuestions — only
+                                // syncQbankToChunks() does — so "keep local" used to push the
+                                // entire question bank inline into users/{uid}, the exact write
+                                // the qbank offload removed. With a real bank that trips the
+                                // 900 KB guard and the user's own choice fails outright; under
+                                // the limit it re-creates the legacy inline field that a later
+                                // cycle then has to detect and delete. Same order as the
+                                // initial-push path in performCloudSync().
+                                //
                                 // merge:true — "keep local" means the user's local copy of the
                                 // conflicting collections wins, not that every cloud field the
                                 // payload happens to omit (a disabled sync toggle, a newer
                                 // schema key) gets deleted.
+                                await syncQbankToChunks(uid, docRef, localDataPayload.customQuestions, localDataPayload, (cloudData.qbankChunks || 0));
                                 prepareCloudPayload(localDataPayload, 'Conflict keep-local push');
                                 await docRef.set(localDataPayload, { merge: true });
 KrishiStorage.setItem('krishi_last_updated_at', now);
@@ -4800,8 +4861,19 @@ updateOfflineQueueBadge();
 try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: firestore, uid: uid }); } catch(e){}
                                 if (!silent) showToast('✅ Cloud overwritten with Local version!');
                             } else if (strategy === 'cloud') {
+                                // The document's unbounded fields arrive as LZ strings, and
+                                // applyAllAppData()'s type guards then skip every one of them:
+                                // setJSONArraySafely() returns on !Array.isArray and the sm2
+                                // block requires an object. So "Use Cloud" restored bookmarks
+                                // and counters while silently leaving the three biggest
+                                // histories — review schedule, timing history, mock results —
+                                // on their local values, under a toast telling the user the
+                                // local copy had been overwritten. The bank needs hydrating for
+                                // the same reason: it lives in users/{uid}/qbank, not here.
+                                await hydrateQbankFromChunks(uid, docRef, cloudData);
+                                decompressCloudFields(cloudData, 'Conflict use-cloud');
                                 applyAllAppData(cloudData);
-KrishiStorage.setItem('krishi_last_updated_at', cloudData.updatedAt || Date.now());
+KrishiStorage.setItem('krishi_last_updated_at', cloudUpdatedAtMs(cloudData.updatedAt) || Date.now());
 KrishiStorage.removeItem('krishi_sync_pending');
 KrishiStorage.setItem('krishi_sync_pending_count', '0');
 setSyncStatus('Synced');
@@ -18777,11 +18849,17 @@ ${text}`;
         const next = (typeof value === 'string') ? value : String(value);
         if (KrishiStorage.getItem(key) === next) return false;
         KrishiStorage.setItem(key, value);
+        // Counted so applyAllAppData() can tell a fully converged cycle (nothing written at
+        // all) from one that changed something, and skip its reload. Kept on `window` rather
+        // than in a module-level `let` for the temporal-dead-zone reason documented on
+        // syncWatchdogMs(): a snapshot can reach this function before this region of the file
+        // has executed.
+        window.__krishiApplyWrites = (window.__krishiApplyWrites || 0) + 1;
         return true;
     }
 
     function setJSONArraySafely(key, incoming, label) {
-        if (!Array.isArray(incoming)) return;
+        if (!Array.isArray(incoming)) return false;
         if (incoming.length === 0) {
             let currentLen = 0;
             try {
@@ -18790,10 +18868,10 @@ ${text}`;
             } catch(e) { currentLen = 0; }
             if (currentLen > 0) {
                 console.warn('[Cloud Sync] Rejected empty "' + label + '"; keeping ' + currentLen + ' stored entries.');
-                return;
+                return false;
             }
         }
-        setItemIfChanged(key, JSON.stringify(incoming));
+        return setItemIfChanged(key, JSON.stringify(incoming));
     }
 
     function applyAllAppData(data) {
@@ -18810,6 +18888,8 @@ ${text}`;
         // Tracks whether the IndexedDB write below was actually dispatched, so a bank
         // downloaded this cycle but never persisted can release its provisional hash.
         let qbankPersistScheduled = false;
+        // Writes that actually landed, sampled at entry — see the reload gate at the tail.
+        const _writesAtEntry = (window.__krishiApplyWrites || 0);
         if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarked, localData.bookmarked, 'bookmarked')) { localData.bookmarked = data.bookmarked; changed = true; }
         if (syncSelectiveBookmarks && isSafeIncomingCollection(data.bookmarkedLog, localData.bookmarkedLog, 'bookmarkedLog') && !Array.isArray(data.bookmarkedLog)) { localData.bookmarkedLog = data.bookmarkedLog; changed = true; }
         if (syncSelectiveErrors && isSafeIncomingCollection(data.wrong, localData.wrong, 'wrong')) { localData.wrong = data.wrong; changed = true; }
@@ -18879,6 +18959,7 @@ ${text}`;
                         profileChanged = setItemIfChanged(PROFILE_PHOTO_KEY, data.userProfile.photo) || profileChanged;
                     } else if (KrishiStorage.getItem(PROFILE_PHOTO_KEY) !== null) {
                         KrishiStorage.removeItem(PROFILE_PHOTO_KEY);
+                        window.__krishiApplyWrites = (window.__krishiApplyWrites || 0) + 1;
                         profileChanged = true;
                     }
                 }
@@ -19003,9 +19084,16 @@ ${text}`;
             }
         }
         
-        // Reload state into active memory (no DOM involvement)
-        loadData();
-        loadTimingData();
+        // Reload state into active memory (no DOM involvement). Gated: on a fully converged
+        // cycle nothing above wrote a single key, and re-parsing every krishi_* value back
+        // into localData is then pure work — the last of the idle cost that the compare-first
+        // writes left behind. `changed` alone is not the test: the syncSelectiveLogs block
+        // writes KrishiStorage keys directly without ever touching it, and loadData() /
+        // loadTimingData() must see those.
+        if (changed || (window.__krishiApplyWrites || 0) !== _writesAtEntry) {
+            loadData();
+            loadTimingData();
+        }
         if (typeof initPracticeSoundSettings === 'function') initPracticeSoundSettings();
 
         // ── Mark dirty modules based on what actually changed ──────────────
@@ -19090,6 +19178,34 @@ ${text}`;
             if (name !== null) topics.delete(name);
         });
         return { ...newer, subject: subject, topics: Array.from(topics.values()) };
+    }
+
+    // How long a deleted question's tombstone is kept. A soft-deleted record IS the delete
+    // tombstone for the question bank: deleteCustomQuestion() sets `deleted = true` instead of
+    // splicing, collectAllAppData() ships the record anyway, and deepMergeCustomQuestion()
+    // carries the flag forward — which is why a delete propagates across devices without the
+    // separate *Log map that examProfiles/syllabusCustom need (their items are bare ids and
+    // subject objects with nowhere to put a flag).
+    //
+    // Nothing ever reaped them, though, so every question the user has ever deleted stayed in
+    // the bank, in IndexedDB, and in every qbank chunk upload for good: measured at ~30 KB
+    // compressed per 500 tombstones on top of a 91 KB / 1,000-question bank.
+    //
+    // The window is the resurrection risk, and it is the only cost of compaction: a device that
+    // has been offline LONGER than this still holds the question live, with no tombstone left to
+    // beat it, so the union brings it back. 60 days is far past any plausible gap for an app used
+    // for exam prep.
+    // `var`, not `const`, for the same reason as _dupIndexCache: an onSnapshot handler can reach
+    // mergeCloudAndLocalData() before execution has walked this far down the file, and a TDZ
+    // ReferenceError here would take the whole sync down. Hoisted-but-undefined instead makes the
+    // cutoff NaN, which the guard below turns into "reap nothing" — the safe direction.
+    var DELETED_QUESTION_TTL_MS = 60 * 24 * 60 * 60 * 1000;
+
+    function compactDeletedQuestions(arr) {
+        if (!Array.isArray(arr)) return [];
+        const cutoff = Date.now() - DELETED_QUESTION_TTL_MS;
+        if (!isFinite(cutoff)) return arr;
+        return arr.filter(q => !(q && q.deleted && (Number(q.updatedAt) || 0) < cutoff));
     }
 
     function mergeCloudAndLocalData(cloud) {
@@ -19227,18 +19343,33 @@ ${text}`;
             });
             
             mergedQ.updatedAt = Math.max(localQ.updatedAt || 0, cloudQ.updatedAt || 0);
+            // A delete and an edit stamped in the SAME millisecond: `isLocalNewer` is a strict >,
+            // so the cloud copy wins the tie and a `deleted: true` on the local side is dropped.
+            // A tie is not evidence that the edit came after the delete, and of the two ways to
+            // guess wrong, resurrecting is the worse one — a question that reappears on every
+            // sync cannot be got rid of, while one deleted by mistake can be re-added.
+            if ((localQ.updatedAt || 0) === (cloudQ.updatedAt || 0) && (localQ.deleted || cloudQ.deleted)) {
+                mergedQ.deleted = true;
+            }
             return mergedQ;
         }
 
         // Custom Questions merge - Deep Merge Field-Level (CRDT/LWW)
+        // Expired tombstones are dropped from BOTH sides before the union. Compacting only the
+        // local copy would achieve nothing: the peer's un-compacted list would hand every
+        // tombstone straight back on the next union. Doing it here rather than at save time also
+        // means the compacted result reaches IndexedDB and the qbank chunks through the ordinary
+        // apply/upload path — computeQbankHash() changes, so the smaller bank uploads by itself.
+        const cqLocal = compactDeletedQuestions(local.customQuestions);
+        const cqCloud = compactDeletedQuestions(cloud.customQuestions);
         let questionMap = new Map();
         // Fall back to a content-derived key so a question with a missing/falsy id is
         // kept instead of being silently dropped out of the merge result.
         const qKey = q => (q.id !== undefined && q.id !== null && q.id !== '')
             ? 'id:' + q.id
             : 'anon:' + JSON.stringify([q.question || '', q.options || '', q.subject || '']);
-        (cloud.customQuestions || []).forEach(q => { if (q) questionMap.set(qKey(q), q); });
-        (local.customQuestions || []).forEach(q => {
+        cqCloud.forEach(q => { if (q) questionMap.set(qKey(q), q); });
+        cqLocal.forEach(q => {
             if (q) {
                 const k = qKey(q);
                 questionMap.set(k, deepMergeCustomQuestion(q, questionMap.get(k)));
@@ -19248,7 +19379,9 @@ ${text}`;
 
         // A union can never legitimately hold fewer items than either input. If it does,
         // the merge is unsound — refuse rather than hand a shrunken bank to the writers.
-        const _cqExpected = Math.max((local.customQuestions || []).length, (cloud.customQuestions || []).length);
+        // Measured against the COMPACTED inputs: those are what actually went into the union,
+        // and comparing against the raw lists would turn every compaction into an abort.
+        const _cqExpected = Math.max(cqLocal.length, cqCloud.length);
         if (merged.customQuestions.length < _cqExpected) {
             throw new Error('[Sync] Custom-question merge produced ' + merged.customQuestions.length +
                 ' of at least ' + _cqExpected + ' expected; aborting sync to protect the question bank.');
@@ -19884,7 +20017,14 @@ ${text}`;
     //
     // These are all short numeric records with ten identical repeated key names, which is the
     // shape LZ compresses hardest — the same reason timing records shrink 10-20x.
-    const COMPRESSED_CLOUD_FIELDS = ['timingLog', 'mockScores', 'sm2'];
+    //
+    // wrongLog / bookmarkedLog are maps keyed by question id holding one
+    // {action,timestamp,_rev} record per distinct question ever marked, so they grow on the
+    // same curve as sm2 — the field that was added here for exactly this reason — and they
+    // were the last two unbounded collections still going up raw. Measured in the app:
+    // 1,000 entries 66.8 KB → 4.3 KB, 2,000 → 7.9 KB, 4,600 → 307.4 KB → 17 KB (18x). At a
+    // full bank the pair could occupy two thirds of the 900 KB document budget uncompressed.
+    const COMPRESSED_CLOUD_FIELDS = ['timingLog', 'mockScores', 'sm2', 'wrongLog', 'bookmarkedLog'];
     function compressUnboundedFields(payload) {
         if (!payload) return payload;
         if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
@@ -19906,9 +20046,11 @@ ${text}`;
     // it as a string, so it stays decodable.
     //
     // `sm2` is a MAP keyed by question id: '[]' here would hand the review schedule an array,
-    // and `{ ...[] }` spreads without complaint.
+    // and `{ ...[] }` spreads without complaint. wrongLog / bookmarkedLog are maps for the
+    // same reason and take the same empty value.
     function decompressibleCloudFields() {
-        return { timingLog: '[]', mockScores: '[]', customQuestions: '[]', sm2: '{}' };
+        return { timingLog: '[]', mockScores: '[]', customQuestions: '[]', sm2: '{}',
+                 wrongLog: '{}', bookmarkedLog: '{}' };
     }
 
     /**
@@ -19982,6 +20124,51 @@ ${text}`;
 
     function measureCloudDocKB() {
         return Math.round(JSON.stringify(buildCloudDocProbe()).length / 1024);
+    }
+
+    /**
+     * Asserts that the DOCUMENT this write will produce fits, not just the delta being sent.
+     *
+     * assertPayloadFits() inside prepareCloudPayload() only ever saw the delta. A user whose
+     * document has already grown to ~1 MB and who then toggles one setting sends a 20-byte
+     * delta: the guard passes, and Firestore rejects the write on its own 1 MiB document
+     * limit. That rejection's message does not contain 'safe limit for one Firestore
+     * document', so isPayloadTooBigError() returns false — the user gets a bare "Sync failed"
+     * and three pointless retries instead of the toast naming the fields to clear, and the
+     * whole handlePayloadTooBigError()/rankCloudDocFields() path is bypassed at exactly the
+     * ceiling it was written for.
+     *
+     * Measured the way the document will really be stored: the merged cloud copy with the
+     * delta applied over it, the question bank stripped (it lives in the qbank subcollection)
+     * and the unbounded fields compressed.
+     *
+     * The raw projection is checked first because it is an upper bound on the stored size — if
+     * THAT fits, the compressed document certainly does — which keeps the LZ pass off every
+     * ordinary sync and only measures precisely when a document looks too big.
+     */
+    function assertProjectedCloudDocFits(cloudData, delta, label) {
+        if (!cloudData) return;
+        // Shallow copy: compressUnboundedFields() replaces field references on the copy and
+        // never mutates the values, so the caller's snapshot (and the delta memo keyed off it)
+        // is untouched.
+        const projected = Object.assign({}, cloudData, delta || {});
+        delete projected.customQuestions;
+        if (payloadFitsCloudDoc(projected)) return;
+        compressUnboundedFields(projected);
+        assertPayloadFits(projected, label || 'Projected cloud document');
+    }
+
+    // Firestore hands `updatedAt` back as a Timestamp object, and String(aTimestamp) is
+    // "[object Object]" — which is what three writers stored into krishi_last_updated_at.
+    // Harmless only for as long as nothing reads the key; anything that later tries to order
+    // a merge by it would get NaN.
+    function cloudUpdatedAtMs(v) {
+        if (!v) return 0;
+        if (typeof v === 'number') return v;
+        if (typeof v.toMillis === 'function') { try { return v.toMillis(); } catch (e) { return 0; } }
+        if (typeof v.seconds === 'number') return v.seconds * 1000;
+        const n = parseInt(v, 10);
+        return isNaN(n) ? 0 : n;
     }
 
     // Single place where an outgoing users/{uid} payload is made write-safe: compress the
@@ -20092,7 +20279,6 @@ ${text}`;
             const docRef = firestore.collection('users').doc(uid);
 
             const localDataPayload = collectAllAppData();
-            const localUpdatedAt = parseInt(KrishiStorage.getItem('krishi_last_updated_at')) || 0;
 
             // Resolve whether the cloud document exists. The cached value is only
             // trusted for the uid it was populated for — a stale cache from a previous
@@ -20135,6 +20321,7 @@ ${text}`;
                 await syncQbankToChunks(uid, docRef, mergedPayload.customQuestions, delta, (currentCloudData.qbankChunks || 0));
                 if (delta && Object.keys(delta).length > 0) {
                     prepareCloudPayload(delta, 'Sync delta');
+                    assertProjectedCloudDocFits(currentCloudData, delta, 'Projected cloud document');
                     const now = firebase.firestore.FieldValue.serverTimestamp();
                     mergedPayload.updatedAt = Date.now();
                     KrishiStorage.setItem('krishi_last_updated_at', mergedPayload.updatedAt);
@@ -20146,7 +20333,7 @@ ${text}`;
                     console.log('[Cloud Sync] CRDT merged DELTA payload written back to cloud.');
                     logSyncActivity('Merged ' + Object.keys(delta).length + ' changed sub-collections to cloud (Delta Sync).');
                 } else {
-                    KrishiStorage.setItem('krishi_last_updated_at', currentCloudData.updatedAt || Date.now());
+                    KrishiStorage.setItem('krishi_last_updated_at', cloudUpdatedAtMs(currentCloudData.updatedAt) || Date.now());
                     logSyncActivity('Cloud sync verified: Local data is already up to date.');
                 }
 
@@ -20387,7 +20574,23 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         // The strip above is unconditional (the field must never reach the users doc);
         // the upload itself honours the user's selective-sync choice.
         if (!syncSelectiveCustom) return;
-        if (!uid || !userDocRef || !Array.isArray(sourceArr) || sourceArr.length === 0) return;
+        if (!uid || !userDocRef || !Array.isArray(sourceArr)) return;
+        if (sourceArr.length === 0) {
+            // "Delete every custom question" used to stop right here, so the deletion never
+            // reached the cloud at all: the chunk docs and the qbankHash/qbankCount metadata
+            // stayed behind, a reinstall or a second login downloaded the whole bank back, and
+            // because the cloud hash never changed either the two copies could stay
+            // permanently disagreed. An empty bank is published instead — but only when BOTH
+            // of these hold:
+            //   • the local bank is genuinely empty, not merely unloaded. collectAllAppData()
+            //     omits customQuestions until the IndexedDB bank is hydrated, and the union
+            //     merge then yields [] for a bank that is simply not in memory yet; publishing
+            //     that would destroy the cloud copy.
+            //   • the cloud has something to clear. Without this, every account that never
+            //     created a question would upload an empty chunk on its first sync.
+            if (!customQuestionsHydrated) return;
+            if (Math.max(0, parseInt(prevChunks, 10) || 0) === 0) return;
+        }
         const hash = computeQbankHash(sourceArr);
         if (hash === (KrishiStorage.getItem(QBANK_SYNCED_HASH_KEY) || '')) return; // unchanged
         const compressed = compressQbank(sourceArr);
@@ -20396,7 +20599,12 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
             qbankUpdatedAt: Date.now(),
             qbankCount: sourceArr.length,
             qbankHash: hash,
-            qbankChunks: chunkCount
+            qbankChunks: chunkCount,
+            // The one users/{uid} write that does not pass through prepareCloudPayload(), so
+            // it has to stamp the writer itself. Without it the server-ack echo of this write
+            // is not recognised as our own and the whole pipeline runs a second time — an
+            // import done as the first action after launch paid for two full cycles.
+            lastWriter: syncWriterId
         }, { merge: true });
         // Only mark synced once BOTH the chunks and their metadata landed — otherwise a
         // failed metadata write would leave peers unable to discover the new chunks.
@@ -20410,8 +20618,8 @@ try { window.KrishiDataSafety && KrishiDataSafety.onSyncSuccess({ firestore: fir
         if (!uid || !docRef || !cloudData || !cloudData.__qbankLegacyInline) return;
         try {
             await docRef.set({ customQuestions: firebase.firestore.FieldValue.delete() }, { merge: true });
-            console.log('[Qbank] Legacy Firestore customQuestions field removed after Storage migration.');
-            logSyncActivity('Custom question bank migrated to Cloud Storage.');
+            console.log('[Qbank] Legacy inline Firestore customQuestions field removed after the qbank migration.');
+            logSyncActivity('Custom question bank moved to its own cloud collection.');
         } catch (e) {
             console.warn('[Qbank] Legacy field delete deferred (will retry):', e);
         }

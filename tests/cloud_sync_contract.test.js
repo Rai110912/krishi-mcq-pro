@@ -267,7 +267,7 @@ test('every users/{uid} document write goes through prepareCloudPayload()', () =
     // by requiring the ref to be the bare user doc.
     const writers = [
         ['Restore push',                /prepareCloudPayload\(payload, 'Restore push'\)[\s\S]{0,200}?ref\.set\(payload/],
-        ['Realtime snapshot delta',     /prepareCloudPayload\(delta, 'Realtime sync delta'\)[\s\S]{0,300}?\.doc\(uid\)\.set\(\{ \.\.\.delta/],
+        ['Realtime snapshot delta',      /prepareCloudPayload\(delta, 'Realtime sync delta'\)[\s\S]{0,300}?\.doc\(uid\)\.set\(\{ \.\.\.delta/],
         ['Conflict keep-local',         /prepareCloudPayload\(localDataPayload, 'Conflict keep-local push'\)[\s\S]{0,200}?docRef\.set\(localDataPayload/],
         ['performCloudSync delta',      /prepareCloudPayload\(delta, 'Sync delta'\)[\s\S]{0,600}?docRef\.update\(\{ \.\.\.delta/],
         ['Initial full push',           /prepareCloudPayload\(localDataPayload, 'Initial full sync payload'\)[\s\S]{0,600}?docRef\.set\(localDataPayload/]
@@ -280,6 +280,140 @@ test('every users/{uid} document write goes through prepareCloudPayload()', () =
         'both shipped timingLog/mockScores RAW and skipped the 900 KB assertion entirely, so a ' +
         'heavy user\'s sync died on Firestore\'s 1 MiB limit with only a console line.'
     );
+});
+
+test('both delta writers measure the projected document, not just the delta', () => {
+    // prepareCloudPayload() asserts the size of the payload handed to it. For a delta that is
+    // the size of the CHANGE, so a document already sitting near Firestore's 1 MiB cap accepts
+    // a 20-byte delta, gets rejected by Firestore, and the rejection does not match
+    // isPayloadTooBigError() - a bare "Sync failed" plus three pointless retries instead of the
+    // toast that names the fields to clear.
+    assert.match(functionBody('performCloudSync'),
+        /assertProjectedCloudDocFits\(currentCloudData, delta/,
+        'performCloudSync()\'s delta write must assert the projected document.');
+    assert.match(APP_JS,
+        /assertProjectedCloudDocFits\(cloudData, delta[\s\S]{0,900}?\.doc\(uid\)\.set\(\{ \.\.\.delta/,
+        'the realtime delta write must assert the projected document before writing.');
+    const body = functionBody('assertProjectedCloudDocFits');
+    assert.match(body, /delete projected\.customQuestions/,
+        'the question bank lives in the qbank subcollection and cannot count against the ' +
+        'document limit; leaving it in over-reports by ~2.8x (see measureCloudDocKB).');
+    assert.match(body, /compressUnboundedFields\(projected\)/,
+        'the document is stored compressed, so measuring it raw would refuse writes that fit.');
+    assert.match(body, /payloadFitsCloudDoc\(projected\)/,
+        'the cheap raw check must short-circuit first, or every ordinary sync pays an LZ pass ' +
+        'over the whole document.');
+});
+
+test('the realtime delta write is awaited and its failure is retried', () => {
+    const body = functionBody('initCloudSync');
+    assert.match(body, /await firestore\.collection\('users'\)\.doc\(uid\)\.set\(\{ \.\.\.delta/,
+        'fire-and-forget cleared krishi_sync_pending and set the badge to Synced while the ' +
+        'write was still in flight; a rejected write then reached nothing but a console.error.');
+    assert.doesNotMatch(body, /Real-time push back failed/,
+        'the .catch() that swallowed a rejected realtime write must be gone - the outer catch ' +
+        'sets Sync failed and schedules a retry.');
+    assert.match(body, /scheduleSyncRetry\('realtime merge failure'\)/,
+        'a failed realtime cycle must schedule a retry instead of waiting for the next local ' +
+        'change; performCloudSync() has always done this.');
+});
+
+test('deleting the whole question bank reaches the cloud', () => {
+    const body = functionBody('syncQbankToChunks');
+    assert.doesNotMatch(body, /!Array\.isArray\(sourceArr\) \|\| sourceArr\.length === 0/,
+        'an unconditional early return on an empty bank means "delete every custom question" ' +
+        'never reaches the cloud: the chunks and the qbankHash stay, so a reinstall or a ' +
+        'second login downloads the whole bank back.');
+    assert.match(body, /if \(!customQuestionsHydrated\) return;/,
+        'an empty bank may only be published when the local copy is genuinely empty. ' +
+        'collectAllAppData() omits customQuestions until IndexedDB is hydrated, and ' +
+        'publishing that [] would destroy the cloud copy.');
+    assert.match(body, /parseInt\(prevChunks, 10\) \|\| 0\) === 0\) return;/,
+        'with no cloud chunks there is nothing to clear, and every account that never created ' +
+        'a question would upload an empty chunk on its first sync.');
+    assert.match(body, /lastWriter: syncWriterId/,
+        'the qbank metadata write is the one users/{uid} write that bypasses ' +
+        'prepareCloudPayload(), so it must stamp the writer itself or its own server-ack echo ' +
+        'runs the whole pipeline a second time.');
+});
+
+test('the conflict modal counts what the document actually holds', () => {
+    const body = functionBody('checkForSyncConflicts');
+    assert.match(body, /cloudCollectionCount\(cloud\.timingLog\)/,
+        'timingLog is stored as an LZ string, so (cloud.timingLog || []).length returned the ' +
+        'CHARACTER count of a compressed blob - thousands of phantom "logs" against a couple ' +
+        'of hundred local ones, which raised a conflict on virtually every manual Sync Now.');
+    assert.match(body, /cloud\.qbankCount/,
+        'the bank left the document for users/{uid}/qbank, so cloud.customQuestions is absent ' +
+        'and read as a flat 0 - "Cloud: 0 MCQs" beside a fully intact cloud bank.');
+    assert.match(body, /customQuestionsHydrated/,
+        'an unhydrated local bank reports 0 questions and is not evidence of a difference.');
+    assert.match(functionBody('cloudCollectionCount'), /decompressFromUTF16/,
+        'the helper has to decode a compressed field to count its records.');
+});
+
+test('"Use Cloud" restores the compressed fields it claims to restore', () => {
+    // applyAllAppData()'s type guards skip a raw LZ string outright: setJSONArraySafely()
+    // returns on !Array.isArray and the sm2 block requires an object. So the branch restored
+    // bookmarks and counters while silently leaving the review schedule, timing history and
+    // mock results on their local values - under a toast saying the local copy was overwritten.
+    assert.match(APP_JS,
+        /decompressCloudFields\(cloudData, 'Conflict use-cloud'\)[\s\S]{0,200}?applyAllAppData\(cloudData\)/,
+        'the use-cloud branch must decode the document before applying it.');
+    assert.match(APP_JS,
+        /hydrateQbankFromChunks\(uid, docRef, cloudData\)[\s\S]{0,400}?applyAllAppData\(cloudData\)/,
+        'the question bank lives in users/{uid}/qbank and has to be hydrated for "Use Cloud" ' +
+        'to mean anything for questions.');
+});
+
+test('"Keep Local" does not push the question bank into the users doc', () => {
+    // prepareCloudPayload() does not strip customQuestions - only syncQbankToChunks() does.
+    assert.match(APP_JS,
+        /syncQbankToChunks\(uid, docRef, localDataPayload\.customQuestions, localDataPayload[\s\S]{0,400}?prepareCloudPayload\(localDataPayload, 'Conflict keep-local push'\)/,
+        'the keep-local push must offload the bank to the qbank subcollection first, or it ' +
+        'writes the whole bank inline into users/{uid} - the write the qbank offload removed.');
+});
+
+test('the two unbounded CRDT logs go up compressed', () => {
+    // Maps keyed by question id holding one {action,timestamp,_rev} record per distinct
+    // question ever marked: the same growth curve as sm2. Measured 18x compressible at 4,600
+    // entries (307.4 KB -> 17 KB), and they were the last two unbounded fields going up raw.
+    const list = APP_JS.match(/const COMPRESSED_CLOUD_FIELDS = \[([^\]]*)\]/);
+    assert.ok(list, 'COMPRESSED_CLOUD_FIELDS not found');
+    ['wrongLog', 'bookmarkedLog'].forEach(f => {
+        assert.match(list[1], new RegExp("'" + f + "'"),
+            f + ' must be compressed for the users/{uid} write.');
+        assert.match(functionBody('decompressibleCloudFields'),
+            new RegExp(f + ":\\s*'\\{\\}'"),
+            f + ' is a MAP: decoding it to \'[]\' would hand the merge an array, and ' +
+            '{ ...[] } spreads without complaint.');
+    });
+});
+
+test('a converged cycle does not re-parse every key back into memory', () => {
+    const body = functionBody('applyAllAppData');
+    assert.match(body, /if \(changed \|\| \(window\.__krishiApplyWrites \|\| 0\) !== _writesAtEntry\) \{\s*loadData\(\);/,
+        'loadData()/loadTimingData() ran unconditionally, so a fully converged sync that wrote ' +
+        'zero keys still re-parsed every krishi_* value. `changed` alone is not the test: the ' +
+        'syncSelectiveLogs block writes KrishiStorage keys without touching it.');
+    assert.match(functionBody('setItemIfChanged'), /__krishiApplyWrites/,
+        'the write counter is what makes the gate above safe.');
+    assert.match(functionBody('setJSONArraySafely'), /return setItemIfChanged\(/,
+        'setJSONArraySafely() must report whether it wrote, or the gate misses its keys.');
+});
+
+test('krishi_last_updated_at is never handed a Firestore Timestamp', () => {
+    // String(aTimestamp) is "[object Object]". Harmless only for as long as nothing reads the
+    // key - and a merge ordered by it would get NaN.
+    const writes = APP_JS.match(/setItem\('krishi_last_updated_at',[^)]*\)/g) || [];
+    assert.ok(writes.length > 0, 'no krishi_last_updated_at writers found');
+    writes.forEach(w => {
+        assert.doesNotMatch(w, /(cloudData|currentCloudData)\.updatedAt(?!\s*\))/,
+            'raw cloud updatedAt written straight into the key: ' + w +
+            ' - route it through cloudUpdatedAtMs().');
+    });
+    assert.match(functionBody('cloudUpdatedAtMs'), /toMillis/,
+        'the coercion helper must handle a Firestore Timestamp.');
 });
 
 test('no write path hand-rolls its own compression any more', () => {
@@ -779,6 +913,87 @@ function syllabusTopicId(subject, name) {
     // eslint-disable-next-line no-new-func
     return new Function('subject', 'topicName', functionBody('syllabusTopicId').slice(1, -1))(subject, name);
 }
+
+// ── Question-bank deletes ───────────────────────────────────────────────────────
+
+/** deepMergeCustomQuestion(), lifted out of mergeCloudAndLocalData(). */
+function mergeQuestion(localQ, cloudQ) {
+    return new Function('localQ', 'cloudQ',
+        functionBody('deepMergeCustomQuestion').slice(1, -1))(localQ, cloudQ);
+}
+function compactQuestions(arr) {
+    // The TTL is a module-level const and new Function() bodies see only globals, so the real
+    // value has to be lifted out of the source alongside the function itself.
+    const ttl = APP_JS.match(/var DELETED_QUESTION_TTL_MS = ([^;]+);/);
+    assert.ok(ttl, 'DELETED_QUESTION_TTL_MS not found in js/app.js');
+    return new Function('arr', 'const DELETED_QUESTION_TTL_MS = ' + ttl[1] + ';' +
+        functionBody('compactDeletedQuestions').slice(1, -1))(arr);
+}
+const DAY = 24 * 60 * 60 * 1000;
+
+test('a deleted custom question stays deleted against a peer that still has it live', () => {
+    // The question bank needs no *Log tombstone map: a question is a full object, so
+    // deleteCustomQuestion() soft-deletes in place (deleted = true + a fresh updatedAt),
+    // collectAllAppData() ships that record like any other, and the field-level merge carries
+    // the flag. Losing that property is what would make deletes bounce back off the peer.
+    const base = { id: 7, q: 'Q7', sub: 'Agronomy' };
+    const deletedHere = { ...base, deleted: true, updatedAt: 200 };
+
+    assert.equal(mergeQuestion(deletedHere, { ...base, updatedAt: 100 }).deleted, true,
+        'peer holds it live with an older stamp - the delete must win');
+    assert.equal(mergeQuestion({ ...base, updatedAt: 100 }, { ...base, deleted: true, updatedAt: 200 }).deleted, true,
+        'the delete arriving FROM the cloud must survive a local copy that predates it');
+    assert.equal(mergeQuestion({ ...base, deleted: false, updatedAt: 100 }, { ...base, deleted: true, updatedAt: 200 }).deleted, true,
+        'an explicit deleted:false must not override a newer delete');
+});
+
+test('a same-millisecond delete beats an edit instead of resurrecting', () => {
+    // isLocalNewer is a strict >, so a tie handed the whole record to the cloud copy and dropped
+    // the local deleted flag. Of the two ways to guess wrong on a tie, resurrecting is worse: a
+    // question that comes back on every sync cannot be removed at all.
+    const base = { id: 7, q: 'Q7', sub: 'Agronomy' };
+    assert.equal(mergeQuestion({ ...base, deleted: true, updatedAt: 100 }, { ...base, deleted: false, updatedAt: 100 }).deleted, true,
+        'a tie must resolve to deleted');
+    assert.equal(mergeQuestion({ ...base, deleted: true, updatedAt: 100 }, { ...base, deleted: false, updatedAt: 200 }).deleted, false,
+        'an edit stamped strictly AFTER the delete is a deliberate restore and must still win - ' +
+        'otherwise deleting a question once bans it forever');
+});
+
+test('expired question tombstones are reaped, live questions never are', () => {
+    const old = Date.now() - 200 * DAY;
+    const recent = Date.now() - 2 * DAY;
+    const kept = compactQuestions([
+        { id: 1, q: 'live but ancient', updatedAt: old },
+        { id: 2, q: 'deleted long ago', deleted: true, updatedAt: old },
+        { id: 3, q: 'deleted this week', deleted: true, updatedAt: recent },
+        { id: 4, q: 'live', updatedAt: recent }
+    ]).map(q => q.id);
+
+    assert.deepEqual(kept, [1, 3, 4],
+        'only the expired tombstone may be dropped: a live question is never reaped on age, and ' +
+        'a fresh tombstone is still the only thing stopping a peer from handing the question back');
+    assert.deepEqual(compactQuestions(undefined), [],
+        'collectAllAppData() OMITS customQuestions until the bank is hydrated, so the compactor ' +
+        'is handed undefined on every unhydrated sync');
+});
+
+test('tombstone compaction is applied to both sides of the union', () => {
+    const body = functionBody('mergeCloudAndLocalData');
+    assert.match(body, /compactDeletedQuestions\(local\.customQuestions\)/,
+        'compacting only one side is pointless - the peer hands every tombstone straight back.');
+    assert.match(body, /compactDeletedQuestions\(cloud\.customQuestions\)/,
+        'the cloud copy is the side that resurrects tombstones, so it must be compacted too.');
+    assert.match(body, /const _cqExpected = Math\.max\(cqLocal\.length, cqCloud\.length\)/,
+        'the shrink guard has to measure the union against the COMPACTED inputs; against the raw ' +
+        'lists every compaction would abort the sync as an unsound merge.');
+    assert.match(APP_JS, /var DELETED_QUESTION_TTL_MS = \d+ \* 24 \* 60 \* 60 \* 1000/,
+        'the retention window is the resurrection risk and must stay an obvious named constant. ' +
+        'var, not const: a snapshot can reach the merge before this line has executed, and a TDZ ' +
+        'ReferenceError there would break every sync.');
+    assert.match(functionBody('compactDeletedQuestions'), /if \(!isFinite\(cutoff\)\) return arr;/,
+        'with the TTL not yet initialised the cutoff is NaN; the compactor must fall back to ' +
+        'reaping nothing rather than silently comparing against NaN.');
+});
 
 test('a deleted exam profile stays deleted after merging with a peer that still has it', () => {
     const keep = { id: 'profile_1', name: 'Kept', active: true };

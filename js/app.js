@@ -2368,12 +2368,15 @@ function loadData(){
 
         // First render of the session: a 'Syncing...' sitting in storage at startup cannot be a
         // live cycle, because the watchdog timer that would have retired it died with the
-        // previous process. Without this the amber pulse outlived every relaunch.
+        // previous process. Without this the amber pulse outlived every relaunch. Guarded
+        // because the first updateSyncUI() can land during boot, before KrishiStorage.init().
         if (!window.__krishiSyncStatusSanitized) {
-            window.__krishiSyncStatusSanitized = true;
-            if (KrishiStorage.getItem('krishi_sync_status') === 'Syncing...' && !window.__krishiSyncWatchdog) {
-                KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
-            }
+            try {
+                if (KrishiStorage.getItem('krishi_sync_status') === 'Syncing...' && !window.__krishiSyncWatchdog) {
+                    KrishiStorage.setItem('krishi_sync_status', resolveStuckSyncStatus());
+                }
+                window.__krishiSyncStatusSanitized = true;
+            } catch (e) {}
         }
 
         // Backup size meter: makes the invisible 900 KB ceiling visible before
@@ -18985,7 +18988,7 @@ ${text}`;
 
     // Turns the hard payload-size stop from a silent "Sync failed" into an
     // actionable message: without this, heavy users permanently lose backup
-    // with no hint that trimming custom MCQs / timing history resumes it.
+    // with no hint that trimming timing history / mock results resumes it.
     function isPayloadTooBigError(e) {
         return !!(e && typeof e.message === 'string' &&
             e.message.indexOf('safe limit for one Firestore document') !== -1);
@@ -18994,7 +18997,50 @@ ${text}`;
         const m = (e && e.message || '').match(/is (\d+) KB/);
         const kb = m ? m[1] : '?';
         KrishiStorage.setItem('krishi_sync_payload_too_big', kb);
-        showToast('⚠️ Backup paused: data (~' + kb + ' KB) crosses the 900 KB cloud-document limit. Delete old custom MCQs to resume backup.', 9000);
+        // Names the collections that actually occupy the document. It used to say "delete old
+        // custom MCQs", which stopped being true when the question bank moved into the
+        // users/{uid}/qbank subcollection — deleting MCQs now frees nothing here, so the one
+        // actionable message the user ever gets was sending them to destroy their own bank
+        // for no benefit. Cleared automatically by the next successful sync.
+        showToast('⚠️ Backup paused: data (~' + kb + ' KB) crosses the 900 KB cloud-document limit. ' +
+            'Clear old timing history / mock results in Settings to resume backup (your question bank is stored separately and is not the cause).', 9000);
+    }
+
+    // Compresses the two unbounded arrays in place. Split out of prepareCloudPayload() so the
+    // backup-size meter can measure exactly the bytes a write will send without also inheriting
+    // the throw from assertPayloadFits() — a throw inside the meter's try/catch would silently
+    // leave a stale number on screen at precisely the moment the number matters.
+    function compressUnboundedFields(payload) {
+        if (!payload) return payload;
+        if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
+            if (payload.timingLog !== undefined && typeof payload.timingLog !== 'string') {
+                payload.timingLog = LZString.compressToUTF16(JSON.stringify(payload.timingLog));
+            }
+            if (payload.mockScores !== undefined && typeof payload.mockScores !== 'string') {
+                payload.mockScores = LZString.compressToUTF16(JSON.stringify(payload.mockScores));
+            }
+            if (payload.timingLog !== undefined || payload.mockScores !== undefined) {
+                payload.isCompressed = true;
+            }
+        }
+        return payload;
+    }
+
+    // Size of the users/{uid} document as the write path will actually measure it. The meter
+    // used to stringify the raw collectAllAppData() and compare that to the 900 KB ceiling,
+    // which over-reported by ~2.8x because it counted two things the document never receives:
+    //   • customQuestions — syncQbankToChunks() deletes the field from every payload before the
+    //     write; the bank lives in the users/{uid}/qbank/chunk_N subcollection and cannot
+    //     contribute to the document limit at all.
+    //   • timingLog / mockScores at their raw size — prepareCloudPayload() LZ-compresses both
+    //     before assertPayloadFits() sees them, and timing records compress roughly 10-20x.
+    // The old number drove the amber/red thresholds and a toast advising the user to delete
+    // custom MCQs — an action that, since the qbank offload, does not shrink the document.
+    function measureCloudDocKB() {
+        const probe = collectAllAppData();
+        delete probe.customQuestions;      // mirrors syncQbankToChunks()'s unconditional strip
+        compressUnboundedFields(probe);    // mirrors prepareCloudPayload()
+        return Math.round(JSON.stringify(probe).length / 1024);
     }
 
     // Single place where an outgoing users/{uid} payload is made write-safe: compress the
@@ -19012,17 +19058,7 @@ ${text}`;
     // reads back correctly.
     function prepareCloudPayload(payload, label) {
         if (!payload) return payload;
-        if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
-            if (payload.timingLog !== undefined && typeof payload.timingLog !== 'string') {
-                payload.timingLog = LZString.compressToUTF16(JSON.stringify(payload.timingLog));
-            }
-            if (payload.mockScores !== undefined && typeof payload.mockScores !== 'string') {
-                payload.mockScores = LZString.compressToUTF16(JSON.stringify(payload.mockScores));
-            }
-            if (payload.timingLog !== undefined || payload.mockScores !== undefined) {
-                payload.isCompressed = true;
-            }
-        }
+        compressUnboundedFields(payload);
         assertPayloadFits(payload, label);
         return payload;
     }

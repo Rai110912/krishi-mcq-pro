@@ -42,11 +42,89 @@ function functionBody(name) {
 
 test('prepareCloudPayload() compresses the unbounded arrays and asserts the size', () => {
     const body = functionBody('prepareCloudPayload');
-    assert.match(body, /timingLog/, 'timingLog is not compressed');
-    assert.match(body, /mockScores/, 'mockScores is not compressed');
+    assert.match(body, /compressUnboundedFields\(/,
+        'prepareCloudPayload() must delegate compression to compressUnboundedFields() - the ' +
+        'backup-size meter measures through the same helper, and inlining it here is how the ' +
+        'meter and the write path drifted apart in the first place.');
     assert.match(body, /assertPayloadFits\(/,
         'prepareCloudPayload() must end in assertPayloadFits() - it is the only thing standing ' +
         'between a heavy user and Firestore\'s 1 MiB hard limit.');
+
+    const helper = functionBody('compressUnboundedFields');
+    assert.match(helper, /timingLog/, 'timingLog is not compressed');
+    assert.match(helper, /mockScores/, 'mockScores is not compressed');
+});
+
+// ── The size the user is shown must be the size that is written ─────────────────
+
+test('measureCloudDocKB() measures the document the write path actually sends', () => {
+    const body = functionBody('measureCloudDocKB');
+
+    assert.match(body, /delete\s+probe\.customQuestions/,
+        'the backup-size meter still counts customQuestions. syncQbankToChunks() deletes that ' +
+        'field from every payload before the write - the bank lives in the qbank subcollection ' +
+        'and cannot contribute to the 900 KB document limit - so counting it over-reported the ' +
+        'payload (measured 2.8x) and drove a red warning telling the user to delete their ' +
+        'question bank for no benefit.');
+
+    assert.match(body, /compressUnboundedFields\(/,
+        'the meter must apply the same compression the write path applies before ' +
+        'assertPayloadFits() sees the payload, or it reports timingLog at its raw size - ' +
+        'timing records compress roughly 10-20x, and timingLog is the single largest field.');
+});
+
+test('the backup meter renders through measureCloudDocKB(), not a raw collect', () => {
+    const body = functionBody('updateSyncUI');
+    assert.match(body, /measureCloudDocKB\(\)/, 'the meter no longer calls measureCloudDocKB()');
+    assert.doesNotMatch(body, /JSON\.stringify\(collectAllAppData\(\)\)/,
+        'updateSyncUI() is stringifying the raw collectAllAppData() again. That is the ' +
+        'over-reporting bug: it counts the offloaded question bank and the uncompressed ' +
+        'timing log against a limit neither of them reaches.');
+});
+
+// ── A status the app cannot resolve must not be left on screen ──────────────────
+
+test("setSyncStatus() arms a watchdog for 'Syncing...' and clears it otherwise", () => {
+    const body = functionBody('setSyncStatus');
+
+    assert.match(body, /clearTimeout\(window\.__krishiSyncWatchdog\)/,
+        'a status change must cancel the pending watchdog, or a resolved sync still gets ' +
+        'retired by a stale timer.');
+    assert.match(body, /if\s*\(\s*status\s*===\s*'Syncing\.\.\.'\s*\)/,
+        "setSyncStatus() no longer arms the watchdog on 'Syncing...'. That status is persisted " +
+        'in localStorage and the only success-path clear on the initCloudSync() route sits ' +
+        'behind two early returns in the snapshot handler, so a dropped snapshot froze the ' +
+        'amber pulse across every relaunch.');
+    assert.match(body, /resolveStuckSyncStatus\(\)/,
+        'the watchdog must resolve the badge against krishi_sync_pending rather than guess.');
+});
+
+test("setSyncStatus('Synced') stamps the last-sync time for every path", () => {
+    const body = functionBody('setSyncStatus');
+    assert.match(body, /krishi_last_sync_time/,
+        '"Last Synced" is written only by the two manual paths again. performCloudSync() and ' +
+        'the realtime snapshot handler both reach setSyncStatus(\'Synced\') without stamping ' +
+        'it, so the panel showed the last time the user pressed Sync Now while every ' +
+        'automatic sync succeeded invisibly behind it.');
+    assert.match(body, /removeItem\('krishi_sync_payload_too_big'\)/,
+        'a completed cycle proves the payload fit, so the size-stop marker must be cleared - ' +
+        'it was previously written once and never read or cleared anywhere.');
+});
+
+test('the watchdog does not fake a successful sync', () => {
+    const body = functionBody('setSyncStatus');
+    // Comments stripped first: the code here is *explained* in terms of setSyncStatus(), so a
+    // raw text match reads the explanation as a violation of the thing it explains.
+    const watchdog = body
+        .slice(body.indexOf('__krishiSyncWatchdog = setTimeout'))
+        .replace(/\/\/[^\n]*/g, '');
+    assert.ok(watchdog.length > 0, 'watchdog timer not found in setSyncStatus()');
+    assert.doesNotMatch(watchdog, /setSyncStatus\(/,
+        'the watchdog must write krishi_sync_status directly. Routing back through ' +
+        'setSyncStatus() would stamp a fresh "Last Synced" time for a sync that never ' +
+        'reported success - trading a stuck badge for a lying timestamp.');
+    assert.match(watchdog, /KrishiStorage\.setItem\('krishi_sync_status'/,
+        'the watchdog must actually resolve the stored status, not just re-render.');
 });
 
 test('every users/{uid} document write goes through prepareCloudPayload()', () => {
